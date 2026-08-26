@@ -63,13 +63,30 @@ dsh --profile web --dump-config
 
 ### Git 安装
 
-包提供 `prepare` 构建入口：
+仓库已包含跨平台构建产物，macOS、Linux 和 Windows 使用同一条命令，不需要配置 pnpm 构建白名单：
 
 ```sh
 dsh plugin --profile web add github:Army1900/dsh-e2e-dev-sdd
 ```
 
-pnpm 10 及以上会要求用户在 profile 的 `pnpm-workspace.yaml` 中明确允许该 Git 依赖执行构建脚本。只应对可信源码授权，并建议锁定 commit。
+确认安装层已经挂载：
+
+```sh
+dsh --profile web --dump-config
+```
+
+输出中应包含 `# == dsh-e2e-dev-sdd` 和 `id: e2e-dev-sdd`。随后必须结束旧的 `dsh web` 进程并重新启动；只刷新浏览器不会加载新插件。
+
+Windows PowerShell 中可以用下面的命令检查实际 DSH Home 和安装结果：
+
+```powershell
+$DshHome = if ($env:DSH_HOME) { $env:DSH_HOME } else { Join-Path $HOME '.dsh' }
+$ProfileDir = Join-Path $DshHome 'profiles\web'
+Get-Content (Join-Path $ProfileDir 'package.json')
+dsh --profile web --dump-config
+```
+
+安装成功后，profile 的 `package.json` dependencies 中应包含 `dsh-e2e-dev-sdd`。只应安装可信源码，并建议在生产环境锁定 commit。
 
 ## 使用
 

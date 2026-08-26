@@ -49,7 +49,7 @@
   ],
   "scripts": {
     "build": "node scripts/clean.mjs && tsc -p tsconfig.build.json && tsdown",
-    "prepare": "tsdown",
+    "prepublishOnly": "pnpm build",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },
@@ -58,6 +58,11 @@
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/cordis": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
