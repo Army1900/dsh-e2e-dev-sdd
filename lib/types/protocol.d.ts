@@ -75,6 +75,66 @@ export interface SourceEnvelope {
         resolvedAt?: string;
     };
 }
+export interface SourceBundleRelation {
+    from: string;
+    to: string;
+    type: 'child-of' | 'depends-on' | 'relates-to' | string;
+}
+/** One business query may return a root record and many independently deliverable children. */
+export interface SourceBundle {
+    schema: 'dsh-sdd/source-bundle@1';
+    uid: string;
+    provider: string;
+    kind: string;
+    externalKey: string;
+    title: string;
+    fetchedAt: string;
+    root?: SourceEnvelope;
+    items: SourceEnvelope[];
+    relations: SourceBundleRelation[];
+}
+export type ImportChangeKind = 'added' | 'modified' | 'removed' | 'unchanged';
+export interface ImportPreviewItem {
+    identity: string;
+    externalKey: string;
+    title: string;
+    kind: string;
+    change: ImportChangeKind;
+    changedPaths: string[];
+    workItemUid?: string;
+}
+export interface ImportPreview {
+    schema: 'dsh-sdd/import-preview@1';
+    uid: string;
+    bundleKey: string;
+    bundleTitle: string;
+    provider: string;
+    fetchedAt: string;
+    items: ImportPreviewItem[];
+}
+export interface WorkItemChange {
+    kind: Exclude<ImportChangeKind, 'unchanged'>;
+    detectedAt: string;
+    changedPaths: string[];
+    previousSourceUid?: string;
+    reviewRequiredStages: StageId[];
+}
+export interface WorkItem {
+    schema: 'dsh-sdd/work-item@1';
+    uid: string;
+    key: string;
+    title: string;
+    kind: string;
+    provider: string;
+    bundleKey: string;
+    sourceUid?: string;
+    bundleSourceUid?: string;
+    relations: SourceBundleRelation[];
+    status: 'active' | 'change-pending' | 'removed-pending' | 'completed';
+    createdAt: string;
+    updatedAt: string;
+    change?: WorkItemChange;
+}
 export interface SourceReference {
     uid: string;
     provider: string;
@@ -99,6 +159,7 @@ export interface ArtifactManifest {
     derivedFrom: SourceReference[];
     externalRefs: ExternalReference[];
     checklist?: Record<string, boolean>;
+    workItemUid?: string;
 }
 export interface QualityCheck {
     code: string;
@@ -225,6 +286,8 @@ export interface ProjectSnapshot {
     artifacts: ArtifactSummary[];
     sources: SourceSummary[];
     sourceProviders: string[];
+    connectors: string[];
+    workItems: WorkItem[];
     runs: StageRun[];
     quality: Record<string, QualityReport>;
     developmentWorkspaces: DevelopmentWorkspace[];
@@ -298,6 +361,7 @@ export type SddAction = {
     key?: string;
     basedOn: string[];
     sourceUids?: string[];
+    workItemUid?: string;
 } | {
     kind: 'accept';
     workspaceId: string;
@@ -359,6 +423,23 @@ export type SddAction = {
     sourceKind: string;
     key: string;
     connector?: string;
+} | {
+    kind: 'preview-source-import';
+    workspaceId: string;
+    provider: string;
+    sourceKind: string;
+    key: string;
+    connector?: string;
+} | {
+    kind: 'apply-source-import';
+    workspaceId: string;
+    previewUid: string;
+    identities: string[];
+} | {
+    kind: 'resolve-work-item-removal';
+    workspaceId: string;
+    workItemUid: string;
+    decision: 'keep' | 'archive';
 };
 export type SddResponse = {
     ok: true;
@@ -367,6 +448,9 @@ export type SddResponse = {
     ok: true;
     prompt: string;
     run?: StageRun;
+} | {
+    ok: true;
+    preview: ImportPreview;
 } | {
     ok: false;
     error: string;

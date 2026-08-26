@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { access, copyFile, mkdir, readFile, readdir, realpath, writeFile } from 'node:fs/promises'
+import { access, copyFile, mkdir, readFile, readdir, realpath, unlink, writeFile } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import type { ApiProxy, RpcId } from '@deepseek-ai/dsh-host-apiproxy'
 import { parse, stringify } from 'yaml'
@@ -9,15 +9,19 @@ import {
   type ArtifactSummary,
   type DashboardSnapshot,
   type DevelopmentWorkspace,
+  type ImportPreview,
+  type ImportPreviewItem,
   type ProjectConfig,
   type ProjectSnapshot,
   type QualityReport,
   type SddAction,
   type SddEvent,
   type SourceEnvelope,
+  type SourceBundle,
   type SourceSummary,
   type StageRun,
   type StageId,
+  type WorkItem,
   stageDefinition,
 } from './protocol.ts'
 import { type SddIdentifierRegistry, type SddSourceRegistry, validateSourceEnvelope } from './extensions.ts'
@@ -28,6 +32,7 @@ import { runtimeDefinition } from './stage-definitions.ts'
 import type { StageSessionController } from './session-controller.ts'
 
 const PROJECT_FILE = '.sdd/project.yaml'
+interface StagedImport { preview: ImportPreview; bundle: SourceBundle }
 const BUSINESS_GUIDE = `# 项目业务扩展
 
 本目录是当前 SDD 项目唯一的项目级业务自定义目录。
@@ -35,7 +40,7 @@ const BUSINESS_GUIDE = `# 项目业务扩展
 - \`connectors/\`：命令型 Connector 配置。
 - \`adapters/\`：Connector 调用的业务适配器脚本和脚本自己的模块。
 
-适配器从 stdin 接收一个 JSON 请求，只能把一个符合 \`dsh-sdd/source@1\` 的 JSON 对象写到 stdout；日志应写到 stderr。凭证不得提交到仓库，Connector 只声明允许继承的环境变量名。
+适配器从 stdin 接收一个 JSON 请求，只能把一个符合 \`dsh-sdd/source-bundle@1\` 的 JSON 对象写到 stdout；\`items\` 至少包含一项，每项形成独立工作单元。主需求公共背景可放在可选的 \`root\`。日志应写到 stderr。凭证不得提交到仓库，Connector 只声明允许继承的环境变量名。
 
 完整开发说明见 dsh-e2e-dev-sdd 插件的 \`docs/business-development-guide.md\`。
 `
@@ -47,6 +52,26 @@ function request<T>(payload: T) {
 function slug(value: string): string {
   const normalized = value.trim().toLowerCase().replace(/[^a-z0-9\u4e00-\u9fff]+/g, '-').replace(/^-|-$/g, '')
   return normalized.slice(0, 48) || 'artifact'
+}
+
+function sourceIdentity(source: SourceEnvelope): string {
+  return `${source.provider}:${source.kind}:${source.externalKey ?? source.uid}`
+}
+
+function sourceHash(source: SourceEnvelope): string {
+  return `sha256:${createHash('sha256').update(JSON.stringify(source.content)).digest('hex')}`
+}
+
+function sourceVersionHash(source: SourceEnvelope): string {
+  return createHash('sha256').update(JSON.stringify({ title: source.title, status: source.status, revision: source.revision, tracking: source.tracking, links: source.links, content: source.content })).digest('hex')
+}
+
+function changedPaths(previous: unknown, next: unknown, prefix = 'content'): string[] {
+  if (JSON.stringify(previous) === JSON.stringify(next)) return []
+  if (!object(previous) || !object(next)) return [prefix]
+  return [...new Set([...Object.keys(previous), ...Object.keys(next)])]
+    .flatMap(key => changedPaths(previous[key], next[key], `${prefix}.${key}`))
+    .slice(0, 50)
 }
 
 async function exists(path: string): Promise<boolean> {
@@ -202,18 +227,28 @@ export class SddProjectService {
     return { workspaceId, title: item.title, path: await realpath(item.path) }
   }
 
-  async execute(action: SddAction): Promise<ProjectSnapshot | { prompt: string; run?: StageRun }> {
+  async execute(action: SddAction): Promise<ProjectSnapshot | ImportPreview | { prompt: string; run?: StageRun }> {
     if (action.kind === 'snapshot') return this.snapshot(action.workspaceId)
     if (action.kind === 'initialize') { await this.initialize(action.workspaceId); return this.snapshot(action.workspaceId) }
     if (action.kind === 'reinitialize') { await this.reinitialize(action.workspaceId); return this.snapshot(action.workspaceId) }
     if (action.kind === 'create-draft') {
-      await this.createDraft(action.workspaceId, action.stage, action.title, action.key, action.basedOn, action.sourceUids ?? [])
+      await this.createDraft(action.workspaceId, action.stage, action.title, action.key, action.basedOn, action.sourceUids ?? [], action.workItemUid)
       return this.snapshot(action.workspaceId)
     }
     if (action.kind === 'accept') { await this.accept(action.workspaceId, action.artifactUid, action.checklist); return this.snapshot(action.workspaceId) }
     if (action.kind === 'quality') return this.snapshot(action.workspaceId)
     if (action.kind === 'import-source') {
-      await this.importSource(action.workspaceId, action.provider, action.sourceKind, action.key, action.connector)
+      const preview = await this.previewSourceImport(action.workspaceId, action.provider, action.sourceKind, action.key, action.connector)
+      await this.applySourceImport(action.workspaceId, preview.uid, preview.items.filter(item => item.change !== 'unchanged').map(item => item.identity))
+      return this.snapshot(action.workspaceId)
+    }
+    if (action.kind === 'preview-source-import') return this.previewSourceImport(action.workspaceId, action.provider, action.sourceKind, action.key, action.connector)
+    if (action.kind === 'apply-source-import') {
+      await this.applySourceImport(action.workspaceId, action.previewUid, action.identities)
+      return this.snapshot(action.workspaceId)
+    }
+    if (action.kind === 'resolve-work-item-removal') {
+      await this.resolveWorkItemRemoval(action.workspaceId, action.workItemUid, action.decision)
       return this.snapshot(action.workspaceId)
     }
     if (action.kind === 'context') return { prompt: await this.context(action.workspaceId, action.stage, action.artifactUid, action.artifactUids, action.sourceUids ?? []) }
@@ -256,6 +291,9 @@ export class SddProjectService {
     const sddRoot = join(workspace.path, '.sdd')
     await mkdir(join(sddRoot, 'artifacts'), { recursive: true })
     await mkdir(join(sddRoot, 'sources'), { recursive: true })
+    await mkdir(join(sddRoot, 'work-items'), { recursive: true })
+    await mkdir(join(sddRoot, 'imports', 'pending'), { recursive: true })
+    await mkdir(join(sddRoot, 'imports', 'history'), { recursive: true })
     await mkdir(join(sddRoot, 'business', 'connectors'), { recursive: true })
     await mkdir(join(sddRoot, 'business', 'adapters'), { recursive: true })
     await mkdir(join(sddRoot, 'runs'), { recursive: true })
@@ -271,7 +309,10 @@ export class SddProjectService {
     const gitignore = (await exists(gitignorePath)) ? await readFile(gitignorePath, 'utf8') : ''
     if (!gitignore.split(/\r?\n/).includes('.sdd-workspaces/')) {
       const prefix = gitignore === '' || gitignore.endsWith('\n') ? gitignore : `${gitignore}\n`
-      await writeFile(gitignorePath, `${prefix}\n# DSH SDD per-requirement isolated checkouts\n.sdd-workspaces/\n`, 'utf8')
+      await writeFile(gitignorePath, `${prefix}\n# DSH SDD per-requirement isolated checkouts and unconfirmed import previews\n.sdd-workspaces/\n.sdd/imports/pending/\n`, 'utf8')
+    } else if (!gitignore.split(/\r?\n/).includes('.sdd/imports/pending/')) {
+      const prefix = gitignore.endsWith('\n') ? gitignore : `${gitignore}\n`
+      await writeFile(gitignorePath, `${prefix}.sdd/imports/pending/\n`, 'utf8')
     }
     if (created) await appendEvent(workspace.path, 'project.initialized', basename(workspace.path), undefined, { projectFile: PROJECT_FILE })
   }
@@ -292,7 +333,7 @@ export class SddProjectService {
     const workspace = await this.workspace(workspaceId)
     const projectPath = join(workspace.path, PROJECT_FILE)
     if (!(await exists(projectPath))) return {
-      workspace, initialized: false, configuration: { status: 'missing', path: PROJECT_FILE, errors: [] }, artifacts: [], sources: [], sourceProviders: this.sourceRegistry?.names() ?? [],
+      workspace, initialized: false, configuration: { status: 'missing', path: PROJECT_FILE, errors: [] }, artifacts: [], sources: [], sourceProviders: this.sourceRegistry?.names() ?? [], connectors: [], workItems: [],
       runs: [], quality: {}, developmentWorkspaces: [], dashboard: this.emptyDashboard(),
     }
     let parsedProject: unknown
@@ -300,13 +341,13 @@ export class SddProjectService {
     catch (error) {
       return {
         workspace, initialized: true, configuration: { status: 'invalid', path: PROJECT_FILE, errors: [`YAML 解析失败：${error instanceof Error ? error.message : String(error)}`] },
-        artifacts: [], sources: [], sourceProviders: this.sourceRegistry?.names() ?? [], runs: [], quality: {}, developmentWorkspaces: [], dashboard: this.emptyDashboard(),
+        artifacts: [], sources: [], sourceProviders: this.sourceRegistry?.names() ?? [], connectors: [], workItems: [], runs: [], quality: {}, developmentWorkspaces: [], dashboard: this.emptyDashboard(),
       }
     }
     const validation = validateProject(parsedProject)
     if (validation.project === undefined) return {
       workspace, initialized: true, configuration: { status: 'invalid', path: PROJECT_FILE, errors: validation.errors },
-      artifacts: [], sources: [], sourceProviders: this.sourceRegistry?.names() ?? [], runs: [], quality: {}, developmentWorkspaces: [], dashboard: this.emptyDashboard(),
+      artifacts: [], sources: [], sourceProviders: this.sourceRegistry?.names() ?? [], connectors: [], workItems: [], runs: [], quality: {}, developmentWorkspaces: [], dashboard: this.emptyDashboard(),
     }
     const parsed = validation.project
     const project: ProjectConfig = {
@@ -315,7 +356,8 @@ export class SddProjectService {
       development: { ...parsed.development, repositories: parsed.development?.repositories ?? [] },
     }
     const artifacts: ArtifactSummary[] = []
-    for (const manifestPath of await walkForManifest(join(workspace.path, '.sdd', 'artifacts'))) {
+    const artifactManifests = [...await walkForManifest(join(workspace.path, '.sdd', 'artifacts')), ...await walkForManifest(join(workspace.path, '.sdd', 'work-items'))]
+    for (const manifestPath of [...new Set(artifactManifests)].sort()) {
       try {
         const parsedManifest = parse(await readFile(manifestPath, 'utf8')) as ArtifactManifest
         const manifest: ArtifactManifest = {
@@ -344,6 +386,8 @@ export class SddProjectService {
       }
     }
     const sources = await this.listSources(workspace.path)
+    const workItems = await this.listWorkItems(workspace.path)
+    const connectors = await this.listConnectors(workspace.path)
     const runs = await this.listRuns(workspace.path)
     const developmentWorkspaces = await listDevelopmentWorkspaces(workspace.path, artifacts)
     for (const run of runs) {
@@ -358,8 +402,35 @@ export class SddProjectService {
       quality[artifact.uid] = evaluateQuality(artifact, await readFile(join(workspace.path, artifact.relativeDirectory, artifact.entry), 'utf8'), project, partial)
     }
     const recentEvents = await readRecentEvents(workspace.path)
-    const dashboard = this.dashboard(artifacts, sources, quality, developmentWorkspaces, recentEvents)
-    return { workspace, initialized: true, configuration: { status: 'valid', path: PROJECT_FILE, errors: [] }, project, artifacts, sources, sourceProviders: this.sourceRegistry?.names() ?? [], runs, quality, developmentWorkspaces, dashboard }
+    const dashboard = this.dashboard(artifacts, sources, workItems, quality, developmentWorkspaces, recentEvents)
+    return { workspace, initialized: true, configuration: { status: 'valid', path: PROJECT_FILE, errors: [] }, project, artifacts, sources, sourceProviders: this.sourceRegistry?.names() ?? [], connectors, workItems, runs, quality, developmentWorkspaces, dashboard }
+  }
+
+  private async listConnectors(workspacePath: string): Promise<string[]> {
+    const root = join(workspacePath, '.sdd', 'business', 'connectors')
+    if (!(await exists(root))) return []
+    return (await readdir(root, { withFileTypes: true }))
+      .filter(item => item.isFile() && (item.name.endsWith('.yaml') || item.name.endsWith('.yml')))
+      .map(item => item.name.replace(/\.ya?ml$/, ''))
+      .filter(id => /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(id))
+      .sort()
+  }
+
+  private async listWorkItems(workspacePath: string): Promise<WorkItem[]> {
+    const root = join(workspacePath, '.sdd', 'work-items')
+    if (!(await exists(root))) return []
+    const result: WorkItem[] = []
+    for (const directory of await readdir(root, { withFileTypes: true })) {
+      if (!directory.isDirectory()) continue
+      const path = join(root, directory.name, 'work-item.yaml')
+      if (!(await exists(path))) continue
+      try {
+        const item = parse(await readFile(path, 'utf8')) as WorkItem
+        if (item.schema !== 'dsh-sdd/work-item@1' || typeof item.uid !== 'string' || typeof item.key !== 'string') continue
+        result.push({ ...item, relations: item.relations ?? [] })
+      } catch { /* invalid work items are ignored until their YAML is repaired */ }
+    }
+    return result.sort((left, right) => left.key.localeCompare(right.key))
   }
 
   private async createDraft(
@@ -369,15 +440,21 @@ export class SddProjectService {
     requestedKey: string | undefined,
     basedOn: string[],
     sourceUids: string[],
+    workItemUid: string | undefined,
   ): Promise<void> {
     if (title.trim() === '') throw new Error('title must not be empty')
     await this.initialize(workspaceId)
     const snapshot = await this.snapshot(workspaceId)
+    const workItem = workItemUid === undefined ? undefined : snapshot.workItems.find(item => item.uid === workItemUid)
+    if (workItemUid !== undefined && workItem === undefined) throw new Error(`work item not found: ${workItemUid}`)
     const definition = stageDefinition(stage)
     const key = requestedKey?.trim() || await this.allocateKey(snapshot, stage, definition.prefix)
     if (snapshot.artifacts.some(item => item.key === key)) throw new Error(`artifact key already exists: ${key}`)
     const uid = randomUUID()
-    const directory = join(snapshot.workspace.path, '.sdd', 'artifacts', stage, `${slug(key)}-${uid.slice(0, 8)}`)
+    const artifactRoot = workItem === undefined
+      ? join(snapshot.workspace.path, '.sdd', 'artifacts')
+      : join(snapshot.workspace.path, '.sdd', 'work-items', workItem.uid, 'artifacts')
+    const directory = join(artifactRoot, stage, `${slug(key)}-${uid.slice(0, 8)}`)
     await mkdir(directory, { recursive: true })
     const now = new Date().toISOString()
     const refs = basedOn.map(inputUid => {
@@ -385,12 +462,14 @@ export class SddProjectService {
       if (input === undefined) throw new Error(`input artifact not found: ${inputUid}`)
       if (input.status !== 'accepted') throw new Error(`input artifact is not accepted: ${input.key}`)
       if (input.validationErrors.length > 0) throw new Error(`input artifact is invalid: ${input.key}: ${input.validationErrors.join('; ')}`)
+      if (workItem !== undefined && input.workItemUid !== workItem.uid) throw new Error(`input artifact belongs to another work item: ${input.key}`)
       return { uid: input.uid, version: input.version, contentHash: input.contentHash }
     })
     const sourceRefs = sourceUids.map(sourceUid => {
       const source = snapshot.sources.find(item => item.uid === sourceUid)
       if (source === undefined) throw new Error(`source not found: ${sourceUid}`)
       if (source.validationErrors.length > 0) throw new Error(`source is invalid: ${source.title}: ${source.validationErrors.join('; ')}`)
+      if (workItem !== undefined && source.uid !== workItem.sourceUid && source.uid !== workItem.bundleSourceUid) throw new Error(`source is not current for work item ${workItem.key}`)
       return {
         uid: source.uid, provider: source.provider, kind: source.kind,
         ...(source.externalKey === undefined ? {} : { externalKey: source.externalKey }),
@@ -409,6 +488,7 @@ export class SddProjectService {
       version: '0.1.0', status: 'draft', entry: 'deliverable.md', createdAt: now, updatedAt: now,
       basedOn: refs, derivedFrom: sourceRefs, externalRefs: [],
       checklist: Object.fromEntries(runtimeDefinition(stage).completionChecklist.map((_label, index) => [`item-${index + 1}`, false])),
+      ...(workItem === undefined ? {} : { workItemUid: workItem.uid }),
     }
     await writeFile(join(directory, 'manifest.yaml'), stringify(manifest), 'utf8')
     await writeFile(join(directory, 'deliverable.md'), this.template(stage, key, title.trim()), 'utf8')
@@ -471,31 +551,122 @@ export class SddProjectService {
     return result.sort((left, right) => left.title.localeCompare(right.title))
   }
 
-  private async importSource(
+  private async previewSourceImport(
     workspaceId: string,
     providerName: string,
     kind: string,
     key: string,
     connector: string | undefined,
-  ): Promise<void> {
+  ): Promise<ImportPreview> {
     if (kind.trim() === '' || key.trim() === '') throw new Error('source kind and key are required')
     await this.initialize(workspaceId)
     const snapshot = await this.snapshot(workspaceId)
     if (snapshot.project === undefined) throw new Error('SDD project is not initialized')
     if (this.sourceRegistry === undefined) throw new Error('source registry is unavailable')
-    const source = await this.sourceRegistry.fetch(providerName, {
+    const bundle = await this.sourceRegistry.fetch(providerName, {
       kind: kind.trim(), key: key.trim(),
       workspace: { workspaceId, path: snapshot.workspace.path, project: snapshot.project },
       ...(connector === undefined ? {} : { connector }),
       signal: AbortSignal.timeout(60_000),
     })
-    const normalized: SourceEnvelope = {
-      ...source,
-      contentHash: `sha256:${createHash('sha256').update(JSON.stringify(source.content)).digest('hex')}`,
+    const incoming = bundle.items
+    const existing = snapshot.workItems.filter(item => item.bundleKey === bundle.externalKey && item.provider === bundle.provider)
+    const nextIdentities = new Set(incoming.map(sourceIdentity))
+    const items: ImportPreviewItem[] = incoming.map(source => {
+      const identity = sourceIdentity(source)
+      const workItem = existing.find(item => item.provider === source.provider && item.kind === source.kind && item.key === (source.externalKey ?? source.uid))
+      if (workItem === undefined) return { identity, externalKey: source.externalKey ?? source.uid, title: source.title, kind: source.kind, change: 'added', changedPaths: [] }
+      const previous = snapshot.sources.find(item => item.uid === workItem.sourceUid)
+      const previousRoot = snapshot.sources.find(item => item.uid === workItem.bundleSourceUid)
+      const comparable = (value: SourceEnvelope) => ({ title: value.title, status: value.status, revision: value.revision, tracking: value.tracking, links: value.links, content: value.content })
+      const paths = previous === undefined ? ['source'] : changedPaths(comparable(previous), comparable(source), 'source')
+      if (bundle.root !== undefined && previousRoot !== undefined) {
+        changedPaths(comparable(previousRoot), comparable(bundle.root), 'bundle').forEach(path => paths.push(path))
+      }
+      const uniquePaths = [...new Set(paths)]
+      return { identity, externalKey: source.externalKey ?? source.uid, title: source.title, kind: source.kind, change: uniquePaths.length === 0 ? 'unchanged' : 'modified', changedPaths: uniquePaths, workItemUid: workItem.uid }
+    })
+    for (const workItem of existing) {
+      const identity = `${workItem.provider}:${workItem.kind}:${workItem.key}`
+      if (!nextIdentities.has(identity)) items.push({ identity, externalKey: workItem.key, title: workItem.title, kind: workItem.kind, change: 'removed', changedPaths: ['removed'], workItemUid: workItem.uid })
     }
-    const filename = `${slug(normalized.provider)}-${slug(normalized.externalKey ?? key)}-${normalized.uid.slice(0, 8)}.yaml`
-    await writeFile(join(snapshot.workspace.path, '.sdd', 'sources', filename), stringify(normalized), 'utf8')
-    await appendEvent(snapshot.workspace.path, 'source.imported', normalized.externalKey ?? normalized.uid, undefined, { provider: normalized.provider, kind: normalized.kind })
+    const preview: ImportPreview = {
+      schema: 'dsh-sdd/import-preview@1', uid: randomUUID(), bundleKey: bundle.externalKey,
+      bundleTitle: bundle.title, provider: bundle.provider, fetchedAt: bundle.fetchedAt, items,
+    }
+    const staged: StagedImport = { preview, bundle }
+    await writeFile(join(snapshot.workspace.path, '.sdd', 'imports', 'pending', `${preview.uid}.yaml`), stringify(staged), 'utf8')
+    return preview
+  }
+
+  private async writeSourceSnapshot(workspacePath: string, sources: SourceSummary[], source: SourceEnvelope): Promise<string> {
+    const hash = sourceHash(source)
+    const versionHash = sourceVersionHash(source)
+    const same = sources.find(item => sourceIdentity(item) === sourceIdentity(source) && sourceVersionHash(item) === versionHash)
+    if (same !== undefined) return same.uid
+    const uid = sources.some(item => item.uid === source.uid) ? `${source.uid}@${versionHash.slice(0, 12)}` : source.uid
+    const normalized: SourceEnvelope = { ...source, uid, contentHash: hash }
+    const filename = `${slug(normalized.provider)}-${slug(normalized.externalKey ?? normalized.uid)}-${versionHash.slice(0, 12)}.yaml`
+    await writeFile(join(workspacePath, '.sdd', 'sources', filename), stringify(normalized), 'utf8')
+    sources.push({ ...normalized, relativePath: relative(workspacePath, join(workspacePath, '.sdd', 'sources', filename)), validationErrors: [] })
+    return uid
+  }
+
+  private async applySourceImport(workspaceId: string, previewUid: string, identities: string[]): Promise<void> {
+    if (!/^[0-9a-f-]{36}$/i.test(previewUid)) throw new Error('invalid import preview id')
+    const snapshot = await this.requireSnapshot(workspaceId)
+    const path = join(snapshot.workspace.path, '.sdd', 'imports', 'pending', `${previewUid}.yaml`)
+    if (!(await exists(path))) throw new Error('import preview not found or expired')
+    const staged = parse(await readFile(path, 'utf8')) as StagedImport
+    if (staged.preview?.schema !== 'dsh-sdd/import-preview@1' || staged.preview.uid !== previewUid) throw new Error('invalid staged import')
+    const selected = new Set(identities)
+    const incoming = staged.bundle.items
+    const sources = [...snapshot.sources]
+    const actionable = staged.preview.items.filter(item => selected.has(item.identity) && item.change !== 'unchanged')
+    const needsBundleRoot = staged.bundle.root !== undefined && actionable.some(item => item.change !== 'removed')
+    const bundleSourceUid = needsBundleRoot ? await this.writeSourceSnapshot(snapshot.workspace.path, sources, staged.bundle.root!) : undefined
+    for (const previewItem of actionable) {
+      const existing = previewItem.workItemUid === undefined ? undefined : snapshot.workItems.find(item => item.uid === previewItem.workItemUid)
+      if (previewItem.change === 'removed') {
+        if (existing === undefined) continue
+        const artifacts = snapshot.artifacts.filter(item => item.workItemUid === existing.uid && item.status === 'accepted')
+        const workItem: WorkItem = { ...existing, status: 'removed-pending', updatedAt: new Date().toISOString(), change: { kind: 'removed', detectedAt: new Date().toISOString(), changedPaths: ['removed'], previousSourceUid: existing.sourceUid, reviewRequiredStages: [...new Set(artifacts.map(item => item.stage))] } }
+        await writeFile(join(snapshot.workspace.path, '.sdd', 'work-items', existing.uid, 'work-item.yaml'), stringify(workItem), 'utf8')
+        await appendEvent(snapshot.workspace.path, 'work-item.removal-detected', existing.key, undefined, { workItemUid: existing.uid, bundleKey: staged.bundle.externalKey })
+        continue
+      }
+      const source = incoming.find(item => sourceIdentity(item) === previewItem.identity)
+      if (source === undefined) throw new Error(`staged source is missing: ${previewItem.identity}`)
+      const sourceUid = await this.writeSourceSnapshot(snapshot.workspace.path, sources, source)
+      const now = new Date().toISOString()
+      const uid = existing?.uid ?? randomUUID()
+      const acceptedStages = snapshot.artifacts.filter(item => item.workItemUid === uid && item.status === 'accepted').map(item => item.stage)
+      const workItem: WorkItem = {
+        schema: 'dsh-sdd/work-item@1', uid, key: source.externalKey ?? source.uid, title: source.title,
+        kind: source.kind, provider: source.provider, bundleKey: staged.bundle.externalKey, sourceUid,
+        ...(bundleSourceUid === undefined ? {} : { bundleSourceUid }),
+        relations: staged.bundle.relations.filter(relation => relation.from === (source.externalKey ?? source.uid) || relation.to === (source.externalKey ?? source.uid)),
+        status: existing === undefined ? 'active' : 'change-pending', createdAt: existing?.createdAt ?? now, updatedAt: now,
+        ...(existing === undefined ? {} : { change: { kind: 'modified', detectedAt: now, changedPaths: previewItem.changedPaths, previousSourceUid: existing.sourceUid, reviewRequiredStages: [...new Set<StageId>(['requirements', ...acceptedStages])] } }),
+      }
+      await mkdir(join(snapshot.workspace.path, '.sdd', 'work-items', uid), { recursive: true })
+      await writeFile(join(snapshot.workspace.path, '.sdd', 'work-items', uid, 'work-item.yaml'), stringify(workItem), 'utf8')
+      await appendEvent(snapshot.workspace.path, existing === undefined ? 'work-item.created' : 'work-item.change-detected', workItem.key, undefined, { workItemUid: uid, bundleKey: staged.bundle.externalKey, changedPaths: previewItem.changedPaths })
+    }
+    await appendEvent(snapshot.workspace.path, 'source-bundle.applied', staged.bundle.externalKey, undefined, { previewUid, selected: actionable.length, total: staged.preview.items.length })
+    const historyName = `${new Date().toISOString().replace(/[:.]/g, '-')}-${previewUid}.yaml`
+    await writeFile(join(snapshot.workspace.path, '.sdd', 'imports', 'history', historyName), stringify({ schema: 'dsh-sdd/import-record@1', preview: staged.preview, appliedAt: new Date().toISOString(), identities: [...selected], relations: staged.bundle.relations }), 'utf8')
+    await unlink(path)
+  }
+
+  private async resolveWorkItemRemoval(workspaceId: string, workItemUid: string, decision: 'keep' | 'archive'): Promise<void> {
+    const snapshot = await this.requireSnapshot(workspaceId)
+    const workItem = snapshot.workItems.find(item => item.uid === workItemUid)
+    if (workItem === undefined) throw new Error(`work item not found: ${workItemUid}`)
+    if (workItem.status !== 'removed-pending') throw new Error(`work item ${workItem.key} has no pending removal`)
+    const updated: WorkItem = { ...workItem, status: decision === 'archive' ? 'completed' : 'active', updatedAt: new Date().toISOString(), change: undefined }
+    await writeFile(join(snapshot.workspace.path, '.sdd', 'work-items', workItem.uid, 'work-item.yaml'), stringify(updated), 'utf8')
+    await appendEvent(snapshot.workspace.path, decision === 'archive' ? 'work-item.archived' : 'work-item.removal-dismissed', workItem.key, undefined, { workItemUid })
   }
 
   private template(stage: StageId, key: string, title: string): string {
@@ -509,12 +680,27 @@ export class SddProjectService {
     return `# ${key} ${title}\n\n${sections[stage].map(section => `## ${section}\n\n待补充。`).join('\n\n')}\n`
   }
 
+  private hasCurrentChangeEvidence(snapshot: ProjectSnapshot, artifact: ArtifactSummary, workItem: WorkItem): boolean {
+    if (workItem.change === undefined || !workItem.change.reviewRequiredStages.includes(artifact.stage)) return true
+    if (artifact.stage === 'requirements') {
+      return workItem.sourceUid !== undefined && artifact.derivedFrom.some(reference => reference.uid === workItem.sourceUid)
+    }
+    const detectedAt = Date.parse(workItem.change.detectedAt)
+    return artifact.basedOn.some(reference => {
+      const input = snapshot.artifacts.find(item => item.uid === reference.uid)
+      return input?.workItemUid === workItem.uid && input.status === 'accepted' && Date.parse(input.updatedAt) >= detectedAt
+    })
+  }
+
   private async accept(workspaceId: string, artifactUid: string, checklist?: Record<string, boolean>): Promise<void> {
     let snapshot = await this.snapshot(workspaceId)
     let artifact = snapshot.artifacts.find(item => item.uid === artifactUid)
     if (artifact === undefined) throw new Error(`artifact not found: ${artifactUid}`)
     if (artifact.status !== 'draft' && artifact.status !== 'in-review') throw new Error(`artifact cannot be accepted from ${artifact.status}`)
     if (artifact.validationErrors.length > 0) throw new Error(`artifact validation failed: ${artifact.validationErrors.join('; ')}`)
+    const changedWorkItem = artifact.workItemUid === undefined ? undefined : snapshot.workItems.find(item => item.uid === artifact!.workItemUid)
+    if (changedWorkItem?.status === 'removed-pending') throw new Error(`work item ${changedWorkItem.key} was removed externally; resolve the removal before accepting artifacts`)
+    if (changedWorkItem !== undefined && !this.hasCurrentChangeEvidence(snapshot, artifact, changedWorkItem)) throw new Error(`artifact does not include current change evidence for work item ${changedWorkItem.key}`)
     const directory = resolve(snapshot.workspace.path, artifact.relativeDirectory)
     const entryPath = resolve(directory, artifact.entry)
     const entryRelative = relative(directory, entryPath)
@@ -539,6 +725,16 @@ export class SddProjectService {
     manifest.updatedAt = new Date().toISOString()
     manifest.contentHash = `sha256:${createHash('sha256').update(content).digest('hex')}`
     await writeFile(manifestPath, stringify(manifest), 'utf8')
+    if (artifact.workItemUid !== undefined) {
+      const workItem = snapshot.workItems.find(item => item.uid === artifact!.workItemUid)
+      if (workItem?.change !== undefined && workItem.status === 'change-pending') {
+        const reviewRequiredStages = workItem.change.reviewRequiredStages.filter(stage => stage !== artifact!.stage)
+        const updated: WorkItem = reviewRequiredStages.length === 0
+          ? { ...workItem, status: 'active', updatedAt: manifest.updatedAt, change: undefined }
+          : { ...workItem, updatedAt: manifest.updatedAt, change: { ...workItem.change, reviewRequiredStages } }
+        await writeFile(join(snapshot.workspace.path, '.sdd', 'work-items', workItem.uid, 'work-item.yaml'), stringify(updated), 'utf8')
+      }
+    }
     await appendEvent(snapshot.workspace.path, 'artifact.accepted', artifact.key, artifact.stage, { artifactUid })
   }
 
@@ -558,6 +754,9 @@ export class SddProjectService {
       if (artifact.validationErrors.length > 0) throw new Error(`artifact is invalid: ${artifact.key}: ${artifact.validationErrors.join('; ')}`)
       return artifact
     })
+    const workItem = target.workItemUid === undefined ? undefined : snapshot.workItems.find(item => item.uid === target.workItemUid)
+    if (workItem?.status === 'removed-pending') throw new Error(`work item ${workItem.key} was removed externally; its stage conversations are blocked`)
+    if (workItem !== undefined && !this.hasCurrentChangeEvidence(snapshot, target, workItem)) throw new Error(`bound artifact does not include current change evidence for work item ${workItem.key}; create a new revision from the latest source and upstream artifacts`)
     const definition = stageDefinition(stage)
     const runtime = runtimeDefinition(stage)
     const required = Object.entries(snapshot.project.dependencies[stage] ?? {}).filter(([, mode]) => mode === 'required').map(([id]) => id)
@@ -685,7 +884,7 @@ export class SddProjectService {
   }
 
   private dashboard(
-    artifacts: ArtifactSummary[], sources: SourceSummary[], quality: Record<string, QualityReport>,
+    artifacts: ArtifactSummary[], sources: SourceSummary[], workItems: WorkItem[], quality: Record<string, QualityReport>,
     workspaces: DevelopmentWorkspace[], recentEvents: SddEvent[],
   ): DashboardSnapshot {
     const stages = STAGES.map(definition => {
@@ -699,14 +898,19 @@ export class SddProjectService {
         : reports.some(report => report.ready) ? 'ready-for-review' as const : failedChecks > 0 ? 'blocked' as const : 'in-progress' as const
       return { stage: definition.id, status, completion, drafts, accepted, failedChecks }
     })
-    const requirements = sources.filter(item => item.kind === 'requirement')
-    const defects = sources.filter(item => item.kind === 'defect')
+    const currentSourceUids = new Set(workItems.map(item => item.sourceUid).filter((uid): uid is string => uid !== undefined))
+    const currentSources = workItems.length === 0 ? sources : sources.filter(item => currentSourceUids.has(item.uid))
+    const requirements = currentSources.filter(item => item.kind === 'requirement')
+    const defects = currentSources.filter(item => item.kind === 'defect')
     const tracedSources = new Set(artifacts.flatMap(item => item.derivedFrom.map(reference => reference.uid)))
     const tests = workspaces.flatMap(item => item.repositories.map(repository => repository.lastTest)).filter(item => item !== undefined)
-    const blockers = Object.values(quality).flatMap(report => report.checks.filter(item => item.status === 'failed').map(item => `${stageDefinition(report.stage).label}：${item.label}`)).slice(0, 12)
+    const blockers = [
+      ...workItems.filter(item => item.change !== undefined).map(item => `${item.key}：${item.status === 'removed-pending' ? '外部需求已移除，等待确认' : `需求已变更，需重审 ${item.change!.reviewRequiredStages.map(stage => stageDefinition(stage).label).join('、')}`}`),
+      ...Object.values(quality).flatMap(report => report.checks.filter(item => item.status === 'failed').map(item => `${stageDefinition(report.stage).label}：${item.label}`)),
+    ].slice(0, 12)
     const resolvedStatuses = new Set(['resolved', 'done', 'cancelled'])
     const workload = new Map<string, { total: number; completed: number }>()
-    for (const source of sources) {
+    for (const source of currentSources) {
       const estimate = source.tracking?.estimate
       if (estimate === undefined) continue
       const current = workload.get(estimate.unit) ?? { total: 0, completed: 0 }
@@ -721,7 +925,7 @@ export class SddProjectService {
       artifacts: { total: artifacts.length, drafts: artifacts.filter(item => item.status === 'draft' || item.status === 'in-review').length, accepted: artifacts.filter(item => item.status === 'accepted').length },
       development: { workspaces: workspaces.length, changedFiles: workspaces.flatMap(item => item.repositories).reduce((sum, item) => sum + item.changedFiles, 0), passingTests: tests.filter(item => item.passed).length, failingTests: tests.filter(item => !item.passed).length, commits: workspaces.flatMap(item => item.repositories).filter(item => item.headCommit !== item.baseCommit).length },
       workload: [...workload.entries()].sort(([left], [right]) => left.localeCompare(right)).map(([unit, value]) => ({ unit, ...value })),
-      traceability: sources.length === 0 ? 100 : Math.round(tracedSources.size / sources.length * 100), blockers, recentEvents,
+      traceability: currentSources.length === 0 ? 100 : Math.round(currentSources.filter(item => tracedSources.has(item.uid)).length / currentSources.length * 100), blockers, recentEvents,
     }
   }
 }

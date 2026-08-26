@@ -1,5 +1,5 @@
 import type { ApiProxy } from '@deepseek-ai/dsh-host-apiproxy';
-import { type ProjectSnapshot, type SddAction, type StageRun } from './protocol.ts';
+import { type ImportPreview, type ProjectSnapshot, type SddAction, type StageRun } from './protocol.ts';
 import { type SddIdentifierRegistry, type SddSourceRegistry } from './extensions.ts';
 import { GitDevelopmentService } from './git-service.ts';
 import type { StageSessionController } from './session-controller.ts';
@@ -11,19 +11,25 @@ export declare class SddProjectService {
     private readonly git;
     constructor(api: ApiProxy, sourceRegistry?: SddSourceRegistry | undefined, identifierRegistry?: SddIdentifierRegistry | undefined, sessionController?: StageSessionController | undefined, git?: GitDevelopmentService);
     private workspace;
-    execute(action: SddAction): Promise<ProjectSnapshot | {
+    execute(action: SddAction): Promise<ProjectSnapshot | ImportPreview | {
         prompt: string;
         run?: StageRun;
     }>;
     initialize(workspaceId: string): Promise<void>;
     private reinitialize;
     snapshot(workspaceId: string): Promise<ProjectSnapshot>;
+    private listConnectors;
+    private listWorkItems;
     private createDraft;
     private nextKey;
     private allocateKey;
     private listSources;
-    private importSource;
+    private previewSourceImport;
+    private writeSourceSnapshot;
+    private applySourceImport;
+    private resolveWorkItemRemoval;
     private template;
+    private hasCurrentChangeEvidence;
     private accept;
     private context;
     private bindSession;

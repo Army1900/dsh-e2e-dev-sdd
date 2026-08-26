@@ -29,7 +29,7 @@
 2. 在 `connectors/` 声明启动命令、超时和允许继承的环境变量。
 3. 在 `.sdd/project.yaml` 为 `requirement`、`defect` 等来源类型配置默认 Connector。
 4. 在命令行完成协议测试。
-5. 启动 DSH，在阶段页面按外部编号导入并检查生成的 `.sdd/sources/*.yaml`。
+5. 启动 DSH，在阶段页面按主业务编号导入，检查变更预览和生成的工作单元。
 
 ## Connector 配置
 
@@ -73,41 +73,39 @@ environment:
 | `kind` | 来源类型，例如 `requirement`、`defect` |
 | `key` | 用户输入的外部业务编号 |
 
-适配器必须只把一个 JSON 对象写到 stdout。调试日志和诊断信息写到 stderr；退出码非零表示获取失败。
+适配器必须只把一个 `dsh-sdd/source-bundle@1` JSON 对象写到 stdout。`items` 至少包含一项，单条来源就是长度为 1 的数组。调试日志和诊断信息写到 stderr；退出码非零表示获取失败。
 
 ## 适配器输出协议
 
-输出必须符合 `dsh-sdd/source@1`：
+输出统一符合 `dsh-sdd/source-bundle@1`。下面是只有一条来源的示例：
 
 ```json
 {
-  "schema": "dsh-sdd/source@1",
-  "uid": "company-alm:requirement:PAY-381:42",
+  "schema": "dsh-sdd/source-bundle@1",
+  "uid": "company-alm:bundle:PAY-381",
   "provider": "company-alm",
   "kind": "requirement",
   "externalKey": "PAY-381",
   "title": "支持订单部分退款",
-  "status": "研发中",
-  "revision": "42",
   "fetchedAt": "2026-08-26T09:00:00.000Z",
-  "tracking": {
-    "status": "研发中",
-    "normalizedStatus": "in-progress",
-    "priority": "P1",
-    "assignees": ["zhangsan"],
-    "estimate": { "value": 5, "unit": "point" }
-  },
-  "content": {
-    "description": "允许针对订单中的部分商品退款。",
-    "acceptanceCriteria": ["退款金额不能超过可退金额"]
-  },
-  "links": [{ "url": "https://alm.example/requirements/PAY-381" }]
+  "items": [{
+    "schema": "dsh-sdd/source@1",
+    "uid": "company-alm:requirement:PAY-381",
+    "provider": "company-alm",
+    "kind": "requirement",
+    "externalKey": "PAY-381",
+    "title": "支持订单部分退款",
+    "revision": "42",
+    "fetchedAt": "2026-08-26T09:00:00.000Z",
+    "content": { "description": "允许针对订单中的部分商品退款。" }
+  }],
+  "relations": []
 }
 ```
 
 核心字段：
 
-- `uid` 是这份外部记录的稳定身份，建议包含系统、类型、编号和版本。
+- `uid` 是这份外部记录的稳定身份，建议包含系统、类型和编号，不要包含版本或随机值。
 - `externalKey` 保留业务系统原始单号。
 - `revision` 用于识别外部版本变化。
 - `content` 保留 AI 整合交付件所需的原始事实，不要在适配器里生成 SDD 结论。
@@ -116,13 +114,47 @@ environment:
 
 插件会校验输出并计算 `contentHash`，然后冻结为 `.sdd/sources/*.yaml`。
 
+### 一个主 ID 返回多个子需求
+
+子需求可独立设计、开发和验收时，在同一个 `items` 数组返回多项：
+
+```json
+{
+  "schema": "dsh-sdd/source-bundle@1",
+  "uid": "company-alm:bundle:EPIC-100",
+  "provider": "company-alm",
+  "kind": "requirement",
+  "externalKey": "EPIC-100",
+  "title": "支付能力升级",
+  "fetchedAt": "2026-08-26T09:00:00.000Z",
+  "root": { "schema": "dsh-sdd/source@1", "uid": "company-alm:requirement:EPIC-100", "provider": "company-alm", "kind": "requirement", "externalKey": "EPIC-100", "title": "支付能力升级", "fetchedAt": "2026-08-26T09:00:00.000Z", "content": { "goal": "统一支付能力" } },
+  "items": [
+    { "schema": "dsh-sdd/source@1", "uid": "company-alm:requirement:REQ-101", "provider": "company-alm", "kind": "requirement", "externalKey": "REQ-101", "title": "微信支付", "fetchedAt": "2026-08-26T09:00:00.000Z", "content": { "description": "..." } },
+    { "schema": "dsh-sdd/source@1", "uid": "company-alm:requirement:REQ-102", "provider": "company-alm", "kind": "requirement", "externalKey": "REQ-102", "title": "支付宝", "fetchedAt": "2026-08-26T09:00:00.000Z", "content": { "description": "..." } }
+  ],
+  "relations": [
+    { "from": "REQ-101", "to": "EPIC-100", "type": "child-of" },
+    { "from": "REQ-102", "to": "EPIC-100", "type": "child-of" }
+  ]
+}
+```
+
+`root` 是可选的公共业务背景；`items` 中每一项默认形成一个独立 SDD 工作单元。适配器每次同步必须返回主 ID 当前完整的子项集合，这样核心才能识别已从外部删除的子项。
+
+再次输入同一个主 ID 会生成同步预览：
+
+- `added`：新建工作单元。
+- `modified`：保存新来源快照并标记受影响阶段重新评审。
+- `removed`：标记为外部已移除，负责人再选择保留本地继续推进或归档；禁止静默删除本地成果。
+- `unchanged`：不写文件。
+
+稳定身份应由 `provider + kind + externalKey` 决定；`uid` 不应包含随机值。`revision` 和内容可变化，历史快照由核心保存。
+
 ## Node.js 示例
 
 `.sdd/business/adapters/fetch-company-alm.mjs`：
 
 ```js
-import { createHash } from 'node:crypto'
-
 let input = ''
 for await (const chunk of process.stdin) input += chunk
 
@@ -148,11 +180,9 @@ const normalizedStatus = {
 }[item.status]
 
 const revision = String(item.version ?? item.updatedAt)
-const stableRevision = createHash('sha256').update(revision).digest('hex').slice(0, 12)
-
-process.stdout.write(JSON.stringify({
+const source = {
   schema: 'dsh-sdd/source@1',
-  uid: `company-alm:${request.kind}:${item.key}:${stableRevision}`,
+  uid: `company-alm:${request.kind}:${item.key}`,
   provider: 'company-alm',
   kind: request.kind,
   externalKey: item.key,
@@ -178,6 +208,18 @@ process.stdout.write(JSON.stringify({
     attachments: item.attachments,
   },
   links: item.url ? [{ url: item.url }] : [],
+}
+
+process.stdout.write(JSON.stringify({
+  schema: 'dsh-sdd/source-bundle@1',
+  uid: `company-alm:bundle:${request.key}`,
+  provider: 'company-alm',
+  kind: request.kind,
+  externalKey: request.key,
+  title: source.title,
+  fetchedAt: new Date().toISOString(),
+  items: [source],
+  relations: [],
 }))
 ```
 
@@ -227,7 +269,7 @@ Windows PowerShell：
 - 错误场景使用非零退出码，且 stdout 不混入日志。
 - 同一外部版本能生成相同的稳定 `uid`。
 
-随后从 DSH 页面执行一次导入，确认 `.sdd/sources/` 中生成快照且 `validationErrors` 为空。
+随后从 DSH 页面执行一次导入，确认预览数量正确、`.sdd/sources/` 中生成快照、`.sdd/work-items/` 中生成独立工作单元。修改一个子项并再次同步，确认它显示为“有变更”而不是重复新增。
 
 ## 安全要求
 

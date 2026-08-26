@@ -16,7 +16,7 @@
 
 ## 项目真源
 
-一个 DSH Workspace 对应一个 Git 仓库。可审计状态全部位于 `.sdd/`：
+一个 DSH Workspace 对应一个项目 Git 仓库。一个主业务编号形成需求包，每个可独立交付的子需求形成工作单元；工作单元共享项目配置，但拥有独立五阶段交付件和开发空间。可审计状态全部位于 `.sdd/`：
 
 ```text
 .sdd/
@@ -25,6 +25,10 @@
 │   ├── manifest.yaml
 │   └── deliverable.md
 ├── sources/
+├── imports/pending/<preview>.yaml
+├── work-items/<uid>/
+│   ├── work-item.yaml
+│   └── artifacts/<stage>/<artifact>/
 ├── business/
 │   ├── README.md
 │   ├── connectors/
@@ -44,13 +48,15 @@ Git-only 的并行分支无法安全分配全局连续序号，所以模板序�
 
 ## 来源归一化
 
-所有对话、文件、CLI、MCP 和外部系统内容先转换成 `dsh-sdd/source@1`：
+所有对话、文件、CLI、MCP 和外部系统内容统一转换成 `dsh-sdd/source-bundle@1`，其中 `items` 至少包含一个 `source@1`：
 
 ```text
-source provider -> Source Envelope -> schema validation -> AI synthesis -> draft artifact -> human acceptance
+source provider -> Source/Bundle -> change preview -> work item -> AI synthesis -> draft artifact -> human acceptance
 ```
 
 Connector 只提供来源，不直接创建 accepted 交付件。命令型 Connector 使用 stdin JSON / stdout JSON，命令以 argv 数组存储，凭证只从声明的环境变量读取。
+
+再次导入同一需求包即为同步。核心按 `provider + kind + externalKey` 匹配工作单元，比较来源内容、标题、状态和版本，预览新增、修改、移除、无变化四类结果。应用变更会新增来源快照而不覆盖历史版本；已有 accepted 交付件保持冻结，工作单元进入 `change-pending`，相关阶段必须使用最新来源和重新接受的上游交付件完成评审。外部移除进入 `removed-pending`，负责人可以保留本地继续推进或归档工作单元；两种操作都不会删除历史文件。
 
 项目级业务代码和配置统一位于 `.sdd/business/`。Connector 配置放入 `connectors/`，被调用的脚本及其项目内模块放入 `adapters/`；不得再散落到 `.sdd/scripts/`、仓库根目录或其他 SDD 状态目录。
 
@@ -94,5 +100,5 @@ DSH 当前侧边栏没有第三方多入口导航 slot。插件采用 dsh-web �
 
 - Git push、PR/MR 与 merge gate 需要独立的、带用户确认的远程写能力。
 - MCP Source Provider 和可写外部系统能力。
-- 交付件升级、superseded 关系和变更影响分析。
+- 交付件显式 superseded 关系和业务侧变更回写。
 - 基于事件日志的按日趋势图和周期时间统计。

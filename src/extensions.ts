@@ -1,5 +1,5 @@
 import { Service, type Context } from '@deepseek-ai/cordis'
-import type { ProjectConfig, SourceEnvelope } from './protocol.ts'
+import type { ProjectConfig, SourceBundle, SourceEnvelope } from './protocol.ts'
 
 const PROVIDER_NAME = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
 
@@ -28,9 +28,8 @@ export interface SourceSearchRequest {
 export interface SddSourceProvider {
   readonly name: string
   readonly kinds: readonly string[]
-  get(request: SourceGetRequest): Promise<SourceEnvelope>
+  get(request: SourceGetRequest): Promise<SourceBundle>
   search?(request: SourceSearchRequest): Promise<readonly SourceEnvelope[]>
-  listChildren?(request: SourceGetRequest): Promise<readonly SourceEnvelope[]>
 }
 
 export interface SourceProviderControl {
@@ -95,6 +94,36 @@ export function validateSourceEnvelope(value: unknown): SourceEnvelope {
   return source as SourceEnvelope
 }
 
+export function validateSourceBundle(value: unknown): SourceBundle {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new Error('source provider returned a non-object')
+  const bundle = value as Partial<SourceBundle>
+  if (bundle.schema !== 'dsh-sdd/source-bundle@1') throw new Error('source.schema must be dsh-sdd/source-bundle@1')
+  for (const field of ['uid', 'provider', 'kind', 'externalKey', 'title', 'fetchedAt'] as const) {
+    if (typeof bundle[field] !== 'string' || bundle[field] === '') throw new Error(`source bundle.${field} is required`)
+  }
+  if (!Number.isFinite(Date.parse(bundle.fetchedAt!))) throw new Error('source bundle.fetchedAt must be an ISO date-time')
+  const root = bundle.root === undefined ? undefined : validateSourceEnvelope(bundle.root)
+  if (!Array.isArray(bundle.items) || bundle.items.length === 0) throw new Error('source bundle.items must contain at least one item')
+  const items = bundle.items.map(validateSourceEnvelope)
+  if (root !== undefined && root.externalKey === undefined) throw new Error('source bundle.root.externalKey is required')
+  if (root !== undefined && root.provider !== bundle.provider) throw new Error('source bundle.root.provider must match bundle.provider')
+  for (const item of items) {
+    if (item.externalKey === undefined) throw new Error('every source bundle item needs externalKey')
+    if (item.provider !== bundle.provider) throw new Error('every source bundle item provider must match bundle.provider')
+  }
+  if (!Array.isArray(bundle.relations)) throw new Error('source bundle.relations must be an array')
+  const keys = new Set([root?.externalKey, ...items.map(item => item.externalKey)].filter((key): key is string => typeof key === 'string'))
+  for (const relation of bundle.relations) {
+    if (typeof relation !== 'object' || relation === null || typeof relation.from !== 'string' || typeof relation.to !== 'string' || typeof relation.type !== 'string') {
+      throw new Error('source bundle relation requires from, to and type')
+    }
+    if (!keys.has(relation.from) || !keys.has(relation.to)) throw new Error(`source bundle relation references an unknown key: ${relation.from} -> ${relation.to}`)
+  }
+  const identities = items.map(item => `${item.provider}\0${item.kind}\0${item.externalKey ?? item.uid}`)
+  if (new Set(identities).size !== identities.length) throw new Error('source bundle contains duplicate item identities')
+  return { ...bundle, ...(root === undefined ? {} : { root }), items } as SourceBundle
+}
+
 export class SddSourceRegistry extends Service {
   private readonly providers = new Map<string, Registered<SddSourceProvider>>()
 
@@ -127,7 +156,7 @@ export class SddSourceRegistry extends Service {
 
   get(name: string): SddSourceProvider | undefined { return this.providers.get(name)?.provider }
 
-  async fetch(name: string, request: Omit<SourceGetRequest, 'signal'> & { signal?: AbortSignal }): Promise<SourceEnvelope> {
+  async fetch(name: string, request: Omit<SourceGetRequest, 'signal'> & { signal?: AbortSignal }): Promise<SourceBundle> {
     const registered = this.providers.get(name)
     if (registered === undefined) throw new Error(`source provider not found: ${name}`)
     if (!registered.provider.kinds.includes('*') && !registered.provider.kinds.includes(request.kind)) {
@@ -136,7 +165,7 @@ export class SddSourceRegistry extends Service {
     const signal = request.signal === undefined
       ? registered.lifecycle.signal
       : AbortSignal.any([request.signal, registered.lifecycle.signal])
-    return validateSourceEnvelope(await registered.provider.get({ ...request, signal }))
+    return validateSourceBundle(await registered.provider.get({ ...request, signal }))
   }
 }
 

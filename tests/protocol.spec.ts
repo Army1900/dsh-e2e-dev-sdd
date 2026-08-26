@@ -19,4 +19,13 @@ describe('parseAction', () => {
     expect(parseAction({ kind: 'development-test', workspaceId: 'w1', artifactUid: 'a1', repositoryId: 'app', testId: 'unit' }))
       .toMatchObject({ kind: 'development-test', testId: 'unit' })
   })
+
+  it('accepts requirement bundle preview and apply actions', () => {
+    expect(parseAction({ kind: 'preview-source-import', workspaceId: 'w1', provider: 'command', sourceKind: 'requirement', key: 'EPIC-1', connector: 'company-alm' }))
+      .toMatchObject({ kind: 'preview-source-import', key: 'EPIC-1' })
+    expect(parseAction({ kind: 'apply-source-import', workspaceId: 'w1', previewUid: 'preview-1', identities: ['company:requirement:REQ-1'] }))
+      .toMatchObject({ kind: 'apply-source-import', identities: ['company:requirement:REQ-1'] })
+    expect(parseAction({ kind: 'apply-source-import', workspaceId: 'w1', previewUid: 'preview-1', identities: [1] })).toBeUndefined()
+    expect(parseAction({ kind: 'resolve-work-item-removal', workspaceId: 'w1', workItemUid: 'item-1', decision: 'archive' })).toMatchObject({ decision: 'archive' })
+  })
 })

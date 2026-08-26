@@ -54,6 +54,73 @@ export interface SourceEnvelope {
   }
 }
 
+export interface SourceBundleRelation {
+  from: string
+  to: string
+  type: 'child-of' | 'depends-on' | 'relates-to' | string
+}
+
+/** One business query may return a root record and many independently deliverable children. */
+export interface SourceBundle {
+  schema: 'dsh-sdd/source-bundle@1'
+  uid: string
+  provider: string
+  kind: string
+  externalKey: string
+  title: string
+  fetchedAt: string
+  root?: SourceEnvelope
+  items: SourceEnvelope[]
+  relations: SourceBundleRelation[]
+}
+
+export type ImportChangeKind = 'added' | 'modified' | 'removed' | 'unchanged'
+
+export interface ImportPreviewItem {
+  identity: string
+  externalKey: string
+  title: string
+  kind: string
+  change: ImportChangeKind
+  changedPaths: string[]
+  workItemUid?: string
+}
+
+export interface ImportPreview {
+  schema: 'dsh-sdd/import-preview@1'
+  uid: string
+  bundleKey: string
+  bundleTitle: string
+  provider: string
+  fetchedAt: string
+  items: ImportPreviewItem[]
+}
+
+export interface WorkItemChange {
+  kind: Exclude<ImportChangeKind, 'unchanged'>
+  detectedAt: string
+  changedPaths: string[]
+  previousSourceUid?: string
+  reviewRequiredStages: StageId[]
+}
+
+export interface WorkItem {
+  schema: 'dsh-sdd/work-item@1'
+  uid: string
+  key: string
+  title: string
+  kind: string
+  provider: string
+  bundleKey: string
+  sourceUid?: string
+  bundleSourceUid?: string
+  relations: SourceBundleRelation[]
+  status: 'active' | 'change-pending' | 'removed-pending' | 'completed'
+  createdAt: string
+  updatedAt: string
+  change?: WorkItemChange
+}
+
 export interface SourceReference {
   uid: string
   provider: string
@@ -79,6 +146,7 @@ export interface ArtifactManifest {
   derivedFrom: SourceReference[]
   externalRefs: ExternalReference[]
   checklist?: Record<string, boolean>
+  workItemUid?: string
 }
 
 export interface QualityCheck {
@@ -196,6 +264,8 @@ export interface ProjectSnapshot {
   artifacts: ArtifactSummary[]
   sources: SourceSummary[]
   sourceProviders: string[]
+  connectors: string[]
+  workItems: WorkItem[]
   runs: StageRun[]
   quality: Record<string, QualityReport>
   developmentWorkspaces: DevelopmentWorkspace[]
@@ -238,7 +308,7 @@ export type SddAction =
   | { kind: 'snapshot'; workspaceId: string }
   | { kind: 'initialize'; workspaceId: string }
   | { kind: 'reinitialize'; workspaceId: string }
-  | { kind: 'create-draft'; workspaceId: string; stage: StageId; title: string; key?: string; basedOn: string[]; sourceUids?: string[] }
+  | { kind: 'create-draft'; workspaceId: string; stage: StageId; title: string; key?: string; basedOn: string[]; sourceUids?: string[]; workItemUid?: string }
   | { kind: 'accept'; workspaceId: string; artifactUid: string; checklist?: Record<string, boolean> }
   | { kind: 'quality'; workspaceId: string; artifactUid: string }
   | { kind: 'context'; workspaceId: string; stage: StageId; artifactUid: string; artifactUids: string[]; sourceUids?: string[] }
@@ -250,10 +320,14 @@ export type SddAction =
   | { kind: 'development-test'; workspaceId: string; artifactUid: string; repositoryId: string; testId: string }
   | { kind: 'development-commit'; workspaceId: string; artifactUid: string; repositoryId: string; message: string }
   | { kind: 'import-source'; workspaceId: string; provider: string; sourceKind: string; key: string; connector?: string }
+  | { kind: 'preview-source-import'; workspaceId: string; provider: string; sourceKind: string; key: string; connector?: string }
+  | { kind: 'apply-source-import'; workspaceId: string; previewUid: string; identities: string[] }
+  | { kind: 'resolve-work-item-removal'; workspaceId: string; workItemUid: string; decision: 'keep' | 'archive' }
 
 export type SddResponse =
   | { ok: true; snapshot: ProjectSnapshot }
   | { ok: true; prompt: string; run?: StageRun }
+  | { ok: true; preview: ImportPreview }
   | { ok: false; error: string }
 
 export function isStageId(value: unknown): value is StageId {
@@ -283,13 +357,16 @@ export function parseAction(value: unknown): SddAction | undefined {
     && typeof action.testId === 'string') return action as unknown as SddAction
   if (action.kind === 'development-commit' && typeof action.artifactUid === 'string' && typeof action.repositoryId === 'string'
     && typeof action.message === 'string' && action.message.trim() !== '') return action as unknown as SddAction
-  if (action.kind === 'import-source' && typeof action.provider === 'string' && typeof action.sourceKind === 'string'
+  if ((action.kind === 'import-source' || action.kind === 'preview-source-import') && typeof action.provider === 'string' && typeof action.sourceKind === 'string'
     && typeof action.key === 'string' && (action.connector === undefined || typeof action.connector === 'string')) {
     return action as unknown as SddAction
   }
+  if (action.kind === 'apply-source-import' && typeof action.previewUid === 'string' && stringArray(action.identities)) return action as unknown as SddAction
+  if (action.kind === 'resolve-work-item-removal' && typeof action.workItemUid === 'string' && (action.decision === 'keep' || action.decision === 'archive')) return action as unknown as SddAction
   if (action.kind === 'create-draft' && isStageId(action.stage) && typeof action.title === 'string'
     && (action.key === undefined || typeof action.key === 'string') && stringArray(action.basedOn)
-    && (action.sourceUids === undefined || stringArray(action.sourceUids))) {
+    && (action.sourceUids === undefined || stringArray(action.sourceUids))
+    && (action.workItemUid === undefined || typeof action.workItemUid === 'string')) {
     return action as unknown as SddAction
   }
   return undefined

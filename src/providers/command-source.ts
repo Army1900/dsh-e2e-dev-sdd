@@ -3,8 +3,8 @@ import { readFile } from 'node:fs/promises'
 import { isAbsolute, join, relative, resolve } from 'node:path'
 import { parse } from 'yaml'
 import type { SddSourceProvider, SourceGetRequest } from '../extensions.ts'
-import { validateSourceEnvelope } from '../extensions.ts'
-import type { SourceEnvelope } from '../protocol.ts'
+import { validateSourceBundle } from '../extensions.ts'
+import type { SourceBundle } from '../protocol.ts'
 
 const CONNECTOR_ID = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
 const DEFAULT_TIMEOUT_MS = 30_000
@@ -104,18 +104,23 @@ export class CommandSourceProvider implements SddSourceProvider {
   readonly name = 'command'
   readonly kinds = ['*'] as const
 
-  async get(request: SourceGetRequest): Promise<SourceEnvelope> {
+  async get(request: SourceGetRequest): Promise<SourceBundle> {
     const connectorId = request.connector
     if (connectorId === undefined || !CONNECTOR_ID.test(connectorId)) {
       throw new Error('command source provider needs a kebab-case connector id')
     }
     const configPath = join(request.workspace.path, '.sdd', 'business', 'connectors', `${connectorId}.yaml`)
     const config = parseConfig(parse(await readFile(configPath, 'utf8')), connectorId)
-    const source = validateSourceEnvelope(await execute(config, request))
+    const source = validateSourceBundle(await execute(config, request))
     if (source.provider !== connectorId && source.provider !== this.name) {
       throw new Error(`source.provider must be "${connectorId}" or "command"`)
     }
     if (source.kind !== request.kind) throw new Error(`source.kind must equal requested kind "${request.kind}"`)
-    return { ...source, provider: connectorId }
+    return {
+      ...source,
+      provider: connectorId,
+      ...(source.root === undefined ? {} : { root: { ...source.root, provider: connectorId } }),
+      items: source.items.map(item => ({ ...item, provider: connectorId })),
+    }
   }
 }

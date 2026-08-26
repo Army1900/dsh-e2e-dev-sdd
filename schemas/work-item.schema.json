@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://army1900.github.io/dsh-e2e-dev-sdd/schemas/work-item.schema.json",
+  "title": "DSH SDD Work Item",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "uid", "key", "title", "kind", "provider", "bundleKey", "status", "createdAt", "updatedAt"],
+  "properties": {
+    "schema": { "const": "dsh-sdd/work-item@1" },
+    "uid": { "type": "string", "format": "uuid" },
+    "key": { "type": "string", "minLength": 1 },
+    "title": { "type": "string", "minLength": 1 },
+    "kind": { "type": "string", "minLength": 1 },
+    "provider": { "type": "string", "minLength": 1 },
+    "bundleKey": { "type": "string", "minLength": 1 },
+    "sourceUid": { "type": "string" },
+    "bundleSourceUid": { "type": "string" },
+    "status": { "enum": ["active", "change-pending", "removed-pending", "completed"] },
+    "createdAt": { "type": "string", "format": "date-time" },
+    "updatedAt": { "type": "string", "format": "date-time" },
+    "relations": {
+      "type": "array",
+      "items": {
+        "type": "object", "required": ["from", "to", "type"],
+        "properties": { "from": { "type": "string" }, "to": { "type": "string" }, "type": { "type": "string" } }
+      }
+    },
+    "change": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "detectedAt", "changedPaths", "reviewRequiredStages"],
+      "properties": {
+        "kind": { "enum": ["added", "modified", "removed"] },
+        "detectedAt": { "type": "string", "format": "date-time" },
+        "changedPaths": { "type": "array", "items": { "type": "string" } },
+        "previousSourceUid": { "type": "string" },
+        "reviewRequiredStages": { "type": "array", "items": { "enum": ["requirements", "prototype", "architecture", "specification", "development"] } }
+      }
+    }
+  }
+}

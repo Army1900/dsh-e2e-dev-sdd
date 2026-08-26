@@ -21,7 +21,8 @@
     "basedOn": { "type": "array", "items": { "$ref": "#/$defs/artifactReference" } },
     "derivedFrom": { "type": "array", "items": { "$ref": "#/$defs/sourceReference" } },
     "externalRefs": { "type": "array", "items": { "$ref": "#/$defs/externalReference" } },
-    "checklist": { "type": "object", "additionalProperties": { "type": "boolean" } }
+    "checklist": { "type": "object", "additionalProperties": { "type": "boolean" } },
+    "workItemUid": { "type": "string", "format": "uuid" }
   },
   "$defs": {
     "artifactReference": {

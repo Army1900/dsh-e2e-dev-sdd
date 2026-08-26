@@ -19,21 +19,16 @@ class CompanyAlmProvider implements SddSourceProvider {
 
   async get(request: SourceGetRequest) {
     const item = await companyAlm.get(request.kind, request.key, request.signal)
+    const source = {
+      schema: 'dsh-sdd/source@1' as const, uid: `${this.name}:${request.kind}:${item.key}`,
+      provider: this.name, kind: request.kind, externalKey: item.key, title: item.title,
+      status: item.status, fetchedAt: new Date().toISOString(), revision: item.revision,
+      content: { description: item.description, acceptanceCriteria: item.acceptanceCriteria }, links: item.links,
+    }
     return {
-      schema: 'dsh-sdd/source@1' as const,
-      uid: crypto.randomUUID(),
-      provider: this.name,
-      kind: request.kind,
-      externalKey: item.key,
-      title: item.title,
-      status: item.status,
-      fetchedAt: new Date().toISOString(),
-      revision: item.revision,
-      content: {
-        description: item.description,
-        acceptanceCriteria: item.acceptanceCriteria,
-      },
-      links: item.links,
+      schema: 'dsh-sdd/source-bundle@1' as const, uid: `${this.name}:bundle:${request.key}`,
+      provider: this.name, kind: request.kind, externalKey: request.key, title: source.title,
+      fetchedAt: new Date().toISOString(), items: [source], relations: [],
     }
   }
 }
@@ -45,7 +40,7 @@ export function apply(ctx: Context) {
 }
 ```
 
-注册返回 Cordis effect disposer；提供方插件卸载时注册会自动消失。Provider 名称同层重复会加载失败，`kinds` 控制可处理的来源类型。核心会验证 Provider 输出、计算内容哈希并把快照写入 `.sdd/sources/`。
+注册返回 Cordis effect disposer；提供方插件卸载时注册会自动消失。Provider 名称同层重复会加载失败，`kinds` 控制可处理的来源类型。`get()` 统一返回包含 `items` 和 `relations` 的 `dsh-sdd/source-bundle@1`，`items` 至少一项；单条来源就是长度为 1 的数组。公共主需求背景可放入可选的 `root`。核心会验证输出、生成同步预览，并把用户确认的版本快照写入 `.sdd/sources/`。
 
 项目可以为来源类型指定默认 Provider：
 
@@ -119,7 +114,7 @@ environment:
 {"operation":"get","kind":"requirement","key":"PAY-381"}
 ```
 
-stdout 必须只包含一个符合 `dsh-sdd/source@1` 的 JSON 对象。stderr 用于诊断；stdout 上限为 2 MiB。子进程只继承平台启动变量和 `environment` 中显式列出的变量。
+stdout 必须只包含一个符合 `dsh-sdd/source-bundle@1` 的 JSON 对象。stderr 用于诊断；stdout 上限为 2 MiB。子进程只继承平台启动变量和 `environment` 中显式列出的变量。
 
 项目可设置默认绑定：
 

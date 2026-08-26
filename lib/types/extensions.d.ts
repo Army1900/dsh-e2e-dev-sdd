@@ -1,5 +1,5 @@
 import { Service, type Context } from '@deepseek-ai/cordis';
-import type { ProjectConfig, SourceEnvelope } from './protocol.ts';
+import type { ProjectConfig, SourceBundle, SourceEnvelope } from './protocol.ts';
 export interface SddWorkspaceContext {
     readonly workspaceId: string;
     readonly path: string;
@@ -22,9 +22,8 @@ export interface SourceSearchRequest {
 export interface SddSourceProvider {
     readonly name: string;
     readonly kinds: readonly string[];
-    get(request: SourceGetRequest): Promise<SourceEnvelope>;
+    get(request: SourceGetRequest): Promise<SourceBundle>;
     search?(request: SourceSearchRequest): Promise<readonly SourceEnvelope[]>;
-    listChildren?(request: SourceGetRequest): Promise<readonly SourceEnvelope[]>;
 }
 export interface SourceProviderControl {
     readonly signal: AbortSignal;
@@ -63,6 +62,7 @@ declare module '@deepseek-ai/cordis' {
     }
 }
 export declare function validateSourceEnvelope(value: unknown): SourceEnvelope;
+export declare function validateSourceBundle(value: unknown): SourceBundle;
 export declare class SddSourceRegistry extends Service {
     private readonly providers;
     constructor(ctx: Context);
@@ -71,7 +71,7 @@ export declare class SddSourceRegistry extends Service {
     get(name: string): SddSourceProvider | undefined;
     fetch(name: string, request: Omit<SourceGetRequest, 'signal'> & {
         signal?: AbortSignal;
-    }): Promise<SourceEnvelope>;
+    }): Promise<SourceBundle>;
 }
 export declare class SddIdentifierRegistry extends Service {
     private readonly providers;
