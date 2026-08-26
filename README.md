@@ -37,11 +37,23 @@ dsh plugin --profile web add dsh-e2e-dev-sdd@latest
 
 ### 本地开发
 
+macOS/Linux：
+
 ```sh
 pnpm install
 pnpm build
 dsh plugin --profile web add link:$(pwd)
 ```
+
+Windows PowerShell：
+
+```powershell
+pnpm install
+pnpm build
+dsh plugin --profile web add "link:$($PWD.Path)"
+```
+
+构建、测试和运行时脚本均通过 Node.js 启动，不依赖 `rm`、`bash` 等 POSIX 命令。
 
 更新代码后重新构建并重启 DSH。可用下面的命令检查 bundle 层：
 

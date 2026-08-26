@@ -201,10 +201,21 @@ Provider 使用内置的 `command`，Connector 指向 `.sdd/business/connectors/
 
 先直接运行适配器：
 
+macOS/Linux：
+
 ```sh
 printf '%s' '{"operation":"get","kind":"requirement","key":"PAY-381"}' \
   | node .sdd/business/adapters/fetch-company-alm.mjs \
   | jq .
+```
+
+Windows PowerShell：
+
+```powershell
+'{"operation":"get","kind":"requirement","key":"PAY-381"}' |
+  node .sdd/business/adapters/fetch-company-alm.mjs |
+  ConvertFrom-Json |
+  ConvertTo-Json -Depth 20
 ```
 
 检查以下内容：

@@ -29,6 +29,7 @@ describe('StageSessionController', () => {
     expect(prompts.sections[0]?.text).toContain('BOUND')
     const guard = tools.guards[0]!
     expect(guard({ name: 'bash', arguments: {}, agent: agents.agent })).toContain('禁止')
+    expect(guard({ name: 'pwsh', arguments: {}, agent: agents.agent })).toContain('禁止')
     expect(guard({ name: 'write', arguments: { file_path: '.sdd/artifacts/requirements/a1/deliverable.md' }, agent: agents.agent })).toBeUndefined()
     expect(guard({ name: 'write', arguments: { file_path: 'src/app.ts' }, agent: agents.agent })).toContain('只能修改')
     controller.bind({ sessionId: 's1', stage: 'development', systemPrompt: 'DEV', projectPath: '/project', artifactDirectory: '/project/.sdd/artifacts/development/d1', developmentDirectories: ['/project/.sdd-workspaces/DEV-1/app'] })
@@ -36,6 +37,8 @@ describe('StageSessionController', () => {
     expect(developmentGuard({ name: 'bash', arguments: { command: 'pnpm test' }, agent: agents.agent })).toContain('workdir')
     expect(developmentGuard({ name: 'bash', arguments: { command: 'pnpm test', workdir: '.sdd-workspaces/DEV-1/app' }, agent: agents.agent })).toBeUndefined()
     expect(developmentGuard({ name: 'bash', arguments: { command: 'git commit -am done', workdir: '.sdd-workspaces/DEV-1/app' }, agent: agents.agent })).toContain('显式用户操作')
+    expect(developmentGuard({ name: 'pwsh', arguments: { command: 'pnpm test', workdir: '.sdd-workspaces/DEV-1/app' }, agent: agents.agent })).toBeUndefined()
+    expect(developmentGuard({ name: 'pwsh', arguments: { command: 'git push', workdir: '.sdd-workspaces/DEV-1/app' }, agent: agents.agent })).toContain('显式用户操作')
     expect(developmentGuard({ name: 'str_replace_editor', arguments: { command: 'str_replace', path: '/project/src/app.ts' }, agent: agents.agent })).toContain('只能修改')
   })
 

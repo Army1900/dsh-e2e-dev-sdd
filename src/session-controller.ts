@@ -73,12 +73,12 @@ export class StageSessionController {
           return `SDD ${definition.label} 阶段禁止使用工具 ${execution.name}`
         }
         if (mutatingMcpTool(execution.name)) return 'SDD 阶段禁止通过通用 MCP 工具执行外部写操作'
-        if (execution.name === 'bash') {
+        if (execution.name === 'bash' || execution.name === 'pwsh') {
           if (!definition.toolPolicy.allowShell) return `SDD ${definition.label} 阶段禁止执行 shell 命令`
           const workdir = stringArgument(execution.arguments, 'workdir')
-          if (workdir === undefined) return 'SDD 开发阶段的 bash 调用必须显式提供 workdir'
+          if (workdir === undefined) return `SDD 开发阶段的 ${execution.name} 调用必须显式提供 workdir`
           const resolved = resolve(spec.projectPath, workdir)
-          if (!developmentRoots.some(root => contained(root, resolved))) return 'bash workdir 必须位于当前交付件绑定的隔离代码空间'
+          if (!developmentRoots.some(root => contained(root, resolved))) return `${execution.name} workdir 必须位于当前交付件绑定的隔离代码空间`
           const command = stringArgument(execution.arguments, 'command') ?? ''
           if (/\bgit\s+(?:commit|push|merge|rebase|reset|clean)\b/i.test(command) || /\b(?:gh\s+pr|glab\s+mr)\s+create\b/i.test(command)) {
             return '代码提交、推送和合并只能通过 SDD 的显式用户操作执行'
