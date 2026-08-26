@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process'
 import { readFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { isAbsolute, join, relative, resolve } from 'node:path'
 import { parse } from 'yaml'
 import type { SddSourceProvider, SourceGetRequest } from '../extensions.ts'
 import { validateSourceEnvelope } from '../extensions.ts'
@@ -52,6 +52,15 @@ function childEnvironment(names: readonly string[]): NodeJS.ProcessEnv {
 }
 
 async function execute(config: CommandConnectorConfig, request: SourceGetRequest): Promise<unknown> {
+  const workspaceRoot = resolve(request.workspace.path)
+  const adapterRoot = resolve(workspaceRoot, '.sdd', 'business', 'adapters')
+  for (const argument of config.command) {
+    if (!isAbsolute(argument) && !argument.startsWith('.') && !argument.includes('/')) continue
+    const candidate = resolve(workspaceRoot, argument)
+    const inWorkspace = relative(workspaceRoot, candidate) === '' || !relative(workspaceRoot, candidate).startsWith('..')
+    const inAdapters = relative(adapterRoot, candidate) === '' || !relative(adapterRoot, candidate).startsWith('..')
+    if (inWorkspace && !inAdapters) throw new Error(`connector project file must be under .sdd/business/adapters: ${argument}`)
+  }
   const [file, ...args] = config.command
   const timeout = AbortSignal.timeout(config.timeoutMs ?? DEFAULT_TIMEOUT_MS)
   const signal = AbortSignal.any([request.signal, timeout])
@@ -100,7 +109,7 @@ export class CommandSourceProvider implements SddSourceProvider {
     if (connectorId === undefined || !CONNECTOR_ID.test(connectorId)) {
       throw new Error('command source provider needs a kebab-case connector id')
     }
-    const configPath = join(request.workspace.path, '.sdd', 'connectors', `${connectorId}.yaml`)
+    const configPath = join(request.workspace.path, '.sdd', 'business', 'connectors', `${connectorId}.yaml`)
     const config = parseConfig(parse(await readFile(configPath, 'utf8')), connectorId)
     const source = validateSourceEnvelope(await execute(config, request))
     if (source.provider !== connectorId && source.provider !== this.name) {

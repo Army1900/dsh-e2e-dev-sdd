@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { access, mkdir, readFile, readdir, realpath, writeFile } from 'node:fs/promises'
+import { access, copyFile, mkdir, readFile, readdir, realpath, writeFile } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import type { ApiProxy, RpcId } from '@deepseek-ai/dsh-host-apiproxy'
 import { parse, stringify } from 'yaml'
@@ -28,6 +28,17 @@ import { runtimeDefinition } from './stage-definitions.ts'
 import type { StageSessionController } from './session-controller.ts'
 
 const PROJECT_FILE = '.sdd/project.yaml'
+const BUSINESS_GUIDE = `# 项目业务扩展
+
+本目录是当前 SDD 项目唯一的项目级业务自定义目录。
+
+- \`connectors/\`：命令型 Connector 配置。
+- \`adapters/\`：Connector 调用的业务适配器脚本和脚本自己的模块。
+
+适配器从 stdin 接收一个 JSON 请求，只能把一个符合 \`dsh-sdd/source@1\` 的 JSON 对象写到 stdout；日志应写到 stderr。凭证不得提交到仓库，Connector 只声明允许继承的环境变量名。
+
+完整开发说明见 dsh-e2e-dev-sdd 插件的 \`docs/business-development-guide.md\`。
+`
 
 function request<T>(payload: T) {
   return { rpcId: `sdd-${randomUUID()}` as RpcId, payload }
@@ -98,6 +109,82 @@ function validateManifest(value: unknown, entryExists: boolean): string[] {
   return errors
 }
 
+function object(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function nonEmptyString(value: unknown): boolean {
+  return typeof value === 'string' && value.trim() !== ''
+}
+
+function validateProject(value: unknown): { project?: ProjectConfig; errors: string[] } {
+  const errors: string[] = []
+  if (!object(value)) return { errors: ['project.yaml：根节点必须是对象'] }
+  if (value.schema !== 'dsh-sdd/project@1') errors.push('schema：必须是 dsh-sdd/project@1')
+  if (!object(value.project)) errors.push('project：必须是对象')
+  else {
+    if (!nonEmptyString(value.project.key)) errors.push('project.key：不能为空')
+    if (!nonEmptyString(value.project.name)) errors.push('project.name：不能为空')
+  }
+  if (!object(value.identifiers)) errors.push('identifiers：必须是对象')
+  else {
+    if (!object(value.identifiers.internal) || value.identifiers.internal.strategy !== 'uuid') errors.push('identifiers.internal.strategy：必须是 uuid')
+    if (!object(value.identifiers.namespaces)) errors.push('identifiers.namespaces：必须是对象')
+    else for (const [namespace, policy] of Object.entries(value.identifiers.namespaces)) {
+      const base = `identifiers.namespaces.${namespace}`
+      if (!object(policy)) { errors.push(`${base}：必须是对象`); continue }
+      if (!['template', 'manual', 'external', 'script', 'provider'].includes(String(policy.strategy))) errors.push(`${base}.strategy：值无效`)
+      if (policy.strategy === 'template' && !nonEmptyString(policy.template)) errors.push(`${base}.template：模板策略必须配置模板`)
+      if ((policy.strategy === 'provider' || policy.strategy === 'script') && !nonEmptyString(policy.provider)) errors.push(`${base}.provider：当前策略必须配置 Provider`)
+    }
+  }
+  if (!object(value.sources)) errors.push('sources：必须是对象')
+  else for (const [kind, binding] of Object.entries(value.sources)) {
+    if (!object(binding) || !nonEmptyString(binding.provider)) errors.push(`sources.${kind}.provider：不能为空`)
+    else if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(String(binding.provider))) errors.push(`sources.${kind}.provider：必须使用 kebab-case`)
+  }
+  if (!object(value.dependencies)) errors.push('dependencies：必须是对象')
+  else for (const [stageIndex, stage] of STAGES.entries()) {
+    const dependencies = value.dependencies[stage.id]
+    if (!object(dependencies)) { errors.push(`dependencies.${stage.id}：必须是对象`); continue }
+    for (const [inputStage, mode] of Object.entries(dependencies)) {
+      const inputIndex = STAGES.findIndex(item => item.id === inputStage)
+      if (inputIndex < 0) errors.push(`dependencies.${stage.id}.${inputStage}：未知阶段`)
+      else if (inputIndex >= stageIndex) errors.push(`dependencies.${stage.id}.${inputStage}：只能依赖当前阶段之前的阶段`)
+      if (mode !== 'required' && mode !== 'optional' && mode !== 'manual') errors.push(`dependencies.${stage.id}.${inputStage}：必须是 required、optional 或 manual`)
+    }
+  }
+  if (!object(value.development)) errors.push('development：必须是对象')
+  else {
+    if (!nonEmptyString(value.development.workspaceRoot)) errors.push('development.workspaceRoot：不能为空')
+    else if (isAbsolute(String(value.development.workspaceRoot)) || String(value.development.workspaceRoot).split(/[\\/]/).includes('..')) errors.push('development.workspaceRoot：必须是项目内的相对路径')
+    if (!nonEmptyString(value.development.branchPattern)) errors.push('development.branchPattern：不能为空')
+    else if (!String(value.development.branchPattern).includes('{artifactKey}')) errors.push('development.branchPattern：必须包含 {artifactKey}')
+    if (!['pull-request', 'local-merge', 'manual'].includes(String(value.development.mergeStrategy))) errors.push('development.mergeStrategy：值无效')
+    if (!Array.isArray(value.development.repositories)) errors.push('development.repositories：必须是数组')
+    else value.development.repositories.forEach((repository, index) => {
+      const base = `development.repositories[${index}]`
+      if (!object(repository)) { errors.push(`${base}：必须是对象`); return }
+      if (!nonEmptyString(repository.id) || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(String(repository.id))) errors.push(`${base}.id：必须是非空 kebab-case`)
+      if (!nonEmptyString(repository.source)) errors.push(`${base}.source：不能为空`)
+      if (!nonEmptyString(repository.baseBranch)) errors.push(`${base}.baseBranch：不能为空`)
+      if (!Array.isArray(repository.testCommands)) errors.push(`${base}.testCommands：必须是数组`)
+      else repository.testCommands.forEach((command, commandIndex) => {
+        const commandBase = `${base}.testCommands[${commandIndex}]`
+        if (!object(command) || !nonEmptyString(command.id) || !nonEmptyString(command.label)
+          || !Array.isArray(command.argv) || command.argv.length === 0 || command.argv.some(argument => !nonEmptyString(argument))) {
+          errors.push(`${commandBase}：需要有效的 id、label 和非空 argv`)
+        }
+      })
+    })
+    if (Array.isArray(value.development.repositories)) {
+      const ids = value.development.repositories.filter(object).map(repository => repository.id).filter(nonEmptyString)
+      if (new Set(ids).size !== ids.length) errors.push('development.repositories：仓库 id 不能重复')
+    }
+  }
+  return errors.length === 0 ? { project: value as unknown as ProjectConfig, errors } : { errors }
+}
+
 export class SddProjectService {
   constructor(
     private readonly api: ApiProxy,
@@ -118,6 +205,7 @@ export class SddProjectService {
   async execute(action: SddAction): Promise<ProjectSnapshot | { prompt: string; run?: StageRun }> {
     if (action.kind === 'snapshot') return this.snapshot(action.workspaceId)
     if (action.kind === 'initialize') { await this.initialize(action.workspaceId); return this.snapshot(action.workspaceId) }
+    if (action.kind === 'reinitialize') { await this.reinitialize(action.workspaceId); return this.snapshot(action.workspaceId) }
     if (action.kind === 'create-draft') {
       await this.createDraft(action.workspaceId, action.stage, action.title, action.key, action.basedOn, action.sourceUids ?? [])
       return this.snapshot(action.workspaceId)
@@ -168,33 +256,63 @@ export class SddProjectService {
     const sddRoot = join(workspace.path, '.sdd')
     await mkdir(join(sddRoot, 'artifacts'), { recursive: true })
     await mkdir(join(sddRoot, 'sources'), { recursive: true })
-    await mkdir(join(sddRoot, 'connectors'), { recursive: true })
+    await mkdir(join(sddRoot, 'business', 'connectors'), { recursive: true })
+    await mkdir(join(sddRoot, 'business', 'adapters'), { recursive: true })
     await mkdir(join(sddRoot, 'runs'), { recursive: true })
     await mkdir(join(sddRoot, 'events'), { recursive: true })
     await mkdir(join(sddRoot, 'development'), { recursive: true })
     for (const stage of STAGES) await mkdir(join(sddRoot, 'artifacts', stage.id), { recursive: true })
+    const businessGuidePath = join(sddRoot, 'business', 'README.md')
+    if (!(await exists(businessGuidePath))) await writeFile(businessGuidePath, BUSINESS_GUIDE, 'utf8')
     const projectPath = join(workspace.path, PROJECT_FILE)
-    if (!(await exists(projectPath))) await writeFile(projectPath, stringify(defaultProject(workspace.path)), 'utf8')
+    const created = !(await exists(projectPath))
+    if (created) await writeFile(projectPath, stringify(defaultProject(workspace.path)), 'utf8')
     const gitignorePath = join(workspace.path, '.gitignore')
     const gitignore = (await exists(gitignorePath)) ? await readFile(gitignorePath, 'utf8') : ''
     if (!gitignore.split(/\r?\n/).includes('.sdd-workspaces/')) {
       const prefix = gitignore === '' || gitignore.endsWith('\n') ? gitignore : `${gitignore}\n`
       await writeFile(gitignorePath, `${prefix}\n# DSH SDD per-requirement isolated checkouts\n.sdd-workspaces/\n`, 'utf8')
     }
+    if (created) await appendEvent(workspace.path, 'project.initialized', basename(workspace.path), undefined, { projectFile: PROJECT_FILE })
+  }
+
+  private async reinitialize(workspaceId: string): Promise<void> {
+    const workspace = await this.workspace(workspaceId)
+    const projectPath = join(workspace.path, PROJECT_FILE)
+    if (await exists(projectPath)) {
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
+      await copyFile(projectPath, join(workspace.path, '.sdd', `project.invalid-${timestamp}.yaml`))
+    }
+    await this.initialize(workspaceId)
+    await writeFile(projectPath, stringify(defaultProject(workspace.path)), 'utf8')
+    await appendEvent(workspace.path, 'project.reinitialized', basename(workspace.path), undefined, { backupCreated: true })
   }
 
   async snapshot(workspaceId: string): Promise<ProjectSnapshot> {
     const workspace = await this.workspace(workspaceId)
     const projectPath = join(workspace.path, PROJECT_FILE)
     if (!(await exists(projectPath))) return {
-      workspace, initialized: false, artifacts: [], sources: [], sourceProviders: this.sourceRegistry?.names() ?? [],
+      workspace, initialized: false, configuration: { status: 'missing', path: PROJECT_FILE, errors: [] }, artifacts: [], sources: [], sourceProviders: this.sourceRegistry?.names() ?? [],
       runs: [], quality: {}, developmentWorkspaces: [], dashboard: this.emptyDashboard(),
     }
-    const parsedProject = parse(await readFile(projectPath, 'utf8')) as ProjectConfig
+    let parsedProject: unknown
+    try { parsedProject = parse(await readFile(projectPath, 'utf8')) }
+    catch (error) {
+      return {
+        workspace, initialized: true, configuration: { status: 'invalid', path: PROJECT_FILE, errors: [`YAML 解析失败：${error instanceof Error ? error.message : String(error)}`] },
+        artifacts: [], sources: [], sourceProviders: this.sourceRegistry?.names() ?? [], runs: [], quality: {}, developmentWorkspaces: [], dashboard: this.emptyDashboard(),
+      }
+    }
+    const validation = validateProject(parsedProject)
+    if (validation.project === undefined) return {
+      workspace, initialized: true, configuration: { status: 'invalid', path: PROJECT_FILE, errors: validation.errors },
+      artifacts: [], sources: [], sourceProviders: this.sourceRegistry?.names() ?? [], runs: [], quality: {}, developmentWorkspaces: [], dashboard: this.emptyDashboard(),
+    }
+    const parsed = validation.project
     const project: ProjectConfig = {
-      ...parsedProject,
-      sources: parsedProject.sources ?? {},
-      development: { ...parsedProject.development, repositories: parsedProject.development?.repositories ?? [] },
+      ...parsed,
+      sources: parsed.sources ?? {},
+      development: { ...parsed.development, repositories: parsed.development?.repositories ?? [] },
     }
     const artifacts: ArtifactSummary[] = []
     for (const manifestPath of await walkForManifest(join(workspace.path, '.sdd', 'artifacts'))) {
@@ -241,7 +359,7 @@ export class SddProjectService {
     }
     const recentEvents = await readRecentEvents(workspace.path)
     const dashboard = this.dashboard(artifacts, sources, quality, developmentWorkspaces, recentEvents)
-    return { workspace, initialized: true, project, artifacts, sources, sourceProviders: this.sourceRegistry?.names() ?? [], runs, quality, developmentWorkspaces, dashboard }
+    return { workspace, initialized: true, configuration: { status: 'valid', path: PROJECT_FILE, errors: [] }, project, artifacts, sources, sourceProviders: this.sourceRegistry?.names() ?? [], runs, quality, developmentWorkspaces, dashboard }
   }
 
   private async createDraft(

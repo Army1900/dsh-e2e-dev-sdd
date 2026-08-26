@@ -101,13 +101,13 @@ Provider 只生成项目显示编号；交付件内部 UUID 始终由核心生�
 无需发布 Cordis 插件时，可以在项目中提供命令适配器：
 
 ```yaml
-# .sdd/connectors/company-alm.yaml
+# .sdd/business/connectors/company-alm.yaml
 schema: dsh-sdd/connector@1
 id: company-alm
 type: command
 command:
   - node
-  - .sdd/scripts/fetch-company-alm.mjs
+  - .sdd/business/adapters/fetch-company-alm.mjs
 timeoutMs: 30000
 environment:
   - COMPANY_ALM_TOKEN

@@ -14,6 +14,7 @@ DeepSeek Harness Web 的五阶段 SDD（Specification-Driven Development）工�
 - 稳定内部 UUID、项目显示编号、外部编号和显式关系的扩展契约。
 - 可注册的需求/缺陷 Source Provider 与编号 Provider Cordis 服务。
 - 内置无 shell 的命令型 Source Provider，支持项目自有 CLI 脚本。
+- 项目级业务 Connector 与适配器统一收束在 `.sdd/business/`。
 - 每阶段独立 System Prompt、输入门禁、工具执行 Guard、结构质量检查和验收清单。
 - 一个阶段运行固定绑定一个交付件和一个 DSH Session，支持恢复与逐轮质量刷新。
 - 对话中确定结论必须同步到交付件，并提供显式“同步结论”操作。
@@ -61,7 +62,7 @@ pnpm 10 及以上会要求用户在 profile 的 `pnpm-workspace.yaml` 中明确�
 ## 使用
 
 1. 在 DSH 中打开一个 Git 仓库作为 Workspace。
-2. 进入任一阶段菜单；首次使用点击“初始化”。
+2. 进入任一阶段菜单；插件会检查 `.sdd/project.yaml`。未初始化时点击“初始化项目”；配置不合法时会显示字段级错误，可修复后重新检查，或备份旧配置后重新生成默认配置。
 3. 勾选本次需要的已接受交付件，并选择一个本阶段草稿作为固定对话目标。
 4. 开始绑定对话；插件在对应 Session 安装阶段 System Prompt 和工具 Guard。
 5. 与 Agent 迭代，确定结论逐轮写入 `.sdd/artifacts/<stage>/...`。
@@ -79,7 +80,7 @@ pnpm 10 及以上会要求用户在 profile 的 `pnpm-workspace.yaml` 中明确�
 - 外部材料必须先转换为 Source Envelope，再由 AI 整合为正式交付件。
 - 每个需求的代码开发使用独立 Worktree 或 clone，不污染主项目空间。
 
-阶段运行机制见 [docs/stage-runtime.md](docs/stage-runtime.md)，详细设计见 [docs/architecture.md](docs/architecture.md)，扩展开发见 [docs/extensions.md](docs/extensions.md)，规范文件位于 [schemas/](schemas/)。
+阶段运行机制见 [docs/stage-runtime.md](docs/stage-runtime.md)，详细设计见 [docs/architecture.md](docs/architecture.md)，业务适配开发见 [docs/business-development-guide.md](docs/business-development-guide.md)，Cordis Provider 扩展见 [docs/extensions.md](docs/extensions.md)，规范文件位于 [schemas/](schemas/)。
 
 ## 开发验证
 

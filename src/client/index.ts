@@ -101,13 +101,18 @@ class SddWorkbench {
     const snapshot = this.state.snapshot
     let body = ''
     if (this.state.loading) body = '<div class="dsh-sdd-empty">正在读取 SDD 项目…</div>'
-    else if (snapshot?.initialized === false) body = this.initializationHtml()
+    else if (snapshot?.configuration.status === 'missing') body = this.initializationHtml()
+    else if (snapshot?.configuration.status === 'invalid') body = this.invalidConfigurationHtml(snapshot)
     else if (snapshot !== undefined) body = this.state.menu === 'dashboard' ? this.dashboardHtml(snapshot) : this.workbenchHtml(snapshot, this.state.menu)
     this.container.innerHTML = `<div class="dsh-sdd-page"><header class="dsh-sdd-header"><button class="dsh-sdd-button" data-action="close">返回对话</button><h1>${title}</h1><select class="dsh-sdd-select" data-action="workspace">${options}</select><button class="dsh-sdd-button" data-action="refresh">刷新</button></header>${this.state.error ? `<div class="dsh-sdd-error">${escapeHtml(this.state.error)}</div>` : ''}${body}</div>`
     this.bind()
   }
 
-  private initializationHtml(): string { return '<section class="dsh-sdd-card"><h2>初始化 SDD Workspace</h2><p>当前仓库还没有 <code>.sdd/project.yaml</code>。初始化会创建标准目录、阶段配置与事件记录目录。</p><button class="dsh-sdd-button primary" data-action="initialize">初始化</button></section>' }
+  private initializationHtml(): string { return '<section class="dsh-sdd-card"><h2>初始化 SDD 项目</h2><p>当前目录还不是有效的 SDD 项目。初始化会创建 <code>.sdd/project.yaml</code>、五阶段交付件目录、来源、运行、开发和事件目录，并更新 <code>.gitignore</code>。</p><p class="dsh-sdd-muted">已有业务代码和其他文件不会被修改。</p><button class="dsh-sdd-button primary" data-action="initialize">初始化项目</button></section>' }
+
+  private invalidConfigurationHtml(snapshot: ProjectSnapshot): string {
+    return `<section class="dsh-sdd-card"><h2>SDD 项目配置不合法</h2><p>检测到 <code>${escapeHtml(snapshot.configuration.path)}</code>，但当前配置不能安全运行。请修复下列问题，或备份旧配置后重新生成默认配置。</p><ul class="dsh-sdd-checks">${snapshot.configuration.errors.map(error => `<li data-fail>${escapeHtml(error)}</li>`).join('')}</ul><div class="dsh-sdd-actions"><button class="dsh-sdd-button" data-action="refresh">重新检查</button><button class="dsh-sdd-button primary" data-action="reinitialize">备份并重新初始化</button></div></section>`
+  }
 
   private dashboardHtml(snapshot: ProjectSnapshot): string {
     const dashboard = snapshot.dashboard
@@ -144,9 +149,10 @@ class SddWorkbench {
 
   private bind(): void {
     const root = this.container!
-    root.querySelector<HTMLElement>('[data-action="close"]')?.addEventListener('click', () => this.close()); root.querySelector<HTMLElement>('[data-action="refresh"]')?.addEventListener('click', () => { void this.refresh() })
+    root.querySelector<HTMLElement>('[data-action="close"]')?.addEventListener('click', () => this.close()); root.querySelectorAll<HTMLElement>('[data-action="refresh"]').forEach(button => button.addEventListener('click', () => { void this.refresh() }))
     root.querySelector<HTMLSelectElement>('[data-action="workspace"]')?.addEventListener('change', event => { this.state.workspaceId = (event.currentTarget as HTMLSelectElement).value; this.state.selected.clear(); this.state.targetArtifactUid = undefined; void this.refresh() })
     root.querySelector<HTMLElement>('[data-action="initialize"]')?.addEventListener('click', () => { void this.mutate({ kind: 'initialize', workspaceId: this.state.workspaceId! }) }); root.querySelector<HTMLElement>('[data-action="draft"]')?.addEventListener('click', () => { void this.createDraft() }); root.querySelector<HTMLElement>('[data-action="import-source"]')?.addEventListener('click', () => { void this.importSource() }); root.querySelector<HTMLElement>('[data-action="conversation"]')?.addEventListener('click', () => { void this.startConversation() })
+    root.querySelector<HTMLElement>('[data-action="reinitialize"]')?.addEventListener('click', () => { if (window.confirm('现有 project.yaml 将先备份，再生成默认配置。是否继续？')) void this.mutate({ kind: 'reinitialize', workspaceId: this.state.workspaceId! }) })
     root.querySelectorAll<HTMLInputElement>('[data-input]').forEach(input => input.addEventListener('change', () => { const uid = input.dataset.input!; if (input.checked) this.state.selected.add(uid); else this.state.selected.delete(uid) }))
     root.querySelectorAll<HTMLInputElement>('[data-target]').forEach(input => input.addEventListener('change', () => { this.state.targetArtifactUid = input.dataset.target; const artifact = this.state.snapshot?.artifacts.find(item => item.uid === input.dataset.target); this.state.selected = new Set([...(artifact?.basedOn.map(item => item.uid) ?? []), ...(artifact?.derivedFrom.map(item => item.uid) ?? [])]); this.render() }))
     root.querySelectorAll<HTMLButtonElement>('[data-quality]').forEach(button => button.addEventListener('click', () => { void this.mutate({ kind: 'quality', workspaceId: this.state.workspaceId!, artifactUid: button.dataset.quality! }) }))
@@ -162,7 +168,7 @@ class SddWorkbench {
 
   private async createDraft(): Promise<void> { if (this.state.menu === 'dashboard') return; const title = window.prompt('交付件标题')?.trim(); if (!title) return; const key = window.prompt('项目编号（留空则自动生成）')?.trim() || undefined; const artifacts = this.state.snapshot?.artifacts ?? []; const sources = this.state.snapshot?.sources ?? []; await this.mutate({ kind: 'create-draft', workspaceId: this.state.workspaceId!, stage: this.state.menu, title, key, basedOn: [...this.state.selected].filter(uid => artifacts.some(item => item.uid === uid)), sourceUids: [...this.state.selected].filter(uid => sources.some(item => item.uid === uid)) }) }
 
-  private async importSource(): Promise<void> { const providers = this.state.snapshot?.sourceProviders ?? []; if (providers.length === 0) { this.state.error = '当前没有可用的 Source Provider'; return this.render() } const sourceKind = window.prompt('来源类型', this.state.menu === 'development' ? 'defect' : 'requirement')?.trim(); if (!sourceKind) return; const configured = this.state.snapshot?.project?.sources[sourceKind]; const provider = window.prompt(`Source Provider（可用：${providers.join(', ')}）`, configured?.provider ?? providers[0])?.trim(); if (!provider) return; if (!providers.includes(provider)) { this.state.error = `Source Provider 未注册：${provider}`; return this.render() } const connector = provider === 'command' ? window.prompt('Connector ID（对应 .sdd/connectors/<id>.yaml）', configured?.connector)?.trim() : configured?.connector; if (provider === 'command' && !connector) return; const key = window.prompt('外部需求或缺陷编号')?.trim(); if (!key) return; await this.mutate({ kind: 'import-source', workspaceId: this.state.workspaceId!, provider, sourceKind, key, ...(connector ? { connector } : {}) }) }
+  private async importSource(): Promise<void> { const providers = this.state.snapshot?.sourceProviders ?? []; if (providers.length === 0) { this.state.error = '当前没有可用的 Source Provider'; return this.render() } const sourceKind = window.prompt('来源类型', this.state.menu === 'development' ? 'defect' : 'requirement')?.trim(); if (!sourceKind) return; const configured = this.state.snapshot?.project?.sources[sourceKind]; const provider = window.prompt(`Source Provider（可用：${providers.join(', ')}）`, configured?.provider ?? providers[0])?.trim(); if (!provider) return; if (!providers.includes(provider)) { this.state.error = `Source Provider 未注册：${provider}`; return this.render() } const connector = provider === 'command' ? window.prompt('Connector ID（对应 .sdd/business/connectors/<id>.yaml）', configured?.connector)?.trim() : configured?.connector; if (provider === 'command' && !connector) return; const key = window.prompt('外部需求或缺陷编号')?.trim(); if (!key) return; await this.mutate({ kind: 'import-source', workspaceId: this.state.workspaceId!, provider, sourceKind, key, ...(connector ? { connector } : {}) }) }
 
   private selectedInputs(): { artifacts: string[]; sources: string[] } { const artifacts = this.state.snapshot?.artifacts ?? []; const sources = this.state.snapshot?.sources ?? []; return { artifacts: [...this.state.selected].filter(uid => artifacts.some(item => item.uid === uid)), sources: [...this.state.selected].filter(uid => sources.some(item => item.uid === uid)) } }
 

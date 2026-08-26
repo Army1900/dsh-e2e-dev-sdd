@@ -49,6 +49,7 @@ describe('SddProjectService', () => {
     expect(snapshot.artifacts[0]?.status).toBe('accepted')
     expect(snapshot.artifacts[0]?.contentHash).toMatch(/^sha256:/)
     expect(await readFile(join(root, '.sdd/project.yaml'), 'utf8')).toContain('dsh-sdd/project@1')
+    expect(await readFile(join(root, '.sdd/business/README.md'), 'utf8')).toContain('唯一的项目级业务自定义目录')
   })
 
   it('pins only accepted upstream artifacts', async () => {
@@ -58,6 +59,21 @@ describe('SddProjectService', () => {
     const input = (await service.snapshot('w1')).artifacts[0]!
     await expect(service.execute({ kind: 'create-draft', workspaceId: 'w1', stage: 'prototype', title: '原型', basedOn: [input.uid] }))
       .rejects.toThrow('not accepted')
+  })
+
+  it('reports invalid project configuration and preserves a backup when reinitializing', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-sdd-'))
+    const service = new SddProjectService(api(root))
+    await service.initialize('w1')
+    await writeFile(join(root, '.sdd/project.yaml'), 'schema: wrong\nproject: []\n')
+    let snapshot = await service.snapshot('w1')
+    expect(snapshot.configuration.status).toBe('invalid')
+    expect(snapshot.configuration.errors).toEqual(expect.arrayContaining([expect.stringContaining('schema')]))
+    await service.execute({ kind: 'reinitialize', workspaceId: 'w1' })
+    snapshot = await service.snapshot('w1')
+    expect(snapshot.configuration.status).toBe('valid')
+    const files = await import('node:fs/promises').then(fs => fs.readdir(join(root, '.sdd')))
+    expect(files.some(file => file.startsWith('project.invalid-'))).toBe(true)
   })
 
   it('imports provider output and traces it into a draft', async () => {

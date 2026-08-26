@@ -25,7 +25,10 @@
 │   ├── manifest.yaml
 │   └── deliverable.md
 ├── sources/
-├── connectors/
+├── business/
+│   ├── README.md
+│   ├── connectors/
+│   └── adapters/
 ├── runs/
 ├── development/
 └── events/
@@ -48,6 +51,8 @@ source provider -> Source Envelope -> schema validation -> AI synthesis -> draft
 ```
 
 Connector 只提供来源，不直接创建 accepted 交付件。命令型 Connector 使用 stdin JSON / stdout JSON，命令以 argv 数组存储，凭证只从声明的环境变量读取。
+
+项目级业务代码和配置统一位于 `.sdd/business/`。Connector 配置放入 `connectors/`，被调用的脚本及其项目内模块放入 `adapters/`；不得再散落到 `.sdd/scripts/`、仓库根目录或其他 SDD 状态目录。
 
 ## 阶段对话
 

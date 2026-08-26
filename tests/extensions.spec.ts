@@ -50,10 +50,11 @@ describe('SDD extension registries', () => {
 describe('CommandSourceProvider', () => {
   it('runs an argv command and validates its Source Envelope', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-sdd-command-'))
-    await mkdir(join(root, '.sdd', 'connectors'), { recursive: true })
-    const script = join(root, 'connector.mjs')
+    await mkdir(join(root, '.sdd', 'business', 'connectors'), { recursive: true })
+    await mkdir(join(root, '.sdd', 'business', 'adapters'), { recursive: true })
+    const script = join(root, '.sdd', 'business', 'adapters', 'connector.mjs')
     await writeFile(script, `let input=''; for await (const chunk of process.stdin) input += chunk; const request=JSON.parse(input); process.stdout.write(JSON.stringify({schema:'dsh-sdd/source@1',uid:'source-1',provider:'demo-cli',kind:request.kind,externalKey:request.key,title:'Imported '+request.key,fetchedAt:new Date(0).toISOString(),content:{body:'from cli'}}));`)
-    await writeFile(join(root, '.sdd', 'connectors', 'demo-cli.yaml'), stringify({
+    await writeFile(join(root, '.sdd', 'business', 'connectors', 'demo-cli.yaml'), stringify({
       schema: 'dsh-sdd/connector@1', id: 'demo-cli', type: 'command', command: [process.execPath, script], timeoutMs: 5000,
     }))
     const provider = new CommandSourceProvider()

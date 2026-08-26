@@ -5,6 +5,7 @@ describe('parseAction', () => {
   it('accepts typed stage actions', () => {
     expect(parseAction({ kind: 'create-draft', workspaceId: 'w1', stage: 'requirements', title: '支付需求', basedOn: [] }))
       .toEqual({ kind: 'create-draft', workspaceId: 'w1', stage: 'requirements', title: '支付需求', basedOn: [] })
+    expect(parseAction({ kind: 'reinitialize', workspaceId: 'w1' })).toEqual({ kind: 'reinitialize', workspaceId: 'w1' })
   })
 
   it('rejects unknown stages and malformed arrays', () => {

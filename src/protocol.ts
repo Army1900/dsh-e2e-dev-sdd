@@ -187,6 +187,11 @@ export interface WorkspaceSummary {
 export interface ProjectSnapshot {
   workspace: WorkspaceSummary
   initialized: boolean
+  configuration: {
+    status: 'missing' | 'valid' | 'invalid'
+    path: string
+    errors: string[]
+  }
   project?: ProjectConfig
   artifacts: ArtifactSummary[]
   sources: SourceSummary[]
@@ -232,6 +237,7 @@ export interface SddEvent {
 export type SddAction =
   | { kind: 'snapshot'; workspaceId: string }
   | { kind: 'initialize'; workspaceId: string }
+  | { kind: 'reinitialize'; workspaceId: string }
   | { kind: 'create-draft'; workspaceId: string; stage: StageId; title: string; key?: string; basedOn: string[]; sourceUids?: string[] }
   | { kind: 'accept'; workspaceId: string; artifactUid: string; checklist?: Record<string, boolean> }
   | { kind: 'quality'; workspaceId: string; artifactUid: string }
@@ -262,7 +268,7 @@ export function parseAction(value: unknown): SddAction | undefined {
   if (typeof value !== 'object' || value === null) return undefined
   const action = value as Record<string, unknown>
   if (typeof action.kind !== 'string' || typeof action.workspaceId !== 'string') return undefined
-  if (action.kind === 'snapshot' || action.kind === 'initialize') return action as unknown as SddAction
+  if (action.kind === 'snapshot' || action.kind === 'initialize' || action.kind === 'reinitialize') return action as unknown as SddAction
   if ((action.kind === 'accept' || action.kind === 'quality') && typeof action.artifactUid === 'string') return action as unknown as SddAction
   if (action.kind === 'context' && isStageId(action.stage) && typeof action.artifactUid === 'string' && stringArray(action.artifactUids)
     && (action.sourceUids === undefined || stringArray(action.sourceUids))) return action as unknown as SddAction
