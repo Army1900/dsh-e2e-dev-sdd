@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://army1900.github.io/dsh-e2e-dev-sdd/schemas/event.schema.json",
+  "title": "DSH SDD Event",
+  "type": "object", "additionalProperties": false,
+  "required": ["schema", "id", "time", "type", "subject"],
+  "properties": {
+    "schema": { "const": "dsh-sdd/event@1" }, "id": { "type": "string", "format": "uuid" }, "time": { "type": "string", "format": "date-time" },
+    "type": { "type": "string", "minLength": 1 }, "subject": { "type": "string", "minLength": 1 },
+    "stage": { "enum": ["requirements", "prototype", "architecture", "specification", "development"] }, "detail": { "type": "object" }
+  }
+}

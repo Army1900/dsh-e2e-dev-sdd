@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://army1900.github.io/dsh-e2e-dev-sdd/schemas/artifact.schema.json",
+  "title": "DSH SDD Artifact",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "uid", "key", "title", "stage", "type", "version", "status", "entry", "createdAt", "updatedAt", "basedOn", "derivedFrom", "externalRefs"],
+  "properties": {
+    "schema": { "const": "dsh-sdd/artifact@1" },
+    "uid": { "type": "string", "format": "uuid" },
+    "key": { "type": "string", "minLength": 1 },
+    "title": { "type": "string", "minLength": 1 },
+    "stage": { "enum": ["requirements", "prototype", "architecture", "specification", "development"] },
+    "type": { "type": "string", "minLength": 1 },
+    "version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
+    "status": { "enum": ["draft", "in-review", "accepted", "superseded"] },
+    "entry": { "type": "string", "minLength": 1 },
+    "createdAt": { "type": "string", "format": "date-time" },
+    "updatedAt": { "type": "string", "format": "date-time" },
+    "contentHash": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+    "basedOn": { "type": "array", "items": { "$ref": "#/$defs/artifactReference" } },
+    "derivedFrom": { "type": "array", "items": { "$ref": "#/$defs/sourceReference" } },
+    "externalRefs": { "type": "array", "items": { "$ref": "#/$defs/externalReference" } },
+    "checklist": { "type": "object", "additionalProperties": { "type": "boolean" } }
+  },
+  "$defs": {
+    "artifactReference": {
+      "type": "object", "required": ["uid", "version"],
+      "properties": { "uid": { "type": "string" }, "version": { "type": "string" }, "contentHash": { "type": "string" } }
+    },
+    "sourceReference": {
+      "type": "object", "required": ["uid", "provider", "kind"],
+      "properties": {
+        "uid": { "type": "string" }, "provider": { "type": "string" }, "kind": { "type": "string" },
+        "externalKey": { "type": "string" }, "contentHash": { "type": "string" }
+      }
+    },
+    "externalReference": {
+      "type": "object", "required": ["system", "kind", "key", "relation"],
+      "properties": { "system": { "type": "string" }, "kind": { "type": "string" }, "key": { "type": "string" }, "relation": { "type": "string" }, "url": { "type": "string", "format": "uri" } }
+    }
+  }
+}

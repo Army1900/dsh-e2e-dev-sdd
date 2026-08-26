@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://army1900.github.io/dsh-e2e-dev-sdd/schemas/source.schema.json",
+  "title": "DSH SDD Source Envelope",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "uid", "provider", "kind", "title", "fetchedAt", "content"],
+  "properties": {
+    "schema": { "const": "dsh-sdd/source@1" },
+    "uid": { "type": "string" },
+    "provider": { "type": "string", "minLength": 1 },
+    "kind": { "type": "string", "minLength": 1 },
+    "externalKey": { "type": "string" },
+    "title": { "type": "string", "minLength": 1 },
+    "status": { "type": "string" },
+    "fetchedAt": { "type": "string", "format": "date-time" },
+    "revision": { "type": "string" },
+    "contentHash": { "type": "string" },
+    "content": {},
+    "links": { "type": "array", "items": { "type": "object" } },
+    "tracking": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "status": { "type": "string" },
+        "normalizedStatus": { "enum": ["todo", "in-progress", "resolved", "done", "cancelled", "blocked"] },
+        "priority": { "type": "string" }, "severity": { "type": "string" },
+        "assignees": { "type": "array", "items": { "type": "string" } },
+        "estimate": { "type": "object", "required": ["value", "unit"], "properties": { "value": { "type": "number", "minimum": 0 }, "unit": { "type": "string", "minLength": 1 } } },
+        "createdAt": { "type": "string", "format": "date-time" }, "updatedAt": { "type": "string", "format": "date-time" }, "resolvedAt": { "type": "string", "format": "date-time" }
+      }
+    }
+  }
+}

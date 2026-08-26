@@ -1,0 +1,5 @@
+# DSH bundle layer. The host entry and browser client are both resolved from
+# this package; install with `dsh plugin --profile web add dsh-e2e-dev-sdd`.
+- insert:
+    - id: e2e-dev-sdd
+      name: 'dsh-e2e-dev-sdd'

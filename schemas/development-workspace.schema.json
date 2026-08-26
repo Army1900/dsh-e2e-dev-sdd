@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://army1900.github.io/dsh-e2e-dev-sdd/schemas/development-workspace.schema.json",
+  "title": "DSH SDD Development Workspace",
+  "type": "object",
+  "required": ["schema", "uid", "key", "artifactUid", "inputs", "repositories", "createdAt", "updatedAt"],
+  "properties": {
+    "schema": { "const": "dsh-sdd/development-workspace@1" },
+    "uid": { "type": "string" },
+    "key": { "type": "string", "minLength": 1 },
+    "artifactUid": { "type": "string" },
+    "createdAt": { "type": "string", "format": "date-time" },
+    "updatedAt": { "type": "string", "format": "date-time" },
+    "inputs": { "type": "array", "items": { "type": "object", "required": ["artifactUid", "version"] } },
+    "repositories": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "source", "baseBranch", "baseCommit", "workingBranch", "path", "headCommit", "changedFiles", "ahead", "behind"],
+        "properties": {
+          "id": { "type": "string" }, "source": { "type": "string" }, "baseBranch": { "type": "string" },
+          "baseCommit": { "type": "string" }, "workingBranch": { "type": "string" }, "path": { "type": "string" },
+          "headCommit": { "type": "string" }, "changedFiles": { "type": "integer", "minimum": 0 }, "ahead": { "type": "integer", "minimum": 0 }, "behind": { "type": "integer", "minimum": 0 }
+        }
+      }
+    }
+  }
+}

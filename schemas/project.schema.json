@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://army1900.github.io/dsh-e2e-dev-sdd/schemas/project.schema.json",
+  "title": "DSH SDD Project",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "project", "identifiers", "sources", "dependencies", "development"],
+  "properties": {
+    "schema": { "const": "dsh-sdd/project@1" },
+    "project": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key", "name"],
+      "properties": { "key": { "type": "string", "minLength": 1 }, "name": { "type": "string", "minLength": 1 } }
+    },
+    "identifiers": { "type": "object" },
+    "sources": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["provider"],
+        "properties": {
+          "provider": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$" },
+          "connector": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$" }
+        }
+      }
+    },
+    "dependencies": { "type": "object" },
+    "development": {
+      "type": "object",
+      "required": ["workspaceRoot", "branchPattern", "mergeStrategy", "repositories"],
+      "properties": {
+        "workspaceRoot": { "type": "string", "minLength": 1 },
+        "branchPattern": { "type": "string", "minLength": 1 },
+        "mergeStrategy": { "enum": ["pull-request", "local-merge", "manual"] },
+        "repositories": {
+          "type": "array",
+          "items": {
+            "type": "object", "additionalProperties": false,
+            "required": ["id", "source", "baseBranch", "testCommands"],
+            "properties": {
+              "id": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$" },
+              "source": { "type": "string", "minLength": 1 },
+              "baseBranch": { "type": "string", "minLength": 1 },
+              "testCommands": {
+                "type": "array",
+                "items": {
+                  "type": "object", "additionalProperties": false, "required": ["id", "label", "argv"],
+                  "properties": {
+                    "id": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$" },
+                    "label": { "type": "string", "minLength": 1 },
+                    "argv": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

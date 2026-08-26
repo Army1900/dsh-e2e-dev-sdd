@@ -1,0 +1,8 @@
+node_modules/
+lib/
+coverage/
+*.tgz
+.DS_Store
+
+# Per-requirement isolated checkouts are runtime state, never SDD artifacts.
+.sdd-workspaces/
