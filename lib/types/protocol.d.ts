@@ -247,6 +247,12 @@ export interface DevelopmentRepositoryConfig {
         argv: string[];
     }>;
 }
+export interface RepositoryInspection {
+    source: string;
+    sourceKind: 'local' | 'remote';
+    branches: string[];
+    defaultBranch: string;
+}
 export interface DevelopmentRepositoryState {
     id: string;
     source: string;
@@ -354,6 +360,33 @@ export interface StageProgress {
     accepted: number;
     failedChecks: number;
 }
+export type DeliveryCellStatus = 'not-started' | 'in-progress' | 'ready-for-review' | 'completed' | 'blocked';
+export interface StageFlow {
+    stage: StageId;
+    notStarted: number;
+    inProgress: number;
+    readyForReview: number;
+    completed: number;
+    blocked: number;
+}
+export interface DeliveryMatrixCell {
+    stage: StageId;
+    status: DeliveryCellStatus;
+    artifactUid?: string;
+    artifactKey?: string;
+    version?: string;
+}
+export interface DeliveryMatrixRow {
+    workItemUid: string;
+    key: string;
+    title: string;
+    cells: DeliveryMatrixCell[];
+}
+export interface BurnupPoint {
+    date: string;
+    total: number;
+    completed: number;
+}
 export interface DashboardSnapshot {
     overallCompletion: number;
     stages: StageProgress[];
@@ -384,6 +417,9 @@ export interface DashboardSnapshot {
         total: number;
         completed: number;
     }>;
+    stageFlow: StageFlow[];
+    deliveryMatrix: DeliveryMatrixRow[];
+    burnup: BurnupPoint[];
     traceability: number;
     blockers: string[];
     recentEvents: SddEvent[];
@@ -471,6 +507,15 @@ export type SddAction = {
     workspaceId: string;
     id: string;
     source: string;
+    baseBranch: string;
+} | {
+    kind: 'inspect-project-repository';
+    workspaceId: string;
+    source: string;
+} | {
+    kind: 'update-project-repository-branch';
+    workspaceId: string;
+    id: string;
     baseBranch: string;
 } | {
     kind: 'remove-project-repository';
@@ -574,6 +619,9 @@ export type SddResponse = {
 } | {
     ok: true;
     template: StageTemplatePreview;
+} | {
+    ok: true;
+    repositoryInspection: RepositoryInspection;
 } | {
     ok: true;
     opened: true;

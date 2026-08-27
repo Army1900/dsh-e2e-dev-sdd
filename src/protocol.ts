@@ -309,6 +309,13 @@ export interface DevelopmentRepositoryConfig {
   testCommands: Array<{ id: string; label: string; argv: string[] }>
 }
 
+export interface RepositoryInspection {
+  source: string
+  sourceKind: 'local' | 'remote'
+  branches: string[]
+  defaultBranch: string
+}
+
 export interface DevelopmentRepositoryState {
   id: string
   source: string
@@ -409,6 +416,34 @@ export interface StageProgress {
   failedChecks: number
 }
 
+export type DeliveryCellStatus = 'not-started' | 'in-progress' | 'ready-for-review' | 'completed' | 'blocked'
+
+export interface StageFlow {
+  stage: StageId
+  notStarted: number
+  inProgress: number
+  readyForReview: number
+  completed: number
+  blocked: number
+}
+
+export interface DeliveryMatrixCell {
+  stage: StageId
+  status: DeliveryCellStatus
+  artifactUid?: string
+  artifactKey?: string
+  version?: string
+}
+
+export interface DeliveryMatrixRow {
+  workItemUid: string
+  key: string
+  title: string
+  cells: DeliveryMatrixCell[]
+}
+
+export interface BurnupPoint { date: string; total: number; completed: number }
+
 export interface DashboardSnapshot {
   overallCompletion: number
   stages: StageProgress[]
@@ -417,6 +452,9 @@ export interface DashboardSnapshot {
   artifacts: { total: number; drafts: number; accepted: number }
   development: { workspaces: number; changedFiles: number; passingTests: number; failingTests: number; commits: number }
   workload: Array<{ unit: string; total: number; completed: number }>
+  stageFlow: StageFlow[]
+  deliveryMatrix: DeliveryMatrixRow[]
+  burnup: BurnupPoint[]
   traceability: number
   blockers: string[]
   recentEvents: SddEvent[]
@@ -452,6 +490,8 @@ export type SddAction =
   | { kind: 'open-stage-template'; workspaceId: string; stage: StageId; target: 'directory' | 'config' | 'content' }
   | { kind: 'update-work-item-settings'; workspaceId: string; workItemUid: string; repositoryScope: string[]; developmentTargets: string[]; openSpec?: { enabled: boolean; repositoryId?: string; path?: string } }
   | { kind: 'add-project-repository'; workspaceId: string; id: string; source: string; baseBranch: string }
+  | { kind: 'inspect-project-repository'; workspaceId: string; source: string }
+  | { kind: 'update-project-repository-branch'; workspaceId: string; id: string; baseBranch: string }
   | { kind: 'remove-project-repository'; workspaceId: string; id: string }
   | { kind: 'quality'; workspaceId: string; artifactUid: string }
   | { kind: 'context'; workspaceId: string; stage: StageId; artifactUid: string; artifactUids: string[]; sourceUids?: string[] }
@@ -473,6 +513,7 @@ export type SddResponse =
   | { ok: true; preview: ImportPreview }
   | { ok: true; artifactFile: { artifactUid: string; path: string; kind: ArtifactFileSummary['kind'] | 'manifest'; content?: string; dataUrl?: string } }
   | { ok: true; template: StageTemplatePreview }
+  | { ok: true; repositoryInspection: RepositoryInspection }
   | { ok: true; opened: true }
   | { ok: false; error: string }
 
@@ -498,6 +539,8 @@ export function parseAction(value: unknown): SddAction | undefined {
   if (action.kind === 'update-work-item-settings' && typeof action.workItemUid === 'string' && stringArray(action.repositoryScope)
     && stringArray(action.developmentTargets) && (action.openSpec === undefined || (typeof action.openSpec === 'object' && action.openSpec !== null))) return action as unknown as SddAction
   if (action.kind === 'add-project-repository' && typeof action.id === 'string' && typeof action.source === 'string' && typeof action.baseBranch === 'string') return action as unknown as SddAction
+  if (action.kind === 'inspect-project-repository' && typeof action.source === 'string') return action as unknown as SddAction
+  if (action.kind === 'update-project-repository-branch' && typeof action.id === 'string' && typeof action.baseBranch === 'string') return action as unknown as SddAction
   if (action.kind === 'remove-project-repository' && typeof action.id === 'string') return action as unknown as SddAction
   if (action.kind === 'context' && isStageId(action.stage) && typeof action.artifactUid === 'string' && stringArray(action.artifactUids)
     && (action.sourceUids === undefined || stringArray(action.sourceUids))) return action as unknown as SddAction

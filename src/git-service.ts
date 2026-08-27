@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process'
 import { access, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { isAbsolute, join, relative, resolve } from 'node:path'
 import { parse, stringify } from 'yaml'
-import type { ArtifactSummary, DevelopmentRepositoryConfig, DevelopmentRepositoryState, DevelopmentWorkspace, ProjectConfig } from './protocol.ts'
+import type { ArtifactSummary, DevelopmentRepositoryConfig, DevelopmentRepositoryState, DevelopmentWorkspace, ProjectConfig, RepositoryInspection } from './protocol.ts'
 
 const ID = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
 const MAX_OUTPUT = 1024 * 1024
@@ -33,6 +33,14 @@ async function run(argv: readonly string[], cwd: string, timeoutMs = 120_000, al
 }
 
 async function exists(path: string): Promise<boolean> { try { await access(path); return true } catch { return false } }
+
+async function localBaseCommit(repositoryPath: string, branch: string): Promise<string> {
+  for (const ref of [`refs/heads/${branch}`, `refs/remotes/origin/${branch}`]) {
+    const result = await run(['git', 'rev-parse', '--verify', `${ref}^{commit}`], repositoryPath, 30_000, true)
+    if (result.exitCode === 0) return result.stdout.trim()
+  }
+  throw new Error(`base branch does not exist in repository: ${branch}`)
+}
 
 function developmentFile(projectPath: string, artifactUid: string): string {
   return join(projectPath, '.sdd', 'development', `${artifactUid}.yaml`)
@@ -74,16 +82,37 @@ function repositoryConfig(project: ProjectConfig, id: string): DevelopmentReposi
 }
 
 export class GitDevelopmentService {
-  async validateSource(projectPath: string, source: string, baseBranch: string): Promise<'local' | 'remote'> {
-    const localSource = isAbsolute(source) ? source : resolve(projectPath, source)
+  async inspectSource(projectPath: string, source: string): Promise<RepositoryInspection> {
+    const normalized = source.trim()
+    if (normalized === '') throw new Error('repository source is required')
+    const localSource = isAbsolute(normalized) ? normalized : resolve(projectPath, normalized)
     if (await exists(localSource)) {
       const repository = await run(['git', 'rev-parse', '--is-inside-work-tree'], localSource, 30_000, true)
-      if (repository.exitCode !== 0 || repository.stdout.trim() !== 'true') throw new Error(`local source is not a Git repository: ${source}`)
-      await run(['git', 'rev-parse', '--verify', `${baseBranch}^{commit}`], localSource, 30_000)
-      return 'local'
+      if (repository.exitCode !== 0 || repository.stdout.trim() !== 'true') throw new Error(`local source is not a Git repository: ${normalized}`)
+      const branchResult = await run(['git', 'for-each-ref', '--format=%(refname)', 'refs/heads', 'refs/remotes/origin'], localSource, 30_000)
+      const branches = [...new Set(branchResult.stdout.split(/\r?\n/).map(item => item.trim()).flatMap(ref => {
+        if (ref.startsWith('refs/heads/')) return [ref.slice('refs/heads/'.length)]
+        if (ref.startsWith('refs/remotes/origin/') && !ref.endsWith('/HEAD')) return [ref.slice('refs/remotes/origin/'.length)]
+        return []
+      }))].sort()
+      if (branches.length === 0) throw new Error('repository has no branches; create an initial commit or fetch the remote branches first')
+      const current = await run(['git', 'symbolic-ref', '--quiet', '--short', 'HEAD'], localSource, 30_000, true)
+      const preferred = current.exitCode === 0 ? current.stdout.trim() : ''
+      const defaultBranch = branches.includes(preferred) ? preferred : branches.includes('main') ? 'main' : branches.includes('master') ? 'master' : branches[0]!
+      return { source: normalized, sourceKind: 'local', branches, defaultBranch }
     }
-    await run(['git', 'ls-remote', '--exit-code', '--heads', source, `refs/heads/${baseBranch}`], projectPath, 60_000)
-    return 'remote'
+    const refs = await run(['git', 'ls-remote', '--symref', normalized, 'HEAD', 'refs/heads/*'], projectPath, 60_000)
+    const branches = [...new Set(refs.stdout.split(/\r?\n/).map(line => /\trefs\/heads\/(.+)$/.exec(line)?.[1]).filter((item): item is string => item !== undefined))].sort()
+    if (branches.length === 0) throw new Error('remote repository has no branches or is not accessible')
+    const head = refs.stdout.split(/\r?\n/).map(line => /^ref:\s+refs\/heads\/(.+)\s+HEAD$/.exec(line)?.[1]).find((item): item is string => item !== undefined)
+    const defaultBranch = head !== undefined && branches.includes(head) ? head : branches.includes('main') ? 'main' : branches.includes('master') ? 'master' : branches[0]!
+    return { source: normalized, sourceKind: 'remote', branches, defaultBranch }
+  }
+
+  async validateSource(projectPath: string, source: string, baseBranch: string): Promise<'local' | 'remote'> {
+    const inspection = await this.inspectSource(projectPath, source)
+    if (!inspection.branches.includes(baseBranch)) throw new Error(`base branch does not exist in repository: ${baseBranch}`)
+    return inspection.sourceKind
   }
 
   async create(projectPath: string, project: ProjectConfig, artifact: ArtifactSummary, repositoryId: string): Promise<DevelopmentWorkspace> {
@@ -101,7 +130,7 @@ export class GitDevelopmentService {
     const localSource = isAbsolute(config.source) ? config.source : resolve(projectPath, config.source)
     let baseCommit: string
     if (await exists(localSource)) {
-      baseCommit = (await run(['git', 'rev-parse', config.baseBranch], localSource)).stdout.trim()
+      baseCommit = await localBaseCommit(localSource, config.baseBranch)
       await run(['git', 'worktree', 'add', '-b', branch, target, baseCommit], localSource)
     } else {
       await run(['git', 'clone', '--branch', config.baseBranch, '--single-branch', config.source, target], projectPath, 300_000)

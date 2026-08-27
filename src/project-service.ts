@@ -11,6 +11,9 @@ import {
   type ArtifactFileSummary,
   type ArtifactSummary,
   type DashboardSnapshot,
+  type DeliveryCellStatus,
+  type DeliveryMatrixCell,
+  type DeliveryMatrixRow,
   type DevelopmentWorkspace,
   type ImportPreview,
   type ImportPreviewItem,
@@ -18,6 +21,7 @@ import {
   type ProjectConfig,
   type ProjectSnapshot,
   type QualityReport,
+  type RepositoryInspection,
   type SddAction,
   type SddEvent,
   type SourceEnvelope,
@@ -286,7 +290,7 @@ export class SddProjectService {
     return { workspaceId, title: item.title, path: await realpath(item.path) }
   }
 
-  async execute(action: SddAction): Promise<ProjectSnapshot | ImportPreview | StageTemplatePreview | { prompt: string; run?: StageRun } | { artifactFile: { artifactUid: string; path: string; kind: ArtifactFileSummary['kind'] | 'manifest'; content?: string; dataUrl?: string } } | { opened: true }> {
+  async execute(action: SddAction): Promise<ProjectSnapshot | ImportPreview | StageTemplatePreview | RepositoryInspection | { prompt: string; run?: StageRun } | { artifactFile: { artifactUid: string; path: string; kind: ArtifactFileSummary['kind'] | 'manifest'; content?: string; dataUrl?: string } } | { opened: true }> {
     if (action.kind === 'snapshot') return this.snapshot(action.workspaceId)
     if (action.kind === 'initialize') { await this.initialize(action.workspaceId); return this.snapshot(action.workspaceId) }
     if (action.kind === 'reinitialize') { await this.reinitialize(action.workspaceId); return this.snapshot(action.workspaceId) }
@@ -306,6 +310,11 @@ export class SddProjectService {
       return this.snapshot(action.workspaceId)
     }
     if (action.kind === 'add-project-repository') { await this.addProjectRepository(action.workspaceId, action.id, action.source, action.baseBranch); return this.snapshot(action.workspaceId) }
+    if (action.kind === 'inspect-project-repository') {
+      const snapshot = await this.requireSnapshot(action.workspaceId)
+      return this.git.inspectSource(snapshot.workspace.path, action.source)
+    }
+    if (action.kind === 'update-project-repository-branch') { await this.updateProjectRepositoryBranch(action.workspaceId, action.id, action.baseBranch); return this.snapshot(action.workspaceId) }
     if (action.kind === 'remove-project-repository') { await this.removeProjectRepository(action.workspaceId, action.id); return this.snapshot(action.workspaceId) }
     if (action.kind === 'quality') return this.snapshot(action.workspaceId)
     if (action.kind === 'import-source') {
@@ -493,7 +502,7 @@ export class SddProjectService {
       if (artifact.entry === '' || !(await exists(join(workspace.path, artifact.relativeDirectory, artifact.entry)))) continue
       quality[artifact.uid] = evaluateQuality(artifact, await readFile(join(workspace.path, artifact.relativeDirectory, artifact.entry), 'utf8'), project, partial)
     }
-    const recentEvents = await readRecentEvents(workspace.path)
+    const recentEvents = await readRecentEvents(workspace.path, 5000)
     const dashboard = this.dashboard(artifacts, sources, workItems, quality, developmentWorkspaces, recentEvents)
     return { workspace, initialized: true, configuration: { status: 'valid', path: PROJECT_FILE, errors: [] }, project, artifacts, sources, sourceProviders: this.sourceRegistry?.names() ?? [], connectors, workItems, runs, quality, developmentWorkspaces, openSpecValidation, dashboard }
   }
@@ -765,6 +774,24 @@ export class SddProjectService {
     const project = { ...snapshot.project, development: { ...snapshot.project.development, repositories: [...snapshot.project.development.repositories, { id: normalizedId, source: source.trim(), baseBranch: baseBranch.trim(), testCommands: [] }] } }
     await writeFile(join(snapshot.workspace.path, PROJECT_FILE), stringify(project), 'utf8')
     await appendEvent(snapshot.workspace.path, 'project.repository-added', normalizedId, undefined, { source: source.trim(), baseBranch: baseBranch.trim(), sourceKind })
+  }
+
+  private async updateProjectRepositoryBranch(workspaceId: string, id: string, baseBranch: string): Promise<void> {
+    const snapshot = await this.requireSnapshot(workspaceId)
+    const repository = snapshot.project.development.repositories.find(item => item.id === id)
+    if (repository === undefined) throw new Error(`repository not found: ${id}`)
+    if (snapshot.developmentWorkspaces.some(workspace => workspace.repositories.some(item => item.id === id))) {
+      throw new Error('cannot change the base branch after an isolated development workspace has been created')
+    }
+    const branch = baseBranch.trim()
+    if (branch === '') throw new Error('base branch is required')
+    await this.git.validateSource(snapshot.workspace.path, repository.source, branch)
+    const project = {
+      ...snapshot.project,
+      development: { ...snapshot.project.development, repositories: snapshot.project.development.repositories.map(item => item.id === id ? { ...item, baseBranch: branch } : item) },
+    }
+    await writeFile(join(snapshot.workspace.path, PROJECT_FILE), stringify(project), 'utf8')
+    await appendEvent(snapshot.workspace.path, 'project.repository-base-branch-updated', id, undefined, { previous: repository.baseBranch, baseBranch: branch })
   }
 
   private async removeProjectRepository(workspaceId: string, id: string): Promise<void> {
@@ -1195,7 +1222,12 @@ export class SddProjectService {
   }
 
   private emptyDashboard(): DashboardSnapshot {
-    return { overallCompletion: 0, stages: STAGES.map(stage => ({ stage: stage.id, status: 'not-started', completion: 0, drafts: 0, accepted: 0, failedChecks: 0 })), requirements: { total: 0, traced: 0, completed: 0 }, defects: { total: 0, open: 0, resolved: 0 }, artifacts: { total: 0, drafts: 0, accepted: 0 }, development: { workspaces: 0, changedFiles: 0, passingTests: 0, failingTests: 0, commits: 0 }, workload: [], traceability: 100, blockers: [], recentEvents: [] }
+    return {
+      overallCompletion: 0, stages: STAGES.map(stage => ({ stage: stage.id, status: 'not-started', completion: 0, drafts: 0, accepted: 0, failedChecks: 0 })),
+      requirements: { total: 0, traced: 0, completed: 0 }, defects: { total: 0, open: 0, resolved: 0 }, artifacts: { total: 0, drafts: 0, accepted: 0 },
+      development: { workspaces: 0, changedFiles: 0, passingTests: 0, failingTests: 0, commits: 0 }, workload: [], stageFlow: [], deliveryMatrix: [], burnup: [],
+      traceability: 100, blockers: [], recentEvents: [],
+    }
   }
 
   private dashboard(
@@ -1235,6 +1267,57 @@ export class SddProjectService {
       if (resolvedStatuses.has(source.tracking?.normalizedStatus ?? '')) current.completed += estimate.value
       workload.set(estimate.unit, current)
     }
+    const deliveryMatrix: DeliveryMatrixRow[] = workItems.map(workItem => {
+      const cells: DeliveryMatrixCell[] = STAGES.map(stage => {
+        const stageArtifacts = artifacts.filter(item => item.workItemUid === workItem.uid && item.stage === stage.id && item.status !== 'superseded')
+        const artifact = stageArtifacts.find(item => item.status === 'draft' || item.status === 'in-review')
+          ?? stageArtifacts.filter(item => item.status === 'accepted').sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0]
+        let status: DeliveryCellStatus = 'not-started'
+        if (workItem.change?.reviewRequiredStages.includes(stage.id) === true) status = 'blocked'
+        else if (artifact?.status === 'accepted') status = 'completed'
+        else if (artifact !== undefined && quality[artifact.uid]?.ready === true) status = 'ready-for-review'
+        else if (artifact !== undefined) status = 'in-progress'
+        const settingsBlocked = artifact !== undefined && ((stage.id === 'architecture' && (workItem.repositoryScope ?? []).length === 0)
+          || ((stage.id === 'specification' || stage.id === 'development') && (workItem.developmentTargets ?? []).length === 0))
+        if (settingsBlocked) status = 'blocked'
+        return {
+          stage: stage.id, status,
+          ...(artifact === undefined ? {} : { artifactUid: artifact.uid, artifactKey: artifact.key, version: artifact.version }),
+        }
+      })
+      return { workItemUid: workItem.uid, key: workItem.key, title: workItem.title, cells }
+    })
+    const stageFlow = STAGES.map(stage => {
+      const cells = deliveryMatrix.flatMap(row => row.cells).filter(cell => cell.stage === stage.id)
+      return {
+        stage: stage.id,
+        notStarted: cells.filter(cell => cell.status === 'not-started').length,
+        inProgress: cells.filter(cell => cell.status === 'in-progress').length,
+        readyForReview: cells.filter(cell => cell.status === 'ready-for-review').length,
+        completed: cells.filter(cell => cell.status === 'completed').length,
+        blocked: cells.filter(cell => cell.status === 'blocked').length,
+      }
+    })
+    const scope = new Set<string>(); const delivered = new Set<string>(); const burnupByDate = new Map<string, { total: number; completed: number }>()
+    const artifactWorkItem = new Map(artifacts.filter(item => item.workItemUid !== undefined).map(item => [item.uid, item.workItemUid!]))
+    const recordBurnup = (date: string) => burnupByDate.set(date, { total: scope.size, completed: [...delivered].filter(uid => scope.has(uid)).length })
+    for (const event of [...recentEvents].sort((left, right) => left.time.localeCompare(right.time))) {
+      const workItemUid = typeof event.detail?.workItemUid === 'string' ? event.detail.workItemUid : undefined
+      let changed = false
+      if (event.type === 'work-item.created' && workItemUid !== undefined) { scope.add(workItemUid); changed = true }
+      else if (event.type === 'work-item.archived' && workItemUid !== undefined) { scope.delete(workItemUid); delivered.delete(workItemUid); changed = true }
+      else if (event.type === 'artifact.accepted' && event.stage === 'development' && typeof event.detail?.artifactUid === 'string') {
+        const uid = artifactWorkItem.get(event.detail.artifactUid)
+        if (uid !== undefined) { delivered.add(uid); changed = true }
+      }
+      if (changed) recordBurnup(event.time.slice(0, 10))
+    }
+    scope.clear(); delivered.clear()
+    for (const workItem of workItems.filter(item => item.status !== 'completed')) scope.add(workItem.uid)
+    for (const artifact of artifacts.filter(item => item.stage === 'development' && item.status === 'accepted' && item.workItemUid !== undefined)) delivered.add(artifact.workItemUid!)
+    recordBurnup(new Date().toISOString().slice(0, 10))
+    let burnup = [...burnupByDate.entries()].sort(([left], [right]) => left.localeCompare(right)).map(([date, value]) => ({ date, ...value }))
+    if (burnup.length > 30) burnup = [burnup[0]!, ...burnup.slice(-29)]
     return {
       overallCompletion: Math.round(stages.reduce((sum, stage) => sum + stage.completion, 0) / stages.length), stages,
       requirements: { total: requirements.length, traced: requirements.filter(item => tracedSources.has(item.uid)).length, completed: requirements.filter(item => item.tracking?.normalizedStatus === 'done').length },
@@ -1242,6 +1325,7 @@ export class SddProjectService {
       artifacts: { total: artifacts.length, drafts: artifacts.filter(item => item.status === 'draft' || item.status === 'in-review').length, accepted: artifacts.filter(item => item.status === 'accepted').length },
       development: { workspaces: workspaces.length, changedFiles: workspaces.flatMap(item => item.repositories).reduce((sum, item) => sum + item.changedFiles, 0), passingTests: tests.filter(item => item.passed).length, failingTests: tests.filter(item => !item.passed).length, commits: workspaces.flatMap(item => item.repositories).filter(item => item.headCommit !== item.baseCommit).length },
       workload: [...workload.entries()].sort(([left], [right]) => left.localeCompare(right)).map(([unit, value]) => ({ unit, ...value })),
+      stageFlow, deliveryMatrix, burnup,
       traceability: currentSources.length === 0 ? 100 : Math.round(currentSources.filter(item => tracedSources.has(item.uid)).length / currentSources.length * 100), blockers, recentEvents,
     }
   }
