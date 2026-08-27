@@ -1,5 +1,5 @@
 import type { Context } from '@deepseek-ai/cordis';
-import type { StageId } from './protocol.ts';
+import { type StageId } from './protocol.ts';
 interface SessionBindingSpec {
     sessionId: string;
     stage: StageId;

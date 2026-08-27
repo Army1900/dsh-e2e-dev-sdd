@@ -14,6 +14,12 @@ export declare class SddProjectService {
     execute(action: SddAction): Promise<ProjectSnapshot | ImportPreview | {
         prompt: string;
         run?: StageRun;
+    } | {
+        artifactFile: {
+            artifactUid: string;
+            path: string;
+            content: string;
+        };
     }>;
     initialize(workspaceId: string): Promise<void>;
     private reinitialize;
@@ -21,6 +27,10 @@ export declare class SddProjectService {
     private listConnectors;
     private listWorkItems;
     private createDraft;
+    private createRevision;
+    private readArtifactFile;
+    private updateWorkItemSettings;
+    private addProjectRepository;
     private nextKey;
     private allocateKey;
     private listSources;
@@ -28,8 +38,8 @@ export declare class SddProjectService {
     private writeSourceSnapshot;
     private applySourceImport;
     private resolveWorkItemRemoval;
-    private template;
     private hasCurrentChangeEvidence;
+    private stageSettingsError;
     private accept;
     private context;
     private bindSession;

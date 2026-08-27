@@ -4,7 +4,7 @@ import type {} from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-system-prompt'
 import type { ToolExecution } from '@deepseek-ai/dsh-tools'
-import type { StageId } from './protocol.ts'
+import { artifactTemplate, type StageId } from './protocol.ts'
 import { runtimeDefinition } from './stage-definitions.ts'
 
 interface SessionBindingSpec {
@@ -66,7 +66,7 @@ export class StageSessionController {
     try {
       disposers.push(agent.ctx.systemPrompt.section({
         name: 'sdd:stage-runtime', order: 20,
-        text: `${definition.systemPrompt}\n\n${spec.systemPrompt}`,
+        text: `${definition.systemPrompt}\n\n交付件输出必须遵循下面这份当前阶段的 Markdown 模板。保留绑定文件已有的真实编号和标题；不得删除、改名或打乱必填二级章节，可以增加三级章节和附件引用。交付件是整个绑定目录，可在其中维护图表、原型、样例和附件，并从主文档使用相对路径引用。写入前删除已完成章节中的“待补充。”占位符；没有内容的待决或遗留问题要明确写“无”。\n\n${artifactTemplate(spec.stage)}\n\n${spec.systemPrompt}`,
       }))
       disposers.push(agent.ctx.tools.guard((execution: Readonly<ToolExecution>) => {
         if (definition.toolPolicy.forbiddenTools.includes(execution.name)) {

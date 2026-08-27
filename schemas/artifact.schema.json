@@ -22,12 +22,23 @@
     "derivedFrom": { "type": "array", "items": { "$ref": "#/$defs/sourceReference" } },
     "externalRefs": { "type": "array", "items": { "$ref": "#/$defs/externalReference" } },
     "checklist": { "type": "object", "additionalProperties": { "type": "boolean" } },
-    "workItemUid": { "type": "string", "format": "uuid" }
+    "workItemUid": { "type": "string", "format": "uuid" },
+    "supersedes": { "$ref": "#/$defs/artifactReference" },
+    "files": { "type": "array", "items": { "$ref": "#/$defs/artifactFile" } }
   },
   "$defs": {
     "artifactReference": {
       "type": "object", "required": ["uid", "version"],
       "properties": { "uid": { "type": "string" }, "version": { "type": "string" }, "contentHash": { "type": "string" } }
+    },
+    "artifactFile": {
+      "type": "object", "additionalProperties": false, "required": ["path", "size", "contentHash", "kind"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "size": { "type": "integer", "minimum": 0 },
+        "contentHash": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+        "kind": { "enum": ["markdown", "text", "image", "binary"] }
+      }
     },
     "sourceReference": {
       "type": "object", "required": ["uid", "provider", "kind"],

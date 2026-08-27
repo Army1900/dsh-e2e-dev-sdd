@@ -70,6 +70,8 @@ Client 根据用户选择的 accepted 交付件向 Host 请求阶段输入。Hos
 draft -> in-review -> accepted -> superseded
 ```
 
+交付件目录是一个多文件包。accepted 时冻结除 Manifest 外的全部文件清单和整包哈希；从 accepted 创建新修订会复制完整目录并记录 `supersedes`，新版本验收后旧版本进入 superseded。详细规则见 `docs/artifact-package.md`。
+
 Agent 可以创建和修改 draft；接受动作必须由用户从阶段页面触发。接受时 Host 校验 manifest 和入口文件，并记录内容哈希。accepted 版本需要修订时创建新版本，不能原地覆写。
 
 ## 需求开发空间

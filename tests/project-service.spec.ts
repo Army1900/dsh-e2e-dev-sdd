@@ -27,6 +27,9 @@ describe('SddProjectService', () => {
     expect(snapshot.initialized).toBe(true)
     expect(snapshot.connectors).toEqual(['demo-system'])
     expect(snapshot.artifacts[0]?.key).toBe('REQ-0001')
+    const draft = await readFile(join(root, snapshot.artifacts[0]!.relativeDirectory, 'deliverable.md'), 'utf8')
+    expect(draft).toContain('> 文档类型：需求规格说明')
+    expect(draft).toContain('<!-- 填写要求：')
     await writeFile(join(root, snapshot.artifacts[0]!.relativeDirectory, 'deliverable.md'), `# REQ-0001 支付需求
 
 ## 背景与目标
@@ -44,6 +47,7 @@ describe('SddProjectService', () => {
 ## 待决问题
 无。
 `)
+    await writeFile(join(root, snapshot.artifacts[0]!.relativeDirectory, 'notes.txt'), '评审附件。\n')
     await service.execute({
       kind: 'accept', workspaceId: 'w1', artifactUid: snapshot.artifacts[0]!.uid,
       checklist: Object.fromEntries(Array.from({ length: 5 }, (_value, index) => [`item-${index + 1}`, true])),
@@ -51,6 +55,17 @@ describe('SddProjectService', () => {
     snapshot = await service.snapshot('w1')
     expect(snapshot.artifacts[0]?.status).toBe('accepted')
     expect(snapshot.artifacts[0]?.contentHash).toMatch(/^sha256:/)
+    expect(snapshot.artifacts[0]?.files.map(file => file.path)).toEqual(['deliverable.md', 'notes.txt'])
+    const preview = await service.execute({ kind: 'read-artifact-file', workspaceId: 'w1', artifactUid: snapshot.artifacts[0]!.uid, path: 'notes.txt' })
+    expect(preview).toMatchObject({ artifactFile: { content: '评审附件。\n' } })
+    await service.execute({ kind: 'create-revision', workspaceId: 'w1', artifactUid: snapshot.artifacts[0]!.uid })
+    snapshot = await service.snapshot('w1')
+    const revision = snapshot.artifacts.find(item => item.status === 'draft')!
+    expect(revision).toMatchObject({ key: 'REQ-0001', version: '0.2.0', supersedes: { uid: snapshot.artifacts.find(item => item.status === 'accepted')!.uid } })
+    await service.execute({ kind: 'accept', workspaceId: 'w1', artifactUid: revision.uid, checklist: Object.fromEntries(Array.from({ length: 5 }, (_value, index) => [`item-${index + 1}`, true])) })
+    snapshot = await service.snapshot('w1')
+    expect(snapshot.artifacts.find(item => item.version === '0.1.0')?.status).toBe('superseded')
+    expect(snapshot.artifacts.find(item => item.version === '0.2.0')?.status).toBe('accepted')
     expect(await readFile(join(root, '.sdd/project.yaml'), 'utf8')).toContain('dsh-sdd/project@1')
     expect(await readFile(join(root, '.sdd/business/README.md'), 'utf8')).toContain('唯一的项目级业务自定义目录')
   })
@@ -122,6 +137,8 @@ describe('SddProjectService', () => {
     expect(snapshot.workItems).toHaveLength(2)
     expect(snapshot.workItems.every(item => item.status === 'active')).toBe(true)
     const req1 = snapshot.workItems.find(item => item.key === 'REQ-1')!
+    await service.execute({ kind: 'add-project-repository', workspaceId: 'w1', id: 'web', source: '../web', baseBranch: 'main' })
+    await service.execute({ kind: 'update-work-item-settings', workspaceId: 'w1', workItemUid: req1.uid, repositoryScope: ['web'], developmentTargets: ['web'], openSpec: { enabled: true, repositoryId: 'web', path: 'openspec' } })
     await service.execute({ kind: 'create-draft', workspaceId: 'w1', stage: 'requirements', title: req1.title, basedOn: [], sourceUids: [req1.sourceUid!, req1.bundleSourceUid!], workItemUid: req1.uid })
     snapshot = await service.snapshot('w1')
     expect(snapshot.artifacts[0]?.relativeDirectory).toContain(`.sdd/work-items/${req1.uid}/artifacts/requirements`)
@@ -137,6 +154,7 @@ describe('SddProjectService', () => {
     await service.execute({ kind: 'apply-source-import', workspaceId: 'w1', previewUid: secondResult.uid, identities: secondResult.items.map(item => item.identity) })
     snapshot = await service.snapshot('w1')
     expect(snapshot.workItems.find(item => item.key === 'REQ-1')).toMatchObject({ status: 'change-pending', change: { kind: 'modified', reviewRequiredStages: ['requirements'] } })
+    expect(snapshot.workItems.find(item => item.key === 'REQ-1')).toMatchObject({ repositoryScope: ['web'], developmentTargets: ['web'], openSpec: { enabled: true, repositoryId: 'web', path: 'openspec' } })
     expect(snapshot.workItems.find(item => item.key === 'REQ-2')).toMatchObject({ status: 'removed-pending', change: { kind: 'removed' } })
     expect(snapshot.workItems.find(item => item.key === 'REQ-3')).toMatchObject({ status: 'active' })
     const removedReq2 = snapshot.workItems.find(item => item.key === 'REQ-2')!

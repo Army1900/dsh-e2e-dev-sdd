@@ -25,6 +25,16 @@
         "properties": { "from": { "type": "string" }, "to": { "type": "string" }, "type": { "type": "string" } }
       }
     },
+    "repositoryScope": { "type": "array", "uniqueItems": true, "items": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$" } },
+    "developmentTargets": { "type": "array", "uniqueItems": true, "items": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$" } },
+    "openSpec": {
+      "type": "object", "additionalProperties": false, "required": ["enabled"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "repositoryId": { "type": "string" },
+        "path": { "type": "string" }
+      }
+    },
     "change": {
       "type": "object", "additionalProperties": false,
       "required": ["kind", "detectedAt", "changedPaths", "reviewRequiredStages"],

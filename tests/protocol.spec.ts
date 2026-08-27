@@ -1,11 +1,26 @@
 import { describe, expect, it } from 'vitest'
-import { parseAction } from '../src/protocol.ts'
+import { STAGES, artifactTemplate, parseAction } from '../src/protocol.ts'
+import { runtimeDefinition } from '../src/stage-definitions.ts'
+
+describe('artifact templates', () => {
+  it('cover every required section for every stage', () => {
+    for (const stage of STAGES) {
+      const content = artifactTemplate(stage.id, 'TEST-0001', '示例交付件')
+      expect(content).toContain('# TEST-0001 示例交付件')
+      expect(content).toContain('待补充。')
+      for (const section of runtimeDefinition(stage.id).requiredSections) expect(content).toContain(`## ${section}`)
+    }
+  })
+})
 
 describe('parseAction', () => {
   it('accepts typed stage actions', () => {
     expect(parseAction({ kind: 'create-draft', workspaceId: 'w1', stage: 'requirements', title: '支付需求', basedOn: [] }))
       .toEqual({ kind: 'create-draft', workspaceId: 'w1', stage: 'requirements', title: '支付需求', basedOn: [] })
     expect(parseAction({ kind: 'reinitialize', workspaceId: 'w1' })).toEqual({ kind: 'reinitialize', workspaceId: 'w1' })
+    expect(parseAction({ kind: 'read-artifact-file', workspaceId: 'w1', artifactUid: 'a1', path: 'deliverable.md' })).toMatchObject({ kind: 'read-artifact-file' })
+    expect(parseAction({ kind: 'update-work-item-settings', workspaceId: 'w1', workItemUid: 'i1', repositoryScope: ['web'], developmentTargets: ['web'], openSpec: { enabled: true, repositoryId: 'web', path: 'openspec' } })).toMatchObject({ kind: 'update-work-item-settings' })
+    expect(parseAction({ kind: 'add-project-repository', workspaceId: 'w1', id: 'web', source: '../web', baseBranch: 'main' })).toMatchObject({ kind: 'add-project-repository' })
   })
 
   it('rejects unknown stages and malformed arrays', () => {

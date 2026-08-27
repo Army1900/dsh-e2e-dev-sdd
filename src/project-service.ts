@@ -5,7 +5,9 @@ import type { ApiProxy, RpcId } from '@deepseek-ai/dsh-host-apiproxy'
 import { parse, stringify } from 'yaml'
 import {
   STAGES,
+  artifactTemplate,
   type ArtifactManifest,
+  type ArtifactFileSummary,
   type ArtifactSummary,
   type DashboardSnapshot,
   type DevelopmentWorkspace,
@@ -78,6 +80,11 @@ async function exists(path: string): Promise<boolean> {
   try { await access(path); return true } catch { return false }
 }
 
+function contained(root: string, target: string): boolean {
+  const path = relative(root, target)
+  return path === '' || (!path.startsWith('..') && !isAbsolute(path))
+}
+
 async function walkForManifest(root: string): Promise<string[]> {
   if (!(await exists(root))) return []
   const result: string[] = []
@@ -90,6 +97,38 @@ async function walkForManifest(root: string): Promise<string[]> {
   }
   await visit(root)
   return result.sort()
+}
+
+async function artifactFiles(root: string): Promise<ArtifactFileSummary[]> {
+  const files: ArtifactFileSummary[] = []
+  const visit = async (directory: string): Promise<void> => {
+    for (const item of await readdir(directory, { withFileTypes: true })) {
+      if (item.isSymbolicLink()) continue
+      const absolute = join(directory, item.name)
+      if (item.isDirectory()) await visit(absolute)
+      else if (item.isFile() && relative(root, absolute) !== 'manifest.yaml') {
+        const content = await readFile(absolute)
+        const path = relative(root, absolute).split('\\').join('/')
+        const extension = item.name.toLowerCase().split('.').pop() ?? ''
+        const kind = extension === 'md' || extension === 'mdx' ? 'markdown'
+          : ['txt', 'json', 'yaml', 'yml', 'csv', 'tsv', 'mmd', 'puml'].includes(extension) ? 'text'
+            : ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'].includes(extension) ? 'image' : 'binary'
+        files.push({ path, size: content.byteLength, contentHash: `sha256:${createHash('sha256').update(content).digest('hex')}`, kind })
+      }
+    }
+  }
+  await visit(root)
+  return files.sort((left, right) => left.path.localeCompare(right.path))
+}
+
+function artifactBundleHash(files: ArtifactFileSummary[]): string {
+  const inventory = files.map(file => `${file.path}\0${file.size}\0${file.contentHash}`).join('\n')
+  return `sha256:${createHash('sha256').update(inventory).digest('hex')}`
+}
+
+function nextVersion(version: string): string {
+  const [major = 0, minor = 0] = version.split('.').map(Number)
+  return `${major}.${minor + 1}.0`
 }
 
 function defaultProject(path: string): ProjectConfig {
@@ -227,7 +266,7 @@ export class SddProjectService {
     return { workspaceId, title: item.title, path: await realpath(item.path) }
   }
 
-  async execute(action: SddAction): Promise<ProjectSnapshot | ImportPreview | { prompt: string; run?: StageRun }> {
+  async execute(action: SddAction): Promise<ProjectSnapshot | ImportPreview | { prompt: string; run?: StageRun } | { artifactFile: { artifactUid: string; path: string; content: string } }> {
     if (action.kind === 'snapshot') return this.snapshot(action.workspaceId)
     if (action.kind === 'initialize') { await this.initialize(action.workspaceId); return this.snapshot(action.workspaceId) }
     if (action.kind === 'reinitialize') { await this.reinitialize(action.workspaceId); return this.snapshot(action.workspaceId) }
@@ -235,7 +274,14 @@ export class SddProjectService {
       await this.createDraft(action.workspaceId, action.stage, action.title, action.key, action.basedOn, action.sourceUids ?? [], action.workItemUid)
       return this.snapshot(action.workspaceId)
     }
+    if (action.kind === 'create-revision') { await this.createRevision(action.workspaceId, action.artifactUid); return this.snapshot(action.workspaceId) }
     if (action.kind === 'accept') { await this.accept(action.workspaceId, action.artifactUid, action.checklist); return this.snapshot(action.workspaceId) }
+    if (action.kind === 'read-artifact-file') return { artifactFile: await this.readArtifactFile(action.workspaceId, action.artifactUid, action.path) }
+    if (action.kind === 'update-work-item-settings') {
+      await this.updateWorkItemSettings(action.workspaceId, action.workItemUid, action.repositoryScope, action.developmentTargets, action.openSpec)
+      return this.snapshot(action.workspaceId)
+    }
+    if (action.kind === 'add-project-repository') { await this.addProjectRepository(action.workspaceId, action.id, action.source, action.baseBranch); return this.snapshot(action.workspaceId) }
     if (action.kind === 'quality') return this.snapshot(action.workspaceId)
     if (action.kind === 'import-source') {
       const preview = await this.previewSourceImport(action.workspaceId, action.provider, action.sourceKind, action.key, action.connector)
@@ -258,6 +304,8 @@ export class SddProjectService {
     if (action.kind === 'development-create') {
       const snapshot = await this.requireSnapshot(action.workspaceId)
       const artifact = this.requireArtifact(snapshot, action.artifactUid)
+      const workItem = artifact.workItemUid === undefined ? undefined : snapshot.workItems.find(item => item.uid === artifact.workItemUid)
+      if (workItem !== undefined && !(workItem.developmentTargets ?? []).includes(action.repositoryId)) throw new Error(`repository ${action.repositoryId} is not a confirmed development target`)
       await this.git.create(snapshot.workspace.path, snapshot.project, artifact, action.repositoryId)
       await appendEvent(snapshot.workspace.path, 'development.workspace-created', artifact.key, artifact.stage, { repositoryId: action.repositoryId })
       return this.snapshot(action.workspaceId)
@@ -370,17 +418,20 @@ export class SddProjectService {
         const entryPath = typeof manifest.entry === 'string' ? join(dirname(manifestPath), manifest.entry) : manifestPath
         const entryExists = await exists(entryPath)
         const validationErrors = validateManifest(manifest, entryExists)
+        const files = await artifactFiles(dirname(manifestPath))
         if (entryExists && manifest.status === 'accepted') {
-          const actualHash = `sha256:${createHash('sha256').update(await readFile(entryPath)).digest('hex')}`
+          const actualHash = artifactBundleHash(files)
+          if (manifest.files === undefined) validationErrors.push('accepted artifact is missing its frozen file inventory')
+          else if (JSON.stringify(manifest.files) !== JSON.stringify(files)) validationErrors.push('accepted artifact file inventory differs from disk')
           if (manifest.contentHash === undefined) validationErrors.push('accepted artifact is missing contentHash')
-          else if (manifest.contentHash !== actualHash) validationErrors.push('accepted artifact content differs from its frozen hash')
+          else if (manifest.contentHash !== actualHash) validationErrors.push('accepted artifact bundle differs from its frozen hash')
         }
-        artifacts.push({ ...manifest, relativeDirectory: relative(workspace.path, dirname(manifestPath)), validationErrors })
+        artifacts.push({ ...manifest, files, relativeDirectory: relative(workspace.path, dirname(manifestPath)), validationErrors })
       } catch (error) {
         artifacts.push({
           schema: 'dsh-sdd/artifact@1', uid: manifestPath, key: 'INVALID', title: basename(dirname(manifestPath)),
           stage: 'requirements', type: 'invalid', version: '0.0.0', status: 'draft', entry: '', createdAt: '', updatedAt: '',
-          basedOn: [], derivedFrom: [], externalRefs: [], relativeDirectory: relative(workspace.path, dirname(manifestPath)),
+          basedOn: [], derivedFrom: [], externalRefs: [], files: [], relativeDirectory: relative(workspace.path, dirname(manifestPath)),
           validationErrors: [error instanceof Error ? error.message : String(error)],
         })
       }
@@ -393,7 +444,7 @@ export class SddProjectService {
     for (const run of runs) {
       if (run.status === 'completed' || run.sessionId === undefined) continue
       const artifact = artifacts.find(item => item.uid === run.artifactUid)
-      if (artifact !== undefined) this.bindRuntime(run.sessionId, run.stage, workspace.path, project, artifact, developmentWorkspaces.find(item => item.artifactUid === artifact.uid))
+      if (artifact !== undefined) this.bindRuntime(run.sessionId, run.stage, workspace.path, project, artifact, developmentWorkspaces.find(item => item.artifactUid === artifact.uid), workItems.find(item => item.uid === artifact.workItemUid))
     }
     const quality: Record<string, QualityReport> = {}
     const partial = { artifacts, developmentWorkspaces }
@@ -491,8 +542,83 @@ export class SddProjectService {
       ...(workItem === undefined ? {} : { workItemUid: workItem.uid }),
     }
     await writeFile(join(directory, 'manifest.yaml'), stringify(manifest), 'utf8')
-    await writeFile(join(directory, 'deliverable.md'), this.template(stage, key, title.trim()), 'utf8')
+    await writeFile(join(directory, 'deliverable.md'), artifactTemplate(stage, key, title.trim()), 'utf8')
     await appendEvent(snapshot.workspace.path, 'artifact.created', key, stage, { artifactUid: uid })
+  }
+
+  private async createRevision(workspaceId: string, artifactUid: string): Promise<void> {
+    const snapshot = await this.requireSnapshot(workspaceId)
+    const previous = this.requireArtifact(snapshot, artifactUid)
+    if (previous.status !== 'accepted') throw new Error('only an accepted artifact can start a new revision')
+    if (snapshot.artifacts.some(item => item.supersedes?.uid === previous.uid && item.status !== 'superseded')) throw new Error('this artifact already has an active revision')
+    const uid = randomUUID()
+    const previousDirectory = resolve(snapshot.workspace.path, previous.relativeDirectory)
+    const parent = dirname(previousDirectory)
+    const directory = join(parent, `${slug(previous.key)}-${uid.slice(0, 8)}`)
+    await mkdir(directory, { recursive: true })
+    for (const file of previous.files) {
+      const source = resolve(previousDirectory, file.path)
+      const target = resolve(directory, file.path)
+      if (!contained(previousDirectory, source) || !contained(directory, target)) throw new Error('artifact file escapes its directory')
+      await mkdir(dirname(target), { recursive: true })
+      await copyFile(source, target)
+    }
+    const now = new Date().toISOString()
+    const manifest: ArtifactManifest = {
+      schema: 'dsh-sdd/artifact@1', uid, key: previous.key, title: previous.title, stage: previous.stage, type: previous.type,
+      version: nextVersion(previous.version), status: 'draft', entry: previous.entry, createdAt: now, updatedAt: now,
+      basedOn: previous.basedOn, derivedFrom: previous.derivedFrom, externalRefs: previous.externalRefs,
+      checklist: Object.fromEntries(runtimeDefinition(previous.stage).completionChecklist.map((_label, index) => [`item-${index + 1}`, false])),
+      supersedes: { uid: previous.uid, version: previous.version, contentHash: previous.contentHash },
+      ...(previous.workItemUid === undefined ? {} : { workItemUid: previous.workItemUid }),
+    }
+    await writeFile(join(directory, 'manifest.yaml'), stringify(manifest), 'utf8')
+    await appendEvent(snapshot.workspace.path, 'artifact.revision-created', previous.key, previous.stage, { artifactUid: uid, supersedes: previous.uid, version: manifest.version })
+  }
+
+  private async readArtifactFile(workspaceId: string, artifactUid: string, requestedPath: string): Promise<{ artifactUid: string; path: string; content: string }> {
+    const snapshot = await this.requireSnapshot(workspaceId)
+    const artifact = this.requireArtifact(snapshot, artifactUid)
+    const file = artifact.files.find(item => item.path === requestedPath)
+    if (file === undefined) throw new Error(`artifact file not found: ${requestedPath}`)
+    if (file.kind === 'binary' || file.kind === 'image') throw new Error('binary artifact files cannot be previewed as text')
+    if (file.size > 2 * 1024 * 1024) throw new Error('artifact text preview is limited to 2 MiB')
+    const root = resolve(snapshot.workspace.path, artifact.relativeDirectory)
+    const path = resolve(root, requestedPath)
+    if (!contained(root, path)) throw new Error('artifact file escapes its directory')
+    return { artifactUid, path: requestedPath, content: await readFile(path, 'utf8') }
+  }
+
+  private async updateWorkItemSettings(
+    workspaceId: string, workItemUid: string, repositoryScope: string[], developmentTargets: string[],
+    openSpec?: { enabled: boolean; repositoryId?: string; path?: string },
+  ): Promise<void> {
+    const snapshot = await this.requireSnapshot(workspaceId)
+    const workItem = snapshot.workItems.find(item => item.uid === workItemUid)
+    if (workItem === undefined) throw new Error(`work item not found: ${workItemUid}`)
+    const configured = new Set(snapshot.project.development.repositories.map(item => item.id))
+    const scope = [...new Set(repositoryScope)]
+    const targets = [...new Set(developmentTargets)]
+    if (scope.some(id => !configured.has(id))) throw new Error('repository scope contains an unconfigured repository')
+    if (targets.some(id => !scope.includes(id))) throw new Error('development targets must be inside the confirmed repository scope')
+    if (openSpec?.enabled === true) {
+      if (openSpec.repositoryId === undefined || !targets.includes(openSpec.repositoryId)) throw new Error('OpenSpec repository must be a confirmed development target')
+      if (openSpec.path === undefined || openSpec.path.trim() === '' || isAbsolute(openSpec.path) || openSpec.path.split(/[\\/]/).includes('..')) throw new Error('OpenSpec path must be a safe repository-relative path')
+    }
+    const updated: WorkItem = { ...workItem, repositoryScope: scope, developmentTargets: targets, openSpec: openSpec?.enabled === true ? { enabled: true, repositoryId: openSpec.repositoryId, path: openSpec.path!.trim() } : { enabled: false }, updatedAt: new Date().toISOString() }
+    await writeFile(join(snapshot.workspace.path, '.sdd', 'work-items', workItem.uid, 'work-item.yaml'), stringify(updated), 'utf8')
+    await appendEvent(snapshot.workspace.path, 'work-item.development-settings-updated', workItem.key, undefined, { repositoryScope: scope, developmentTargets: targets, openSpec: updated.openSpec })
+  }
+
+  private async addProjectRepository(workspaceId: string, id: string, source: string, baseBranch: string): Promise<void> {
+    const snapshot = await this.requireSnapshot(workspaceId)
+    const normalizedId = id.trim()
+    if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(normalizedId)) throw new Error('repository id must be kebab-case')
+    if (source.trim() === '' || baseBranch.trim() === '') throw new Error('repository source and base branch are required')
+    if (snapshot.project.development.repositories.some(item => item.id === normalizedId)) throw new Error(`repository already exists: ${normalizedId}`)
+    const project = { ...snapshot.project, development: { ...snapshot.project.development, repositories: [...snapshot.project.development.repositories, { id: normalizedId, source: source.trim(), baseBranch: baseBranch.trim(), testCommands: [] }] } }
+    await writeFile(join(snapshot.workspace.path, PROJECT_FILE), stringify(project), 'utf8')
+    await appendEvent(snapshot.workspace.path, 'project.repository-added', normalizedId, undefined, { source: source.trim(), baseBranch: baseBranch.trim() })
   }
 
   private nextKey(artifacts: ArtifactSummary[], prefix: string): string {
@@ -647,6 +773,9 @@ export class SddProjectService {
         ...(bundleSourceUid === undefined ? {} : { bundleSourceUid }),
         relations: staged.bundle.relations.filter(relation => relation.from === (source.externalKey ?? source.uid) || relation.to === (source.externalKey ?? source.uid)),
         status: existing === undefined ? 'active' : 'change-pending', createdAt: existing?.createdAt ?? now, updatedAt: now,
+        ...(existing?.repositoryScope === undefined ? {} : { repositoryScope: existing.repositoryScope }),
+        ...(existing?.developmentTargets === undefined ? {} : { developmentTargets: existing.developmentTargets }),
+        ...(existing?.openSpec === undefined ? {} : { openSpec: existing.openSpec }),
         ...(existing === undefined ? {} : { change: { kind: 'modified', detectedAt: now, changedPaths: previewItem.changedPaths, previousSourceUid: existing.sourceUid, reviewRequiredStages: [...new Set<StageId>(['requirements', ...acceptedStages])] } }),
       }
       await mkdir(join(snapshot.workspace.path, '.sdd', 'work-items', uid), { recursive: true })
@@ -669,17 +798,6 @@ export class SddProjectService {
     await appendEvent(snapshot.workspace.path, decision === 'archive' ? 'work-item.archived' : 'work-item.removal-dismissed', workItem.key, undefined, { workItemUid })
   }
 
-  private template(stage: StageId, key: string, title: string): string {
-    const sections: Record<StageId, string[]> = {
-      requirements: ['背景与目标', '范围', '用户与场景', '功能需求', '非功能需求', '验收条件', '待决问题'],
-      prototype: ['设计目标', '用户流程', '页面清单', '交互规则', '状态与异常', '原型资源', '待决问题'],
-      architecture: ['设计目标', '上下文与约束', '总体架构', '模块职责', '数据设计', '接口与集成', '部署与安全', '架构决策'],
-      specification: ['实现目标', '输入依据', '功能规格', '接口契约', '状态与数据规则', '异常处理', '验收测试规格', '追踪关系'],
-      development: ['实现范围', '代码仓库与分支', '变更摘要', '测试计划', '测试结果', '提交与合并记录', '遗留问题'],
-    }
-    return `# ${key} ${title}\n\n${sections[stage].map(section => `## ${section}\n\n待补充。`).join('\n\n')}\n`
-  }
-
   private hasCurrentChangeEvidence(snapshot: ProjectSnapshot, artifact: ArtifactSummary, workItem: WorkItem): boolean {
     if (workItem.change === undefined || !workItem.change.reviewRequiredStages.includes(artifact.stage)) return true
     if (artifact.stage === 'requirements') {
@@ -692,6 +810,22 @@ export class SddProjectService {
     })
   }
 
+  private stageSettingsError(snapshot: ProjectSnapshot & { project?: ProjectConfig }, artifact: ArtifactSummary): string | undefined {
+    if (artifact.workItemUid === undefined) return undefined
+    const workItem = snapshot.workItems.find(item => item.uid === artifact.workItemUid)
+    if (workItem === undefined) return 'bound work item is missing'
+    const configured = new Set(snapshot.project?.development.repositories.map(item => item.id) ?? [])
+    if (artifact.stage === 'architecture') {
+      if ((workItem.repositoryScope ?? []).length === 0) return '系统设计阶段必须先确认涉及的代码仓库范围'
+      if (workItem.repositoryScope!.some(id => !configured.has(id))) return '代码仓库范围包含未配置仓库'
+    }
+    if (artifact.stage === 'specification' || artifact.stage === 'development') {
+      if ((workItem.developmentTargets ?? []).length === 0) return '规格设计阶段必须先确认本需求的开发目标仓库'
+      if (workItem.developmentTargets!.some(id => !(workItem.repositoryScope ?? []).includes(id))) return '开发目标仓库必须属于系统设计确认的仓库范围'
+    }
+    return undefined
+  }
+
   private async accept(workspaceId: string, artifactUid: string, checklist?: Record<string, boolean>): Promise<void> {
     let snapshot = await this.snapshot(workspaceId)
     let artifact = snapshot.artifacts.find(item => item.uid === artifactUid)
@@ -701,6 +835,8 @@ export class SddProjectService {
     const changedWorkItem = artifact.workItemUid === undefined ? undefined : snapshot.workItems.find(item => item.uid === artifact!.workItemUid)
     if (changedWorkItem?.status === 'removed-pending') throw new Error(`work item ${changedWorkItem.key} was removed externally; resolve the removal before accepting artifacts`)
     if (changedWorkItem !== undefined && !this.hasCurrentChangeEvidence(snapshot, artifact, changedWorkItem)) throw new Error(`artifact does not include current change evidence for work item ${changedWorkItem.key}`)
+    const settingsError = this.stageSettingsError(snapshot, artifact)
+    if (settingsError !== undefined) throw new Error(settingsError)
     const directory = resolve(snapshot.workspace.path, artifact.relativeDirectory)
     const entryPath = resolve(directory, artifact.entry)
     const entryRelative = relative(directory, entryPath)
@@ -723,8 +859,18 @@ export class SddProjectService {
     }
     manifest.status = 'accepted'
     manifest.updatedAt = new Date().toISOString()
-    manifest.contentHash = `sha256:${createHash('sha256').update(content).digest('hex')}`
+    manifest.files = await artifactFiles(directory)
+    manifest.contentHash = artifactBundleHash(manifest.files)
     await writeFile(manifestPath, stringify(manifest), 'utf8')
+    if (manifest.supersedes !== undefined) {
+      const previous = snapshot.artifacts.find(item => item.uid === manifest.supersedes!.uid)
+      if (previous === undefined || previous.status !== 'accepted') throw new Error('superseded artifact must still be accepted')
+      const previousPath = join(snapshot.workspace.path, previous.relativeDirectory, 'manifest.yaml')
+      const previousManifest = parse(await readFile(previousPath, 'utf8')) as ArtifactManifest
+      previousManifest.status = 'superseded'
+      previousManifest.updatedAt = manifest.updatedAt
+      await writeFile(previousPath, stringify(previousManifest), 'utf8')
+    }
     if (artifact.workItemUid !== undefined) {
       const workItem = snapshot.workItems.find(item => item.uid === artifact!.workItemUid)
       if (workItem?.change !== undefined && workItem.status === 'change-pending') {
@@ -757,6 +903,8 @@ export class SddProjectService {
     const workItem = target.workItemUid === undefined ? undefined : snapshot.workItems.find(item => item.uid === target.workItemUid)
     if (workItem?.status === 'removed-pending') throw new Error(`work item ${workItem.key} was removed externally; its stage conversations are blocked`)
     if (workItem !== undefined && !this.hasCurrentChangeEvidence(snapshot, target, workItem)) throw new Error(`bound artifact does not include current change evidence for work item ${workItem.key}; create a new revision from the latest source and upstream artifacts`)
+    const settingsError = this.stageSettingsError(snapshot, target)
+    if (settingsError !== undefined) throw new Error(settingsError)
     const definition = stageDefinition(stage)
     const runtime = runtimeDefinition(stage)
     const required = Object.entries(snapshot.project.dependencies[stage] ?? {}).filter(([, mode]) => mode === 'required').map(([id]) => id)
@@ -766,7 +914,8 @@ export class SddProjectService {
     const inputs: string[] = []
     for (const artifact of selected) {
       const path = join(snapshot.workspace.path, artifact.relativeDirectory, artifact.entry)
-      inputs.push(`\n## 输入 ${artifact.key} v${artifact.version}\n来源：${artifact.relativeDirectory}/${artifact.entry}\n内容哈希：${artifact.contentHash ?? '未记录'}\n\n${await readFile(path, 'utf8')}`)
+      const inventory = artifact.files.map(file => `- ${artifact.relativeDirectory}/${file.path} · ${file.kind} · ${file.contentHash}`).join('\n')
+      inputs.push(`\n## 输入 ${artifact.key} v${artifact.version}\n主文档：${artifact.relativeDirectory}/${artifact.entry}\n交付包哈希：${artifact.contentHash ?? '未记录'}\n文件清单：\n${inventory || '- 无'}\n\n${await readFile(path, 'utf8')}`)
     }
     for (const uid of sourceUids) {
       const source = snapshot.sources.find(item => item.uid === uid)
@@ -779,10 +928,11 @@ export class SddProjectService {
       `项目仓库：${snapshot.workspace.path}`,
       `本次固定绑定交付件：${target.key}，路径 ${target.relativeDirectory}/${target.entry}。`,
       `阶段目标：${runtime.objective}`,
+      workItem === undefined ? '' : `系统设计确认的仓库范围：${(workItem.repositoryScope ?? []).join('、') || '未配置'}\n规格设计确认的开发目标：${(workItem.developmentTargets ?? []).join('、') || '未配置'}\nOpenSpec：${workItem.openSpec?.enabled === true ? `${workItem.openSpec.repositoryId}:${workItem.openSpec.path}` : '未启用'}`,
       `完成清单：\n${runtime.completionChecklist.map((item, index) => `${index + 1}. ${item}`).join('\n')}`,
       '先检查输入完整性，再与用户讨论。每轮形成的确定结论必须同步写入绑定交付件；不得创建或切换到另一个交付件。',
       ...inputs,
-    ].join('\n\n')
+    ].filter(Boolean).join('\n\n')
   }
 
   private async bindSession(
@@ -805,7 +955,7 @@ export class SddProjectService {
       startedAt: now, updatedAt: now, inputArtifactUids: [...artifactUids], sourceUids: [...sourceUids],
     } : { ...existing, sessionId, status: 'active', updatedAt: now, inputArtifactUids: [...artifactUids], sourceUids: [...sourceUids] }
     if (this.sessionController === undefined) throw new Error('stage session runtime is unavailable')
-    this.bindRuntime(sessionId, stage, snapshot.workspace.path, snapshot.project, artifact, snapshot.developmentWorkspaces.find(item => item.artifactUid === artifactUid))
+    this.bindRuntime(sessionId, stage, snapshot.workspace.path, snapshot.project, artifact, snapshot.developmentWorkspaces.find(item => item.artifactUid === artifactUid), snapshot.workItems.find(item => item.uid === artifact.workItemUid))
     await this.writeRun(snapshot.workspace.path, run)
     await appendEvent(snapshot.workspace.path, existing === undefined ? 'run.started' : 'run.resumed', artifact.key, stage, { runUid: run.uid, sessionId })
     return { prompt, run }
@@ -852,7 +1002,7 @@ export class SddProjectService {
 
   private bindRuntime(
     sessionId: string, stage: StageId, workspacePath: string, project: ProjectConfig,
-    artifact: ArtifactSummary, development: DevelopmentWorkspace | undefined,
+    artifact: ArtifactSummary, development: DevelopmentWorkspace | undefined, workItem?: WorkItem,
   ): void {
     this.sessionController?.bind({
       sessionId, stage, projectPath: workspacePath,
@@ -862,6 +1012,7 @@ export class SddProjectService {
         `绑定项目：${project.project.key} · ${project.project.name}`,
         `绑定交付件：${artifact.key} (${artifact.uid})`,
         `交付件入口：${resolve(workspacePath, artifact.relativeDirectory, artifact.entry)}`,
+        workItem === undefined ? '' : `仓库范围：${(workItem.repositoryScope ?? []).join('、') || '未配置'}\n开发目标：${(workItem.developmentTargets ?? []).join('、') || '未配置'}\nOpenSpec：${workItem.openSpec?.enabled === true ? `${workItem.openSpec.repositoryId}:${workItem.openSpec.path}` : '未启用'}`,
         development === undefined ? '' : `隔离代码目录：\n${development.repositories.map(item => `- ${item.id}: ${item.path}`).join('\n')}`,
       ].filter(Boolean).join('\n'),
     })
@@ -906,6 +1057,8 @@ export class SddProjectService {
     const tests = workspaces.flatMap(item => item.repositories.map(repository => repository.lastTest)).filter(item => item !== undefined)
     const blockers = [
       ...workItems.filter(item => item.change !== undefined).map(item => `${item.key}：${item.status === 'removed-pending' ? '外部需求已移除，等待确认' : `需求已变更，需重审 ${item.change!.reviewRequiredStages.map(stage => stageDefinition(stage).label).join('、')}`}`),
+      ...workItems.filter(item => artifacts.some(artifact => artifact.workItemUid === item.uid && artifact.stage === 'architecture') && (item.repositoryScope ?? []).length === 0).map(item => `${item.key}：系统设计尚未确认代码仓库范围`),
+      ...workItems.filter(item => artifacts.some(artifact => artifact.workItemUid === item.uid && (artifact.stage === 'specification' || artifact.stage === 'development')) && (item.developmentTargets ?? []).length === 0).map(item => `${item.key}：规格设计尚未确认开发目标仓库`),
       ...Object.values(quality).flatMap(report => report.checks.filter(item => item.status === 'failed').map(item => `${stageDefinition(report.stage).label}：${item.label}`)),
     ].slice(0, 12)
     const resolvedStatuses = new Set(['resolved', 'done', 'cancelled'])

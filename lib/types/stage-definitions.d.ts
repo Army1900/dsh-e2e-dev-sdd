@@ -1,4 +1,4 @@
-import type { StageId } from './protocol.ts';
+import { type StageId } from './protocol.ts';
 export interface StageToolPolicy {
     readonly allowShell: boolean;
     readonly writableArea: 'artifact-only' | 'artifact-and-development';

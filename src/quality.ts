@@ -14,6 +14,10 @@ function sectionBodies(markdown: string): Map<string, string> {
   return result
 }
 
+function meaningfulContent(body: string): string {
+  return body.replace(/<!--[\s\S]*?-->/g, '').replace(/^#{3,6}\s+.+$/gm, '').trim()
+}
+
 function check(code: string, label: string, passed: boolean, message: string, warning = false): QualityCheck {
   return { code, label, status: passed ? 'passed' : warning ? 'warning' : 'failed', message }
 }
@@ -41,7 +45,7 @@ export function evaluateQuality(
   const checks: QualityCheck[] = []
   for (const section of definition.requiredSections) {
     const body = bodies.get(section)
-    checks.push(check(`section:${section}`, `章节：${section}`, body !== undefined && body.length >= 2, body === undefined ? '缺少必填章节' : '章节内容不能为空'))
+    checks.push(check(`section:${section}`, `章节：${section}`, body !== undefined && meaningfulContent(body).length > 0, body === undefined ? '缺少必填章节' : '章节内容不能为空'))
     if (body !== undefined) {
       checks.push(check(`placeholder:${section}`, `占位内容：${section}`, !PLACEHOLDERS.some(value => body.includes(value)), '章节仍包含待补充或待确认占位内容'))
     }

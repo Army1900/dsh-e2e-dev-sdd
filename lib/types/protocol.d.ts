@@ -31,6 +31,19 @@ export declare const STAGES: readonly [{
     readonly prefix: "DEV";
 }];
 export type StageId = typeof STAGES[number]['id'];
+export interface ArtifactTemplateSection {
+    readonly title: string;
+    readonly guidance: string;
+    readonly suggestedSubsections: readonly string[];
+}
+export interface StageArtifactTemplate {
+    readonly documentName: string;
+    readonly maintenanceGuide: string;
+    readonly sections: readonly ArtifactTemplateSection[];
+}
+/** Canonical templates shared by draft creation, the browser workbench, and AI prompts. */
+export declare const STAGE_ARTIFACT_TEMPLATES: Readonly<Record<StageId, StageArtifactTemplate>>;
+export declare function artifactTemplate(stage: StageId, key?: string, title?: string): string;
 export type ArtifactStatus = 'draft' | 'in-review' | 'accepted' | 'superseded';
 export type DependencyMode = 'required' | 'optional' | 'manual';
 export type CheckStatus = 'passed' | 'failed' | 'warning';
@@ -134,6 +147,13 @@ export interface WorkItem {
     createdAt: string;
     updatedAt: string;
     change?: WorkItemChange;
+    repositoryScope?: string[];
+    developmentTargets?: string[];
+    openSpec?: {
+        enabled: boolean;
+        repositoryId?: string;
+        path?: string;
+    };
 }
 export interface SourceReference {
     uid: string;
@@ -160,6 +180,14 @@ export interface ArtifactManifest {
     externalRefs: ExternalReference[];
     checklist?: Record<string, boolean>;
     workItemUid?: string;
+    supersedes?: ArtifactReference;
+    files?: ArtifactFileSummary[];
+}
+export interface ArtifactFileSummary {
+    path: string;
+    size: number;
+    contentHash: string;
+    kind: 'markdown' | 'text' | 'image' | 'binary';
 }
 export interface QualityCheck {
     code: string;
@@ -264,6 +292,7 @@ export interface ProjectConfig {
 export interface ArtifactSummary extends ArtifactManifest {
     relativeDirectory: string;
     validationErrors: string[];
+    files: ArtifactFileSummary[];
 }
 export interface SourceSummary extends SourceEnvelope {
     relativePath: string;
@@ -363,10 +392,36 @@ export type SddAction = {
     sourceUids?: string[];
     workItemUid?: string;
 } | {
+    kind: 'create-revision';
+    workspaceId: string;
+    artifactUid: string;
+} | {
     kind: 'accept';
     workspaceId: string;
     artifactUid: string;
     checklist?: Record<string, boolean>;
+} | {
+    kind: 'read-artifact-file';
+    workspaceId: string;
+    artifactUid: string;
+    path: string;
+} | {
+    kind: 'update-work-item-settings';
+    workspaceId: string;
+    workItemUid: string;
+    repositoryScope: string[];
+    developmentTargets: string[];
+    openSpec?: {
+        enabled: boolean;
+        repositoryId?: string;
+        path?: string;
+    };
+} | {
+    kind: 'add-project-repository';
+    workspaceId: string;
+    id: string;
+    source: string;
+    baseBranch: string;
 } | {
     kind: 'quality';
     workspaceId: string;
@@ -451,6 +506,13 @@ export type SddResponse = {
 } | {
     ok: true;
     preview: ImportPreview;
+} | {
+    ok: true;
+    artifactFile: {
+        artifactUid: string;
+        path: string;
+        content: string;
+    };
 } | {
     ok: false;
     error: string;
