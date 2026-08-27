@@ -19,8 +19,13 @@ describe('parseAction', () => {
       .toEqual({ kind: 'create-draft', workspaceId: 'w1', stage: 'requirements', title: '支付需求', basedOn: [] })
     expect(parseAction({ kind: 'reinitialize', workspaceId: 'w1' })).toEqual({ kind: 'reinitialize', workspaceId: 'w1' })
     expect(parseAction({ kind: 'read-artifact-file', workspaceId: 'w1', artifactUid: 'a1', path: 'deliverable.md' })).toMatchObject({ kind: 'read-artifact-file' })
+    expect(parseAction({ kind: 'open-artifact-path', workspaceId: 'w1', artifactUid: 'a1', path: '' })).toMatchObject({ kind: 'open-artifact-path' })
+    expect(parseAction({ kind: 'read-stage-template', workspaceId: 'w1', stage: 'requirements' })).toMatchObject({ kind: 'read-stage-template' })
+    expect(parseAction({ kind: 'open-stage-template', workspaceId: 'w1', stage: 'requirements', target: 'directory' })).toMatchObject({ target: 'directory' })
     expect(parseAction({ kind: 'update-work-item-settings', workspaceId: 'w1', workItemUid: 'i1', repositoryScope: ['web'], developmentTargets: ['web'], openSpec: { enabled: true, repositoryId: 'web', path: 'openspec' } })).toMatchObject({ kind: 'update-work-item-settings' })
     expect(parseAction({ kind: 'add-project-repository', workspaceId: 'w1', id: 'web', source: '../web', baseBranch: 'main' })).toMatchObject({ kind: 'add-project-repository' })
+    expect(parseAction({ kind: 'remove-project-repository', workspaceId: 'w1', id: 'web' })).toMatchObject({ kind: 'remove-project-repository' })
+    expect(parseAction({ kind: 'discard-draft', workspaceId: 'w1', artifactUid: 'a1' })).toMatchObject({ kind: 'discard-draft' })
     expect(parseAction({ kind: 'preview-source-import', workspaceId: 'w1', provider: 'manual', sourceKind: 'requirement', key: 'M-1', input: { title: '手工需求' } })).toMatchObject({ provider: 'manual', input: { title: '手工需求' } })
   })
 

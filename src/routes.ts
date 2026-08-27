@@ -51,6 +51,8 @@ export function makeSddRoute(service: SddProjectService): WebRoute {
         const result = await service.execute(action)
         if ('prompt' in result) return writeJson(res, 200, { ok: true, prompt: result.prompt, ...(result.run === undefined ? {} : { run: result.run }) })
         if ('artifactFile' in result) return writeJson(res, 200, { ok: true, artifactFile: result.artifactFile })
+        if ('contentPath' in result) return writeJson(res, 200, { ok: true, template: result })
+        if ('opened' in result) return writeJson(res, 200, { ok: true, opened: true })
         if ('schema' in result && result.schema === 'dsh-sdd/import-preview@1') return writeJson(res, 200, { ok: true, preview: result })
         if ('workspace' in result) return writeJson(res, 200, { ok: true, snapshot: result })
         throw new Error('unexpected SDD response')

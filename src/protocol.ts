@@ -239,7 +239,18 @@ export interface ArtifactManifest {
   checklist?: Record<string, boolean>
   workItemUid?: string
   supersedes?: ArtifactReference
+  template?: ArtifactTemplateBinding
   files?: ArtifactFileSummary[]
+}
+
+export interface ArtifactTemplateBinding {
+  stage: StageId
+  version: string
+  sourcePath: string
+  snapshotPath: string
+  configSnapshotPath: string
+  contentHash: string
+  requiredSections: string[]
 }
 
 export interface ArtifactFileSummary {
@@ -247,6 +258,18 @@ export interface ArtifactFileSummary {
   size: number
   contentHash: string
   kind: 'markdown' | 'text' | 'image' | 'binary'
+}
+
+export interface StageTemplatePreview {
+  stage: StageId
+  version: string
+  documentName: string
+  directory: string
+  configPath: string
+  contentPath: string
+  contentHash: string
+  requiredSections: string[]
+  content: string
 }
 
 export interface QualityCheck {
@@ -415,10 +438,15 @@ export type SddAction =
   | { kind: 'reinitialize'; workspaceId: string }
   | { kind: 'create-draft'; workspaceId: string; stage: StageId; title: string; basedOn: string[]; sourceUids?: string[]; workItemUid?: string }
   | { kind: 'create-revision'; workspaceId: string; artifactUid: string }
+  | { kind: 'discard-draft'; workspaceId: string; artifactUid: string }
   | { kind: 'accept'; workspaceId: string; artifactUid: string; checklist?: Record<string, boolean> }
   | { kind: 'read-artifact-file'; workspaceId: string; artifactUid: string; path: string }
+  | { kind: 'open-artifact-path'; workspaceId: string; artifactUid: string; path: string }
+  | { kind: 'read-stage-template'; workspaceId: string; stage: StageId }
+  | { kind: 'open-stage-template'; workspaceId: string; stage: StageId; target: 'directory' | 'config' | 'content' }
   | { kind: 'update-work-item-settings'; workspaceId: string; workItemUid: string; repositoryScope: string[]; developmentTargets: string[]; openSpec?: { enabled: boolean; repositoryId?: string; path?: string } }
   | { kind: 'add-project-repository'; workspaceId: string; id: string; source: string; baseBranch: string }
+  | { kind: 'remove-project-repository'; workspaceId: string; id: string }
   | { kind: 'quality'; workspaceId: string; artifactUid: string }
   | { kind: 'context'; workspaceId: string; stage: StageId; artifactUid: string; artifactUids: string[]; sourceUids?: string[] }
   | { kind: 'bind-session'; workspaceId: string; runUid?: string; stage: StageId; artifactUid: string; sessionId: string; artifactUids: string[]; sourceUids?: string[] }
@@ -437,7 +465,9 @@ export type SddResponse =
   | { ok: true; snapshot: ProjectSnapshot }
   | { ok: true; prompt: string; run?: StageRun }
   | { ok: true; preview: ImportPreview }
-  | { ok: true; artifactFile: { artifactUid: string; path: string; content: string } }
+  | { ok: true; artifactFile: { artifactUid: string; path: string; kind: ArtifactFileSummary['kind'] | 'manifest'; content?: string; dataUrl?: string } }
+  | { ok: true; template: StageTemplatePreview }
+  | { ok: true; opened: true }
   | { ok: false; error: string }
 
 export function isStageId(value: unknown): value is StageId {
@@ -453,12 +483,16 @@ export function parseAction(value: unknown): SddAction | undefined {
   const action = value as Record<string, unknown>
   if (typeof action.kind !== 'string' || typeof action.workspaceId !== 'string') return undefined
   if (action.kind === 'snapshot' || action.kind === 'initialize' || action.kind === 'reinitialize') return action as unknown as SddAction
-  if (action.kind === 'create-revision' && typeof action.artifactUid === 'string') return action as unknown as SddAction
+  if ((action.kind === 'create-revision' || action.kind === 'discard-draft') && typeof action.artifactUid === 'string') return action as unknown as SddAction
   if ((action.kind === 'accept' || action.kind === 'quality') && typeof action.artifactUid === 'string') return action as unknown as SddAction
   if (action.kind === 'read-artifact-file' && typeof action.artifactUid === 'string' && typeof action.path === 'string') return action as unknown as SddAction
+  if (action.kind === 'open-artifact-path' && typeof action.artifactUid === 'string' && typeof action.path === 'string') return action as unknown as SddAction
+  if (action.kind === 'read-stage-template' && isStageId(action.stage)) return action as unknown as SddAction
+  if (action.kind === 'open-stage-template' && isStageId(action.stage) && ['directory', 'config', 'content'].includes(String(action.target))) return action as unknown as SddAction
   if (action.kind === 'update-work-item-settings' && typeof action.workItemUid === 'string' && stringArray(action.repositoryScope)
     && stringArray(action.developmentTargets) && (action.openSpec === undefined || (typeof action.openSpec === 'object' && action.openSpec !== null))) return action as unknown as SddAction
   if (action.kind === 'add-project-repository' && typeof action.id === 'string' && typeof action.source === 'string' && typeof action.baseBranch === 'string') return action as unknown as SddAction
+  if (action.kind === 'remove-project-repository' && typeof action.id === 'string') return action as unknown as SddAction
   if (action.kind === 'context' && isStageId(action.stage) && typeof action.artifactUid === 'string' && stringArray(action.artifactUids)
     && (action.sourceUids === undefined || stringArray(action.sourceUids))) return action as unknown as SddAction
   if (action.kind === 'bind-session' && isStageId(action.stage) && typeof action.artifactUid === 'string'

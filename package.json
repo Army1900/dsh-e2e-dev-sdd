@@ -54,6 +54,8 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "dompurify": "^3.2.6",
+    "marked": "^16.2.1",
     "yaml": "^2.8.1"
   },
   "peerDependencies": {

@@ -21,9 +21,13 @@
 ```text
 .sdd/
 ├── project.yaml
+├── templates/<stage>/
+│   ├── template.yaml
+│   └── deliverable.md
 ├── artifacts/<stage>/<artifact>/
 │   ├── manifest.yaml
-│   └── deliverable.md
+│   ├── deliverable.md
+│   └── .template/              # 创建交付件时固定的模板快照
 ├── sources/
 ├── imports/pending/<preview>.yaml
 ├── work-items/<uid>/

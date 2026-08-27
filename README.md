@@ -12,10 +12,11 @@ DeepSeek Harness Web 的五阶段 SDD（Specification-Driven Development）工�
 - 再次同步同一主 ID 会预览新增、修改、移除和无变化项，用户确认后才应用。
 - 需求变化保存新的来源快照，不覆盖历史；受影响阶段进入重新评审，外部移除不会自动删除本地成果。
 - 自动发现、校验和选择已接受的上游交付件。
-- 页面可查看五阶段详细 Markdown 模板；同一份模板用于草稿生成、AI 输出约束和结构质量检查。
-- 交付件是可包含正文、图表、原型和附件的多文件包；验收时冻结文件清单和整包哈希。
-- 系统设计在页面确认仓库范围，规格设计确认具体开发目标及可选 OpenSpec 仓库路径；未确认时阻止阶段对话和验收。
-- 页面可预览交付包、查看需求到五阶段的追踪矩阵，并从 accepted 版本创建显式 supersedes 修订。
+- 初始化生成 `.sdd/templates/<stage>/template.yaml` 与 `deliverable.md`；项目可编辑并提交，草稿会绑定创建时的模板快照。
+- 同一份模板快照用于草稿生成、AI 输出约束和结构质量检查。
+- 交付件是可包含正文、图表、原型和附件的多文件包；页面提供完整文件树、Markdown 预览/源码切换，并可通过 DSH Host 跨平台打开文件和目录；验收时冻结文件清单和整包哈希。
+- 系统设计在页面添加并校验代码仓库、直接勾选确认仓库范围；仓库可在尚未创建隔离开发空间时移除。规格设计确认具体开发目标及可选 OpenSpec 仓库路径；未确认时阻止阶段对话和验收。
+- 页面可预览交付包、查看需求到五阶段的追踪矩阵，并从 accepted 版本“发起变更（新修订）”；未验收草稿可安全移入 `.sdd/trash`。
 - 将选中交付件整合为阶段输入，启动/复用原生 DSH Session。
 - 人工接受交付件并冻结内容 SHA-256。
 - 稳定内部 UUID、插件阶段编号、企业外部编号和显式关系的扩展契约。
@@ -101,10 +102,10 @@ dsh --profile web --dump-config
 2. 进入任一阶段菜单；插件会检查 `.sdd/project.yaml`。未初始化时点击“初始化项目”；配置不合法时会显示字段级错误，可修复后重新检查，或备份旧配置后重新生成默认配置。
 3. 点击“导入或同步需求包”。默认选择“手工录入”，填写最小标题和描述即可；有企业适配器时也可切换到对应 Connector。检查子项的新增、修改、移除预览并选择要应用的项目。
 4. 从页面顶部选择当前需求工作单元，勾选它的最新来源和已接受上游交付件；可先点“查看交付件模板”，再创建本阶段草稿。
-5. 系统设计阶段可在页面登记项目代码仓库并确认可能涉及的仓库范围；规格设计阶段从该范围中确认实际开发目标，并可记录目标仓库中的 OpenSpec 相对路径。
+5. 系统设计阶段在页面添加项目代码仓库：本地路径只校验 Git 仓库和基线分支，远程地址只校验分支可访问，均不会在此时复制或下载代码。仓库添加后立即展示，在同一页面勾选并确认本需求可能涉及的范围；规格设计阶段再从该范围中确认实际开发目标，并可记录目标仓库中的 OpenSpec 相对路径。
 6. 选择草稿并开始阶段对话；插件在对应 Session 安装阶段 System Prompt、仓库边界、可选 OpenSpec 位置和工具 Guard。
 7. 与 Agent 迭代；Agent 必须按照页面所示模板输出，并把确定结论逐轮写入 `.sdd/work-items/<uid>/artifacts/<stage>/.../deliverable.md`。实际文档可以很长，也可以在交付件目录中增加图片和附件并从主文档引用。
-8. 返回阶段页面查看交付包和结构质量、确认阶段验收清单并接受版本。存在外部变更时，可从 accepted 版本创建新修订并依次重新评审。
+8. 返回阶段页面查看交付包和结构质量、确认阶段验收清单并接受版本。存在变更时，从 accepted 版本点击“发起变更（新修订）”生成同编号的更高版本草稿；不再需要的草稿可移入 `.sdd/trash`，不会影响已验收版本。
 9. 在开发测试阶段只为规格确认的目标仓库创建隔离代码空间、运行配置测试并形成代码提交。
 10. 在项目看板检查追踪矩阵、进度、待处理变更、缺陷和测试状态，然后提交 `.sdd/` 变更。
 
@@ -118,7 +119,7 @@ dsh --profile web --dump-config
 - 外部材料必须先转换为 Source Envelope，再由 AI 整合为正式交付件。
 - 每个需求的代码开发使用独立 Worktree 或 clone，不污染主项目空间。
 
-阶段运行机制见 [docs/stage-runtime.md](docs/stage-runtime.md)，多文件交付规范见 [docs/artifact-package.md](docs/artifact-package.md)，详细设计见 [docs/architecture.md](docs/architecture.md)，业务适配开发见 [docs/business-development-guide.md](docs/business-development-guide.md)，Cordis Provider 扩展见 [docs/extensions.md](docs/extensions.md)，规范文件位于 [schemas/](schemas/)。
+阶段运行机制见 [docs/stage-runtime.md](docs/stage-runtime.md)，项目模板定制见 [docs/templates.md](docs/templates.md)，多文件交付规范见 [docs/artifact-package.md](docs/artifact-package.md)，详细设计见 [docs/architecture.md](docs/architecture.md)，业务适配开发见 [docs/business-development-guide.md](docs/business-development-guide.md)，Cordis Provider 扩展见 [docs/extensions.md](docs/extensions.md)，规范文件位于 [schemas/](schemas/)。
 
 ## 开发验证
 

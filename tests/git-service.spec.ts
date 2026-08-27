@@ -16,6 +16,8 @@ describe('GitDevelopmentService', () => {
     const project = { development: { workspaceRoot: '.sdd-workspaces', branchPattern: 'sdd/{artifactKey}/{repositoryId}', mergeStrategy: 'manual', repositories: [{ id: 'app', source, baseBranch: 'main', testCommands: [{ id: 'unit', label: 'Unit', argv: [process.execPath, '-e', 'process.exit(0)'] }] }] } } as unknown as ProjectConfig
     const artifact = { uid: 'artifact-1', key: 'DEV-1', stage: 'development', basedOn: [] } as unknown as ArtifactSummary
     const service = new GitDevelopmentService(); let workspace = await service.create(projectPath, project, artifact, 'app')
+    await expect(service.validateSource(projectPath, source, 'main')).resolves.toBe('local')
+    await expect(service.validateSource(projectPath, source, 'missing')).rejects.toThrow()
     await writeFile(join(workspace.repositories[0]!.path, 'app.txt'), 'after\n')
     workspace = await service.test(projectPath, project, artifact.uid, 'app', 'unit'); expect(workspace.repositories[0]!.lastTest?.passed).toBe(true)
     workspace = await service.commit(projectPath, artifact.uid, 'app', 'DEV-1 implementation'); expect(workspace.repositories[0]!.ahead).toBe(1); expect(workspace.repositories[0]!.changedFiles).toBe(0)

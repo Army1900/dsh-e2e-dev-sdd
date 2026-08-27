@@ -1,5 +1,7 @@
 import type { ClientContext, ISessions, IWorkspaces, WorkspaceId } from '@deepseek-ai/dsh-client-runtime/client'
-import { STAGES, STAGE_ARTIFACT_TEMPLATES, artifactTemplate, type ArtifactSummary, type ProjectSnapshot, type SddAction, type SddResponse, type SourceSummary, type StageId, type StageRun } from '../protocol.ts'
+import DOMPurify from 'dompurify'
+import { marked } from 'marked'
+import { STAGES, STAGE_ARTIFACT_TEMPLATES, type ArtifactSummary, type ProjectSnapshot, type SddAction, type SddResponse, type SourceSummary, type StageId, type StageRun, type StageTemplatePreview } from '../protocol.ts'
 
 export const name = 'dsh-e2e-dev-sdd-client'
 export const inject = ['workspaces', 'sessions']
@@ -13,12 +15,13 @@ const CSS = `
 [data-dsh-sdd-view]{position:absolute;inset:0;display:none;z-index:70;overflow:auto;background:var(--dsw-alias-bg-base,#fff);color:var(--dsw-alias-label-primary,#171717);font-family:var(--dsw-font-family,system-ui)}
 html[${ACTIVE_ATTR}] [data-dsh-sdd-view]{display:block}html[${ACTIVE_ATTR}] [data-pane='conversation']>:not([data-dsh-sdd-view]),html[${ACTIVE_ATTR}] [class*='centerCol']>:not([data-dsh-sdd-view]){display:none!important}
 .dsh-sdd-menu{box-sizing:border-box;display:flex;align-items:center;gap:8px;width:100%;height:36px;padding:0 10px;border:0;border-radius:8px;background:transparent;color:var(--dsw-alias-label-secondary,#666);cursor:pointer;font-size:13px;white-space:nowrap}.dsh-sdd-menu:hover,.dsh-sdd-menu[data-active]{background:var(--dsw-alias-interactive-bg-hover,#eee);color:var(--dsw-alias-label-primary,#111)}.dsh-sdd-menu[data-active]{font-weight:600}.dsh-sdd-menu svg{width:18px;height:18px;flex:none}.dsh-sdd-menu span{overflow:hidden;text-overflow:ellipsis}[data-dsh-frame][data-sidebar-collapsed] .dsh-sdd-menu{justify-content:center;width:36px;margin:0 auto 8px;padding:0;border-radius:50%}[data-dsh-frame][data-sidebar-collapsed] .dsh-sdd-menu span{display:none}
-.dsh-sdd-page{box-sizing:border-box;min-height:100%;padding:20px;max-width:1220px;margin:0 auto}.dsh-sdd-header{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:18px}.dsh-sdd-header h1{font-size:22px;margin:0;margin-right:auto}.dsh-sdd-select,.dsh-sdd-input{box-sizing:border-box;padding:8px 10px;border:1px solid var(--dsw-alias-border-l2,#ccc);border-radius:8px;background:var(--dsw-specific-input-major,#fff);color:inherit}.dsh-sdd-button{padding:8px 12px;border:1px solid var(--dsw-alias-border-l2,#ccc);border-radius:8px;background:var(--dsw-alias-bg-layer-2,#f5f5f5);color:inherit;cursor:pointer}.dsh-sdd-button:hover{filter:brightness(.97)}.dsh-sdd-button.primary{background:var(--dsw-alias-button-primary-fill,#3b63f3);border-color:transparent;color:var(--dsw-alias-label-primary-foreground,#fff)}.dsh-sdd-button:disabled{opacity:.5;cursor:not-allowed}
-.dsh-sdd-grid{display:grid;grid-template-columns:minmax(280px,.8fr) minmax(380px,1.2fr);gap:14px}@media(max-width:850px){.dsh-sdd-grid{grid-template-columns:1fr}}.dsh-sdd-card{border:1px solid var(--dsw-alias-border-l1,#ddd);border-radius:12px;background:var(--dsw-alias-bg-layer-2,#fafafa);padding:14px}.dsh-sdd-card h2{font-size:15px;margin:0 0 10px}.dsh-sdd-muted{font-size:12px;color:var(--dsw-alias-label-secondary,#666)}.dsh-sdd-list{display:flex;flex-direction:column;gap:8px}.dsh-sdd-row{display:grid;grid-template-columns:auto 1fr auto;align-items:start;gap:9px;padding:10px;border:1px solid var(--dsw-alias-border-l1,#ddd);border-radius:9px;background:var(--dsw-alias-bg-base,#fff)}.dsh-sdd-row strong{display:block;font-size:13px}.dsh-sdd-badge{display:inline-block;font-size:11px;padding:2px 6px;border-radius:999px;background:var(--dsw-alias-interactive-bg-hover,#eee);margin:0 0 4px 4px}.dsh-sdd-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}.dsh-sdd-error{padding:9px;border-radius:8px;background:#c5303018;color:#c53030;font-size:12px}.dsh-sdd-empty{padding:18px;text-align:center;color:var(--dsw-alias-label-secondary,#666)}
-.dsh-sdd-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:14px}.dsh-sdd-stat{border:1px solid var(--dsw-alias-border-l1,#ddd);border-radius:12px;padding:14px;background:var(--dsw-alias-bg-layer-2,#fafafa)}.dsh-sdd-stat b{display:block;font-size:25px;margin-top:5px}.dsh-sdd-progress{height:8px;background:var(--dsw-alias-interactive-bg-hover,#e5e5e5);border-radius:999px;overflow:hidden;margin-top:7px}.dsh-sdd-progress span{display:block;height:100%;background:var(--dsw-alias-brand-primary,#3b63f3)}.dsh-sdd-stage-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px}.dsh-sdd-checks{margin:7px 0 0;padding-left:17px;font-size:12px}.dsh-sdd-checks li[data-fail]{color:#c53030}.dsh-sdd-checks li[data-pass]{color:#238636}.dsh-sdd-wide{grid-column:1/-1}
+.dsh-sdd-page{box-sizing:border-box;width:100%;min-height:100%;padding:20px;max-width:1220px;margin:0 auto}.dsh-sdd-header{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:18px}.dsh-sdd-header h1{font-size:22px;margin:0;margin-right:auto}.dsh-sdd-header .dsh-sdd-select{min-width:0;max-width:min(360px,100%)}.dsh-sdd-select,.dsh-sdd-input{box-sizing:border-box;padding:8px 10px;border:1px solid var(--dsw-alias-border-l2,#ccc);border-radius:8px;background:var(--dsw-specific-input-major,#fff);color:inherit}.dsh-sdd-button{padding:8px 12px;border:1px solid var(--dsw-alias-border-l2,#ccc);border-radius:8px;background:var(--dsw-alias-bg-layer-2,#f5f5f5);color:inherit;cursor:pointer}.dsh-sdd-button:hover{filter:brightness(.97)}.dsh-sdd-button.primary{background:var(--dsw-alias-button-primary-fill,#3b63f3);border-color:transparent;color:var(--dsw-alias-label-primary-foreground,#fff)}.dsh-sdd-button:disabled{opacity:.5;cursor:not-allowed}
+.dsh-sdd-grid{display:grid;grid-template-columns:minmax(0,.8fr) minmax(0,1.2fr);gap:14px}@media(max-width:850px){.dsh-sdd-grid{grid-template-columns:minmax(0,1fr)}}.dsh-sdd-card{min-width:0;border:1px solid var(--dsw-alias-border-l1,#ddd);border-radius:12px;background:var(--dsw-alias-bg-layer-2,#fafafa);padding:14px}.dsh-sdd-card h2{font-size:15px;margin:0 0 10px}.dsh-sdd-muted{font-size:12px;color:var(--dsw-alias-label-secondary,#666);overflow-wrap:anywhere}.dsh-sdd-list{display:flex;min-width:0;flex-direction:column;gap:8px}.dsh-sdd-row{display:grid;min-width:0;grid-template-columns:auto minmax(0,1fr) auto;align-items:start;gap:9px;padding:10px;border:1px solid var(--dsw-alias-border-l1,#ddd);border-radius:9px;background:var(--dsw-alias-bg-base,#fff)}.dsh-sdd-row>span{min-width:0}.dsh-sdd-row strong{display:block;font-size:13px;overflow-wrap:anywhere}.dsh-sdd-badge{display:inline-block;max-width:100%;font-size:11px;padding:2px 6px;border-radius:999px;background:var(--dsw-alias-interactive-bg-hover,#eee);margin:0 0 4px 4px;overflow-wrap:anywhere}.dsh-sdd-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}.dsh-sdd-error{padding:9px;border-radius:8px;background:#c5303018;color:#c53030;font-size:12px;overflow-wrap:anywhere}.dsh-sdd-empty{padding:18px;text-align:center;color:var(--dsw-alias-label-secondary,#666)}
+.dsh-sdd-stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:14px}.dsh-sdd-stat{box-sizing:border-box;min-width:0;border:1px solid var(--dsw-alias-border-l1,#ddd);border-radius:12px;padding:14px;background:var(--dsw-alias-bg-layer-2,#fafafa);overflow:hidden}.dsh-sdd-stat b{display:block;min-width:0;font-size:clamp(20px,2vw,25px);line-height:1.2;margin-top:5px;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}.dsh-sdd-workload-list{display:flex;flex-direction:column;gap:5px;max-height:86px;margin-top:8px;overflow:auto}.dsh-sdd-workload-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:center;font-size:12px}.dsh-sdd-workload-row span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.dsh-sdd-workload-row strong{font-variant-numeric:tabular-nums;white-space:nowrap}.dsh-sdd-progress{height:8px;background:var(--dsw-alias-interactive-bg-hover,#e5e5e5);border-radius:999px;overflow:hidden;margin-top:7px}.dsh-sdd-progress span{display:block;height:100%;background:var(--dsw-alias-brand-primary,#3b63f3)}.dsh-sdd-stage-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px}.dsh-sdd-stage-grid .dsh-sdd-stat{padding:12px}.dsh-sdd-stage-head{display:flex;align-items:flex-start;justify-content:space-between;gap:6px}.dsh-sdd-stage-head .dsh-sdd-badge{flex:none}.dsh-sdd-scroll-list{max-height:340px;overflow:auto;overscroll-behavior:contain;padding-right:3px}.dsh-sdd-dashboard-columns{align-items:start}.dsh-sdd-dashboard-columns>.dsh-sdd-card{max-height:430px;overflow:hidden}.dsh-sdd-dashboard-columns .dsh-sdd-checks{max-height:340px;overflow:auto;padding-right:4px}.dsh-sdd-trace-list{max-height:420px;overflow:auto;overscroll-behavior:contain}.dsh-sdd-checks{margin:7px 0 0;padding-left:17px;font-size:12px;overflow-wrap:anywhere}.dsh-sdd-checks li+li{margin-top:5px}.dsh-sdd-checks li[data-fail]{color:#c53030}.dsh-sdd-checks li[data-pass]{color:#238636}.dsh-sdd-wide{grid-column:1/-1}@media(max-width:1000px){.dsh-sdd-stats{grid-template-columns:repeat(3,minmax(0,1fr))}.dsh-sdd-stage-grid{grid-template-columns:repeat(3,minmax(0,1fr))}}@media(max-width:700px){.dsh-sdd-stats,.dsh-sdd-stage-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.dsh-sdd-page{padding:14px}.dsh-sdd-header{gap:8px}.dsh-sdd-header h1{width:100%;order:-1}.dsh-sdd-header .dsh-sdd-select{flex:1 1 220px}}@media(max-width:430px){.dsh-sdd-stats,.dsh-sdd-stage-grid{grid-template-columns:minmax(0,1fr)}}
 .dsh-sdd-modal-backdrop{position:fixed;inset:0;z-index:200;display:flex;align-items:center;justify-content:center;padding:20px;background:#0008}.dsh-sdd-modal{box-sizing:border-box;width:min(520px,100%);max-height:min(760px,calc(100vh - 40px));overflow:auto;border:1px solid var(--dsw-alias-border-l1,#ddd);border-radius:14px;background:var(--dsw-alias-bg-base,#fff);box-shadow:0 20px 60px #0005}.dsh-sdd-modal-header{padding:18px 20px 10px}.dsh-sdd-modal-header h2{margin:0 0 6px;font-size:18px}.dsh-sdd-modal-body{display:flex;flex-direction:column;gap:14px;padding:8px 20px 18px}.dsh-sdd-field{display:flex;flex-direction:column;gap:6px}.dsh-sdd-field>label{font-size:13px;font-weight:600}.dsh-sdd-field textarea{min-height:88px;resize:vertical}.dsh-sdd-field[hidden]{display:none}.dsh-sdd-checkbox{display:grid;grid-template-columns:auto 1fr;align-items:start;gap:9px;padding:10px;border:1px solid var(--dsw-alias-border-l1,#ddd);border-radius:9px}.dsh-sdd-checkbox input{margin-top:2px}.dsh-sdd-modal-footer{display:flex;justify-content:flex-end;gap:8px;padding:14px 20px;border-top:1px solid var(--dsw-alias-border-l1,#ddd);background:var(--dsw-alias-bg-layer-2,#fafafa)}
-.dsh-sdd-template-modal{width:min(900px,100%)}.dsh-sdd-template-preview{box-sizing:border-box;margin:0;padding:16px;max-height:60vh;overflow:auto;border:1px solid var(--dsw-alias-border-l1,#ddd);border-radius:9px;background:var(--dsw-alias-bg-layer-2,#fafafa);font:12px/1.65 ui-monospace,SFMono-Regular,Consolas,monospace;white-space:pre-wrap;word-break:break-word}
+.dsh-sdd-template-modal{width:min(900px,100%)}.dsh-sdd-template-preview{display:block;box-sizing:border-box;width:100%;margin:0;padding:16px;max-height:60vh;overflow:auto;border:1px solid var(--dsw-alias-border-l1,#ddd);border-radius:9px;background:var(--dsw-alias-bg-layer-2,#fafafa);color:inherit;font:12px/1.65 ui-monospace,SFMono-Regular,Consolas,"Liberation Mono",monospace;text-align:left;white-space:pre;word-break:normal;overflow-wrap:normal;tab-size:2;direction:ltr}
 .dsh-sdd-manual-items{display:flex;flex-direction:column;gap:10px}.dsh-sdd-manual-item{display:grid;grid-template-columns:minmax(120px,.35fr) minmax(180px,.65fr) auto;gap:8px;padding:10px;border:1px solid var(--dsw-alias-border-l1,#ddd);border-radius:9px;background:var(--dsw-alias-bg-layer-2,#fafafa)}.dsh-sdd-manual-item textarea{grid-column:1/-1;min-height:100px}.dsh-sdd-manual-item button{align-self:start}@media(max-width:650px){.dsh-sdd-manual-item{grid-template-columns:1fr}.dsh-sdd-manual-item textarea{grid-column:1}.dsh-sdd-manual-item button{justify-self:end}}
+.dsh-sdd-package-modal{width:min(1120px,100%)}.dsh-sdd-package{display:grid;grid-template-columns:minmax(230px,.32fr) minmax(0,1fr);gap:12px;min-height:480px}.dsh-sdd-file-tree{max-height:62vh;overflow:auto;border:1px solid var(--dsw-alias-border-l1,#ddd);border-radius:9px;padding:6px;background:var(--dsw-alias-bg-layer-2,#fafafa)}.dsh-sdd-file-row{display:flex;align-items:center;width:100%;gap:6px;padding:7px 8px;border:0;border-radius:6px;background:transparent;color:inherit;text-align:left;cursor:pointer;font:12px ui-monospace,SFMono-Regular,Consolas,monospace}.dsh-sdd-file-row:hover,.dsh-sdd-file-row[data-selected]{background:var(--dsw-alias-interactive-bg-hover,#e8e8e8)}.dsh-sdd-preview-pane{min-width:0}.dsh-sdd-preview-toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px}.dsh-sdd-preview-toolbar strong{margin-right:auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.dsh-sdd-markdown{box-sizing:border-box;max-height:56vh;overflow:auto;padding:18px;border:1px solid var(--dsw-alias-border-l1,#ddd);border-radius:9px;background:var(--dsw-alias-bg-base,#fff);line-height:1.65}.dsh-sdd-markdown h1,.dsh-sdd-markdown h2,.dsh-sdd-markdown h3{margin-top:1.3em}.dsh-sdd-markdown pre,.dsh-sdd-markdown code{font-family:ui-monospace,SFMono-Regular,Consolas,monospace}.dsh-sdd-markdown pre{overflow:auto;padding:12px;border-radius:7px;background:var(--dsw-alias-bg-layer-2,#f5f5f5)}.dsh-sdd-markdown table{border-collapse:collapse;max-width:100%;display:block;overflow:auto}.dsh-sdd-markdown th,.dsh-sdd-markdown td{border:1px solid var(--dsw-alias-border-l1,#ddd);padding:6px 9px}.dsh-sdd-image-preview{display:flex;align-items:center;justify-content:center;min-height:360px;border:1px solid var(--dsw-alias-border-l1,#ddd);border-radius:9px;background:var(--dsw-alias-bg-layer-2,#fafafa)}.dsh-sdd-image-preview img{max-width:100%;max-height:56vh}.dsh-sdd-file-note{padding:30px;text-align:center;border:1px dashed var(--dsw-alias-border-l1,#ddd);border-radius:9px;color:var(--dsw-alias-label-secondary,#666)}@media(max-width:760px){.dsh-sdd-package{grid-template-columns:1fr}.dsh-sdd-file-tree{max-height:220px}}
 `
 
 interface DialogOption { value: string; label: string }
@@ -48,14 +51,26 @@ interface RuntimeState {
 }
 
 async function call(action: SddAction): Promise<SddResponse> {
-  const response = await fetch(API_PATH, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(action) })
+  const timeout = action.kind === 'add-project-repository' ? 75_000 : 20_000
+  const response = await fetch(API_PATH, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(action), signal: AbortSignal.timeout(timeout) })
   return await response.json() as SddResponse
 }
 
 function escapeHtml(value: string): string { return value.replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]!) }
+function markdownHtml(value: string): string { return DOMPurify.sanitize(marked.parse(value, { async: false, gfm: true }) as string, { USE_PROFILES: { html: true } }) }
 function sidebarRoot(): HTMLElement | undefined { const column = document.querySelector<HTMLElement>('[data-pane="sidebar"], [class*="sidebarCol"]'); return column?.querySelector<HTMLElement>('[class*="logoRow"]')?.parentElement ?? column?.firstElementChild as HTMLElement | undefined }
 function menuAnchor(root: HTMLElement): Element | undefined { const button = root.querySelector<HTMLButtonElement>('button[class*="newSession"]'); const row = button?.closest('[class*="logoRow"]'); return (row !== null && row?.parentElement === root ? row : button) ?? undefined }
-function icon(index: number): string { return `<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="3" y="3" width="14" height="14" rx="3"/><path d="M6 10h8M10 6v8" opacity="${index === 0 ? '.2' : index === 5 ? '1' : '.45'}"/></svg>` }
+function icon(menu: MenuId): string {
+  const paths: Record<MenuId, string> = {
+    dashboard: '<rect x="3" y="3" width="5.5" height="5.5" rx="1"/><rect x="11.5" y="3" width="5.5" height="3.5" rx="1"/><rect x="3" y="11.5" width="5.5" height="5.5" rx="1"/><rect x="11.5" y="9.5" width="5.5" height="7.5" rx="1"/>',
+    requirements: '<path d="M6 3.5h6l3 3V16a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4.5a1 1 0 0 1 1-1Z"/><path d="M12 3.5V7h3M7.5 10h5M7.5 13h3.5"/><path d="m7.2 15.1.8.8 1.5-1.7"/>',
+    prototype: '<rect x="2.75" y="3" width="14.5" height="14" rx="2"/><path d="M3 7h14M7.5 7v10M10 10h4.5M10 13h3M5.1 5h.1"/>',
+    architecture: '<rect x="7" y="2.5" width="6" height="4" rx="1"/><rect x="2.5" y="13.5" width="5" height="4" rx="1"/><rect x="12.5" y="13.5" width="5" height="4" rx="1"/><path d="M10 6.5v3M5 13.5v-4h10v4"/>',
+    specification: '<path d="M5 3.5h8l2 2V16a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V4.5a1 1 0 0 1 1-1Z"/><path d="M13 3.5V6h2M8 8.5 6.5 10 8 11.5M12 8.5l1.5 1.5-1.5 1.5M9.5 13.5h3"/>',
+    development: '<circle cx="5" cy="5" r="1.75"/><circle cx="5" cy="15" r="1.75"/><circle cx="14.5" cy="6.5" r="1.75"/><path d="M5 6.75v6.5M6.75 5h2a4 4 0 0 1 4 4v1"/><path d="m11.5 13.5 1.7 1.7 3.3-3.7"/>',
+  }
+  return `<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[menu]}</svg>`
+}
 
 class SddWorkbench {
   private readonly state: RuntimeState = { menu: 'dashboard', selected: new Set(), loading: false }
@@ -93,9 +108,9 @@ class SddWorkbench {
     const root = sidebarRoot(); if (root === undefined) return
     const anchor = menuAnchor(root); if (anchor === undefined) return
     let insertBefore = anchor.nextElementSibling
-    MENUS.forEach((menu, index) => {
+    MENUS.forEach(menu => {
       let button = this.menuButtons.get(menu.id)
-      if (button === undefined) { button = document.createElement('button'); button.type = 'button'; button.className = 'dsh-sdd-menu'; button.dataset.dshSddMenu = menu.id; button.title = menu.label; button.innerHTML = `${icon(index)}<span>${menu.label}</span>`; button.addEventListener('click', () => this.open(menu.id)); this.menuButtons.set(menu.id, button) }
+      if (button === undefined) { button = document.createElement('button'); button.type = 'button'; button.className = 'dsh-sdd-menu'; button.dataset.dshSddMenu = menu.id; button.title = menu.label; button.innerHTML = `${icon(menu.id)}<span>${menu.label}</span>`; button.addEventListener('click', () => this.open(menu.id)); this.menuButtons.set(menu.id, button) }
       if (button.parentElement !== root) root.insertBefore(button, insertBefore); insertBefore = button.nextElementSibling
     })
   }
@@ -155,11 +170,13 @@ class SddWorkbench {
   private dashboardHtml(snapshot: ProjectSnapshot): string {
     const dashboard = snapshot.dashboard
     const stat = (label: string, value: string, note: string) => `<div class="dsh-sdd-stat"><span class="dsh-sdd-muted">${label}</span><b>${value}</b><span class="dsh-sdd-muted">${note}</span></div>`
-    const workload = dashboard.workload.length === 0 ? stat('工作量', '未配置', '由业务数据适配器提供估算') : dashboard.workload.map(item => stat(`工作量 · ${escapeHtml(item.unit)}`, String(item.total), `已完成 ${item.completed}`)).join('')
+    const workload = dashboard.workload.length === 0
+      ? stat('工作量', '未配置', '由业务数据适配器提供估算')
+      : `<div class="dsh-sdd-stat"><span class="dsh-sdd-muted">工作量</span><div class="dsh-sdd-workload-list">${dashboard.workload.map(item => `<div class="dsh-sdd-workload-row" title="${escapeHtml(item.unit)} · 已完成 ${item.completed} / 总计 ${item.total}"><span>${escapeHtml(item.unit)}</span><strong>${item.completed} / ${item.total}</strong></div>`).join('')}</div></div>`
     const pendingChanges = snapshot.workItems.filter(item => item.status === 'change-pending' || item.status === 'removed-pending').length
     return `<section class="dsh-sdd-card" style="margin-bottom:14px"><h2>需求与缺陷管理</h2><p class="dsh-sdd-muted">统一从业务系统导入或再次同步需求包、缺陷和问题；阶段页面只处理各自的交付流程。</p><div class="dsh-sdd-actions"><button class="dsh-sdd-button primary" data-action="import-source">导入或同步需求/缺陷</button></div></section><div class="dsh-sdd-stats">${stat('总体完成度', `${dashboard.overallCompletion}%`, '五阶段质量门禁平均值')}${stat('需求工作单元', String(snapshot.workItems.length), `待处理变更 ${pendingChanges}`)}${stat('需求', String(dashboard.requirements.total), `已追踪 ${dashboard.requirements.traced}`)}${stat('缺陷', String(dashboard.defects.total), `待处理 ${dashboard.defects.open} · 已解决 ${dashboard.defects.resolved}`)}${stat('交付件', String(dashboard.artifacts.total), `草稿 ${dashboard.artifacts.drafts} · 已接受 ${dashboard.artifacts.accepted}`)}${stat('代码空间', String(dashboard.development.workspaces), `变更文件 ${dashboard.development.changedFiles}`)}${stat('测试', String(dashboard.development.passingTests + dashboard.development.failingTests), `通过 ${dashboard.development.passingTests} · 失败 ${dashboard.development.failingTests}`)}${workload}</div>
-      <section class="dsh-sdd-card"><h2>阶段进度</h2><div class="dsh-sdd-stage-grid">${dashboard.stages.map(item => { const stage = STAGES.find(value => value.id === item.stage)!; return `<div class="dsh-sdd-stat"><strong>${stage.label}</strong><span class="dsh-sdd-badge">${item.status}</span><div class="dsh-sdd-progress"><span style="width:${item.completion}%"></span></div><span class="dsh-sdd-muted">${item.completion}% · draft ${item.drafts} · accepted ${item.accepted}</span></div>` }).join('')}</div></section>
-      <div class="dsh-sdd-grid" style="margin-top:14px"><section class="dsh-sdd-card"><h2>质量与追踪</h2><p>来源追踪覆盖率：<strong>${dashboard.traceability}%</strong></p>${dashboard.blockers.length === 0 ? '<div class="dsh-sdd-empty">当前没有结构化阻塞项</div>' : `<ul class="dsh-sdd-checks">${dashboard.blockers.map(item => `<li data-fail>${escapeHtml(item)}</li>`).join('')}</ul>`}</section><section class="dsh-sdd-card"><h2>最近活动</h2>${dashboard.recentEvents.length === 0 ? '<div class="dsh-sdd-empty">暂无事件</div>' : `<div class="dsh-sdd-list">${dashboard.recentEvents.slice(0, 10).map(event => `<div class="dsh-sdd-row"><span></span><span><strong>${escapeHtml(event.subject)}</strong><span class="dsh-sdd-muted">${escapeHtml(event.type)} · ${escapeHtml(event.time)}</span></span></div>`).join('')}</div>`}</section></div>${this.traceabilityHtml(snapshot)}`
+      <section class="dsh-sdd-card"><h2>阶段进度</h2><div class="dsh-sdd-stage-grid">${dashboard.stages.map(item => { const stage = STAGES.find(value => value.id === item.stage)!; return `<div class="dsh-sdd-stat"><div class="dsh-sdd-stage-head"><strong>${stage.label}</strong><span class="dsh-sdd-badge">${item.status}</span></div><div class="dsh-sdd-progress"><span style="width:${item.completion}%"></span></div><span class="dsh-sdd-muted">${item.completion}% · draft ${item.drafts} · accepted ${item.accepted}</span></div>` }).join('')}</div></section>
+      <div class="dsh-sdd-grid dsh-sdd-dashboard-columns" style="margin-top:14px"><section class="dsh-sdd-card"><h2>质量与追踪</h2><p>来源追踪覆盖率：<strong>${dashboard.traceability}%</strong></p>${dashboard.blockers.length === 0 ? '<div class="dsh-sdd-empty">当前没有结构化阻塞项</div>' : `<ul class="dsh-sdd-checks">${dashboard.blockers.map(item => `<li data-fail>${escapeHtml(item)}</li>`).join('')}</ul>`}</section><section class="dsh-sdd-card"><h2>最近活动</h2>${dashboard.recentEvents.length === 0 ? '<div class="dsh-sdd-empty">暂无事件</div>' : `<div class="dsh-sdd-list dsh-sdd-scroll-list">${dashboard.recentEvents.slice(0, 10).map(event => `<div class="dsh-sdd-row"><span></span><span><strong>${escapeHtml(event.subject)}</strong><span class="dsh-sdd-muted">${escapeHtml(event.type)} · ${escapeHtml(event.time)}</span></span></div>`).join('')}</div>`}</section></div>${this.traceabilityHtml(snapshot)}`
   }
 
   private traceabilityHtml(snapshot: ProjectSnapshot): string {
@@ -171,7 +188,7 @@ class SddWorkbench {
       const detail = items.length === 0 ? '—' : items.map(item => `${item.key} v${item.version} (${item.status}) ← ${item.basedOn.map(ref => artifacts.find(value => value.uid === ref.uid)?.key ?? ref.uid).join('、') || workItem.key}`).join('；')
       return `<div class="dsh-sdd-row"><span></span><span><strong>${escapeHtml(stage.label)}</strong><span class="dsh-sdd-muted">${escapeHtml(detail)}</span></span></div>`
     }).join('')
-    return `<section class="dsh-sdd-card" style="margin-top:14px"><h2>交付追踪矩阵 · ${escapeHtml(workItem.key)}</h2><p class="dsh-sdd-muted">外部需求、五阶段交付件及其固定上游版本。</p><div class="dsh-sdd-list">${rows}</div></section>`
+    return `<section class="dsh-sdd-card" style="margin-top:14px"><h2>交付追踪矩阵 · ${escapeHtml(workItem.key)}</h2><p class="dsh-sdd-muted">外部需求、五阶段交付件及其固定上游版本。</p><div class="dsh-sdd-list dsh-sdd-trace-list">${rows}</div></section>`
   }
 
   private workbenchHtml(snapshot: ProjectSnapshot, stage: StageId): string {
@@ -197,8 +214,12 @@ class SddWorkbench {
     const scope = workItem.repositoryScope?.join('、') || '未确认'
     const targets = workItem.developmentTargets?.join('、') || '未确认'
     const openSpec = workItem.openSpec?.enabled === true ? `${workItem.openSpec.repositoryId}:${workItem.openSpec.path}` : '未启用'
-    const action = stage === 'architecture' ? '<button class="dsh-sdd-button" data-action="add-repository">添加项目代码仓库</button><button class="dsh-sdd-button" data-action="configure-scope">确认仓库范围</button>'
-      : stage === 'specification' ? '<button class="dsh-sdd-button" data-action="configure-targets">确认开发目标与 OpenSpec</button>' : ''
+    if (stage === 'architecture') {
+      const repositories = snapshot.project?.development.repositories ?? []
+      const rows = repositories.map(repository => `<div class="dsh-sdd-row"><input type="checkbox" data-repository-scope="${escapeHtml(repository.id)}"${workItem.repositoryScope?.includes(repository.id) === true ? ' checked' : ''}><span><strong>${escapeHtml(repository.id)}</strong><span class="dsh-sdd-muted">${escapeHtml(repository.source)} · 基线 ${escapeHtml(repository.baseBranch)}</span></span><button class="dsh-sdd-button" data-remove-repository="${escapeHtml(repository.id)}">移除</button></div>`).join('')
+      return `<section class="dsh-sdd-card" style="margin-bottom:14px"><h2>本需求代码仓库范围</h2><p class="dsh-sdd-muted">添加后仓库会立即显示。勾选本需求可能影响的仓库，再在当前页面确认范围。本地路径添加时只校验 Git 仓库和分支，开发阶段创建 Worktree；远程地址添加时只校验分支可访问，开发阶段才 Clone 到需求隔离空间。</p><div class="dsh-sdd-list">${rows || '<div class="dsh-sdd-empty">尚未添加项目代码仓库</div>'}</div><div class="dsh-sdd-actions"><button class="dsh-sdd-button" data-action="add-repository">添加项目代码仓库</button><button class="dsh-sdd-button primary" data-action="configure-scope"${repositories.length === 0 ? ' disabled' : ''}>确认当前勾选范围</button></div><p class="dsh-sdd-muted">已确认范围：${escapeHtml(scope)}　开发目标：${escapeHtml(targets)}　OpenSpec：${escapeHtml(openSpec)}</p></section>`
+    }
+    const action = stage === 'specification' ? '<button class="dsh-sdd-button" data-action="configure-targets">确认开发目标与 OpenSpec</button>' : ''
     return `<section class="dsh-sdd-card" style="margin-bottom:14px"><h2>本需求开发边界</h2><p class="dsh-sdd-muted">系统设计确认仓库范围，规格设计从该范围中确认具体开发目标。未确认时对应阶段不能开始对话或验收。</p><div>仓库范围：<strong>${escapeHtml(scope)}</strong>　开发目标：<strong>${escapeHtml(targets)}</strong>　OpenSpec：<strong>${escapeHtml(openSpec)}</strong></div>${action ? `<div class="dsh-sdd-actions">${action}</div>` : ''}</section>`
   }
 
@@ -209,7 +230,7 @@ class SddWorkbench {
     const report = snapshot.quality[item.uid]; const run = snapshot.runs.find(value => value.artifactUid === item.uid && value.status !== 'completed')
     const selectable = item.status === 'draft' || item.status === 'in-review'
     const checks = report === undefined ? '' : `<ul class="dsh-sdd-checks">${report.checks.filter(check => check.status !== 'passed').slice(0, 6).map(check => `<li data-fail>${escapeHtml(check.label)}：${escapeHtml(check.message)}</li>`).join('')}</ul>`
-    return `<div class="dsh-sdd-row">${selectable ? `<input type="radio" name="sdd-target" data-target="${escapeHtml(item.uid)}" ${this.state.targetArtifactUid === item.uid ? 'checked' : ''}>` : '<span></span>'}<span><strong>${escapeHtml(item.key)} · ${escapeHtml(item.title)}</strong><span class="dsh-sdd-muted">v${escapeHtml(item.version)} · ${escapeHtml(item.relativeDirectory)}/${escapeHtml(item.entry)} · 文件 ${item.files.length}</span>${checks}<div class="dsh-sdd-actions"><button class="dsh-sdd-button" data-preview-artifact="${escapeHtml(item.uid)}">查看交付包</button><button class="dsh-sdd-button" data-quality="${escapeHtml(item.uid)}">质量检查 ${report?.score ?? 0}%</button>${run?.sessionId ? `<button class="dsh-sdd-button" data-resume="${escapeHtml(run.uid)}">恢复对话</button><button class="dsh-sdd-button" data-sync="${escapeHtml(run.uid)}">同步结论</button>` : ''}${selectable ? `<button class="dsh-sdd-button" data-accept="${escapeHtml(item.uid)}">验收</button>` : ''}${item.status === 'accepted' ? `<button class="dsh-sdd-button" data-revision="${escapeHtml(item.uid)}">创建新修订</button>` : ''}${run !== undefined && item.status === 'accepted' ? `<button class="dsh-sdd-button" data-complete="${escapeHtml(run.uid)}">完成阶段运行</button>` : ''}</div></span><span><span class="dsh-sdd-badge">${escapeHtml(item.status)}</span>${run ? `<span class="dsh-sdd-badge">${escapeHtml(run.status)}</span>` : ''}</span></div>`
+    return `<div class="dsh-sdd-row">${selectable ? `<input type="radio" name="sdd-target" data-target="${escapeHtml(item.uid)}" ${this.state.targetArtifactUid === item.uid ? 'checked' : ''}>` : '<span></span>'}<span><strong>${escapeHtml(item.key)} · ${escapeHtml(item.title)}</strong><span class="dsh-sdd-muted">v${escapeHtml(item.version)} · ${escapeHtml(item.relativeDirectory)}/${escapeHtml(item.entry)} · 文件 ${item.files.length}</span>${checks}<div class="dsh-sdd-actions"><button class="dsh-sdd-button" data-preview-artifact="${escapeHtml(item.uid)}">查看交付包</button><button class="dsh-sdd-button" data-quality="${escapeHtml(item.uid)}">质量检查 ${report?.score ?? 0}%</button>${run?.sessionId ? `<button class="dsh-sdd-button" data-resume="${escapeHtml(run.uid)}">恢复对话</button><button class="dsh-sdd-button" data-sync="${escapeHtml(run.uid)}">同步结论</button>` : ''}${selectable ? `<button class="dsh-sdd-button" data-accept="${escapeHtml(item.uid)}">验收</button><button class="dsh-sdd-button" data-discard="${escapeHtml(item.uid)}">删除草稿</button>` : ''}${item.status === 'accepted' ? `<button class="dsh-sdd-button" data-revision="${escapeHtml(item.uid)}">发起变更（新修订）</button>` : ''}${run !== undefined && item.status === 'accepted' ? `<button class="dsh-sdd-button" data-complete="${escapeHtml(run.uid)}">完成阶段运行</button>` : ''}</div></span><span><span class="dsh-sdd-badge">${escapeHtml(item.status)}</span>${run ? `<span class="dsh-sdd-badge">${escapeHtml(run.status)}</span>` : ''}</span></div>`
   }
 
   private developmentHtml(snapshot: ProjectSnapshot): string {
@@ -231,6 +252,7 @@ class SddWorkbench {
     root.querySelector<HTMLElement>('[data-action="view-template"]')?.addEventListener('click', () => this.showTemplate())
     root.querySelector<HTMLElement>('[data-action="configure-scope"]')?.addEventListener('click', () => { void this.configureRepositoryScope() })
     root.querySelector<HTMLElement>('[data-action="add-repository"]')?.addEventListener('click', () => { void this.addProjectRepository() })
+    root.querySelectorAll<HTMLButtonElement>('[data-remove-repository]').forEach(button => button.addEventListener('click', () => { void this.removeProjectRepository(button.dataset.removeRepository!) }))
     root.querySelector<HTMLElement>('[data-action="configure-targets"]')?.addEventListener('click', () => { void this.configureDevelopmentTargets() })
     root.querySelector<HTMLElement>('[data-action="reinitialize"]')?.addEventListener('click', () => { void this.reinitialize() })
     root.querySelectorAll<HTMLInputElement>('[data-input]').forEach(input => input.addEventListener('change', () => { const uid = input.dataset.input!; if (input.checked) this.state.selected.add(uid); else this.state.selected.delete(uid) }))
@@ -238,6 +260,7 @@ class SddWorkbench {
     root.querySelectorAll<HTMLButtonElement>('[data-quality]').forEach(button => button.addEventListener('click', () => { void this.mutate({ kind: 'quality', workspaceId: this.state.workspaceId!, artifactUid: button.dataset.quality! }) }))
     root.querySelectorAll<HTMLButtonElement>('[data-preview-artifact]').forEach(button => button.addEventListener('click', () => { void this.showArtifact(button.dataset.previewArtifact!) }))
     root.querySelectorAll<HTMLButtonElement>('[data-revision]').forEach(button => button.addEventListener('click', () => { void this.mutate({ kind: 'create-revision', workspaceId: this.state.workspaceId!, artifactUid: button.dataset.revision! }) }))
+    root.querySelectorAll<HTMLButtonElement>('[data-discard]').forEach(button => button.addEventListener('click', () => { void this.discardDraft(button.dataset.discard!) }))
     root.querySelectorAll<HTMLButtonElement>('[data-accept]').forEach(button => button.addEventListener('click', () => { void this.accept(button.dataset.accept!) }))
     root.querySelectorAll<HTMLButtonElement>('[data-resume]').forEach(button => button.addEventListener('click', () => { void this.resumeRun(button.dataset.resume!, false) }))
     root.querySelectorAll<HTMLButtonElement>('[data-sync]').forEach(button => button.addEventListener('click', () => { void this.resumeRun(button.dataset.sync!, true) }))
@@ -247,33 +270,71 @@ class SddWorkbench {
     root.querySelector<HTMLButtonElement>('[data-resolve-removal]')?.addEventListener('click', () => { void this.resolveRemoval() })
   }
 
-  private showTemplate(): void {
+  private async showTemplate(): Promise<void> {
     if (this.state.menu === 'dashboard') return
     const stage = STAGES.find(item => item.id === this.state.menu)!
-    const backdrop = document.createElement('div')
-    backdrop.className = 'dsh-sdd-modal-backdrop'
-    backdrop.innerHTML = `<section class="dsh-sdd-modal dsh-sdd-template-modal" role="dialog" aria-modal="true" aria-label="${escapeHtml(stage.label)}交付件模板"><header class="dsh-sdd-modal-header"><h2>${escapeHtml(stage.label)} · 交付件模板</h2><p class="dsh-sdd-muted">创建草稿和阶段 AI 输出都使用这一份模板。AI 必须保留全部二级章节并把确认结论写入对应位置。</p></header><div class="dsh-sdd-modal-body"><pre class="dsh-sdd-template-preview">${escapeHtml(artifactTemplate(stage.id))}</pre></div><footer class="dsh-sdd-modal-footer"><button class="dsh-sdd-button primary" type="button" data-template-close>关闭</button></footer></section>`
-    this.container!.appendChild(backdrop)
-    const close = () => backdrop.remove()
-    backdrop.querySelector<HTMLElement>('[data-template-close]')!.addEventListener('click', close)
-    backdrop.addEventListener('click', event => { if (event.target === backdrop) close() })
+    try {
+      const response = await call({ kind: 'read-stage-template', workspaceId: this.state.workspaceId!, stage: stage.id })
+      if (!response.ok) throw new Error(response.error)
+      if (!('template' in response)) throw new Error('Host returned an unexpected template preview')
+      const template = response.template
+      const backdrop = document.createElement('div'); backdrop.className = 'dsh-sdd-modal-backdrop'
+      backdrop.innerHTML = `<section class="dsh-sdd-modal dsh-sdd-package-modal" role="dialog" aria-modal="true" aria-label="${escapeHtml(stage.label)}交付件模板"><header class="dsh-sdd-modal-header"><h2>${escapeHtml(stage.label)} · ${escapeHtml(template.documentName)}</h2><p class="dsh-sdd-muted">项目模板 ${escapeHtml(template.contentPath)} · v${escapeHtml(template.version)} · ${escapeHtml(template.contentHash)}</p></header><div class="dsh-sdd-modal-body"><div class="dsh-sdd-preview-toolbar"><strong>${escapeHtml(template.contentPath)}</strong><button class="dsh-sdd-button" data-template-mode="preview">预览</button><button class="dsh-sdd-button primary" data-template-mode="source">源码</button><button class="dsh-sdd-button" data-template-open="content">系统打开模板</button><button class="dsh-sdd-button" data-template-open="config">打开规则</button><button class="dsh-sdd-button" data-template-open="directory">打开模板目录</button></div><div data-template-preview></div><p class="dsh-sdd-muted">必填二级章节：${escapeHtml(template.requiredSections.join('、'))}。修改项目模板只影响之后创建的草稿；已有交付件继续使用自身模板快照。</p></div><footer class="dsh-sdd-modal-footer"><button class="dsh-sdd-button primary" type="button" data-template-close>关闭</button></footer></section>`
+      this.container!.appendChild(backdrop)
+      const preview = backdrop.querySelector<HTMLElement>('[data-template-preview]')!
+      const render = (mode: 'preview' | 'source') => {
+        preview.innerHTML = mode === 'preview' ? `<article class="dsh-sdd-markdown">${markdownHtml(template.content)}</article>` : `<pre class="dsh-sdd-template-preview">${escapeHtml(template.content)}</pre>`
+        backdrop.querySelectorAll<HTMLButtonElement>('[data-template-mode]').forEach(button => button.classList.toggle('primary', button.dataset.templateMode === mode))
+      }
+      render('source')
+      backdrop.querySelectorAll<HTMLButtonElement>('[data-template-mode]').forEach(button => button.addEventListener('click', () => render(button.dataset.templateMode as 'preview' | 'source')))
+      backdrop.querySelectorAll<HTMLButtonElement>('[data-template-open]').forEach(button => button.addEventListener('click', () => { void this.openTemplatePath(template, button.dataset.templateOpen as 'directory' | 'config' | 'content') }))
+      const close = () => backdrop.remove(); backdrop.querySelector<HTMLElement>('[data-template-close]')!.addEventListener('click', close); backdrop.addEventListener('click', event => { if (event.target === backdrop) close() })
+    } catch (error) { this.state.error = error instanceof Error ? error.message : String(error); this.render() }
+  }
+
+  private async openTemplatePath(template: StageTemplatePreview, target: 'directory' | 'config' | 'content'): Promise<void> {
+    const response = await call({ kind: 'open-stage-template', workspaceId: this.state.workspaceId!, stage: template.stage, target })
+    if (!response.ok) { this.state.error = response.error; this.render() }
   }
 
   private async showArtifact(artifactUid: string): Promise<void> {
     const artifact = this.state.snapshot?.artifacts.find(item => item.uid === artifactUid)
     if (artifact === undefined) return
     try {
-      const response = await call({ kind: 'read-artifact-file', workspaceId: this.state.workspaceId!, artifactUid, path: artifact.entry })
-      if (!response.ok) throw new Error(response.error)
-      if (!('artifactFile' in response)) throw new Error('Host returned an unexpected artifact preview')
-      const inventory = artifact.files.map(file => `${file.path} · ${file.kind} · ${file.size} bytes`).join('\n')
-      const backdrop = document.createElement('div')
-      backdrop.className = 'dsh-sdd-modal-backdrop'
-      backdrop.innerHTML = `<section class="dsh-sdd-modal dsh-sdd-template-modal" role="dialog" aria-modal="true"><header class="dsh-sdd-modal-header"><h2>${escapeHtml(artifact.key)} · v${escapeHtml(artifact.version)}</h2><p class="dsh-sdd-muted">${escapeHtml(artifact.relativeDirectory)} · 整包哈希 ${escapeHtml(artifact.contentHash ?? '尚未冻结')}</p></header><div class="dsh-sdd-modal-body"><strong>交付包文件</strong><pre class="dsh-sdd-template-preview">${escapeHtml(inventory || '无文件')}</pre><strong>${escapeHtml(artifact.entry)}</strong><pre class="dsh-sdd-template-preview">${escapeHtml(response.artifactFile.content)}</pre></div><footer class="dsh-sdd-modal-footer"><button class="dsh-sdd-button primary" type="button" data-artifact-close>关闭</button></footer></section>`
+      const files = [{ path: 'manifest.yaml', kind: 'manifest' as const, size: 0 }, ...artifact.files]
+      const directories = [...new Set(files.flatMap(file => { const parts = file.path.split('/'); return parts.slice(0, -1).map((_part, index) => parts.slice(0, index + 1).join('/')) }))].sort()
+      const rows = [...directories.map(path => ({ path, directory: true, kind: 'directory', size: 0 })), ...files.map(file => ({ ...file, directory: false }))]
+        .sort((left, right) => left.path.localeCompare(right.path) || Number(right.directory) - Number(left.directory))
+        .map(item => `<button class="dsh-sdd-file-row" style="padding-left:${8 + (item.path.split('/').length - 1) * 14}px" data-${item.directory ? 'artifact-directory' : 'artifact-file'}="${escapeHtml(item.path)}"><span>${item.directory ? '📁' : item.kind === 'markdown' ? 'Ⓜ' : item.kind === 'image' ? '▣' : item.kind === 'binary' ? '◆' : '▤'}</span><span>${escapeHtml(item.path.split('/').pop()!)}</span>${item.directory ? '' : `<span class="dsh-sdd-muted">${item.size} B</span>`}</button>`).join('')
+      const backdrop = document.createElement('div'); backdrop.className = 'dsh-sdd-modal-backdrop'
+      backdrop.innerHTML = `<section class="dsh-sdd-modal dsh-sdd-package-modal" role="dialog" aria-modal="true"><header class="dsh-sdd-modal-header"><h2>${escapeHtml(artifact.key)} · v${escapeHtml(artifact.version)}</h2><p class="dsh-sdd-muted">${escapeHtml(artifact.relativeDirectory)} · ${files.length} 个文件 · 整包哈希 ${escapeHtml(artifact.contentHash ?? '尚未冻结')}</p></header><div class="dsh-sdd-modal-body"><div class="dsh-sdd-preview-toolbar"><button class="dsh-sdd-button" data-artifact-open-root>使用系统工具打开交付包目录</button></div><div class="dsh-sdd-package"><nav class="dsh-sdd-file-tree" aria-label="交付包文件">${rows}</nav><section class="dsh-sdd-preview-pane"><div class="dsh-sdd-preview-toolbar"><strong data-artifact-current>请选择文件</strong><button class="dsh-sdd-button" data-artifact-mode="preview">预览</button><button class="dsh-sdd-button" data-artifact-mode="source">源码</button><button class="dsh-sdd-button" data-artifact-open-file disabled>使用系统工具打开</button></div><div data-artifact-preview><div class="dsh-sdd-file-note">请选择左侧文件。</div></div></section></div></div><footer class="dsh-sdd-modal-footer"><button class="dsh-sdd-button primary" type="button" data-artifact-close>关闭</button></footer></section>`
       this.container!.appendChild(backdrop)
-      const close = () => backdrop.remove()
-      backdrop.querySelector<HTMLElement>('[data-artifact-close]')!.addEventListener('click', close)
-      backdrop.addEventListener('click', event => { if (event.target === backdrop) close() })
+      const preview = backdrop.querySelector<HTMLElement>('[data-artifact-preview]')!; const current = backdrop.querySelector<HTMLElement>('[data-artifact-current]')!; const openFile = backdrop.querySelector<HTMLButtonElement>('[data-artifact-open-file]')!
+      let selectedPath = ''; let selectedFile: { kind: string; content?: string; dataUrl?: string } | undefined; let mode: 'preview' | 'source' = 'preview'
+      const render = () => {
+        if (selectedFile === undefined) return
+        const markdown = selectedFile.kind === 'markdown'
+        backdrop.querySelectorAll<HTMLButtonElement>('[data-artifact-mode]').forEach(button => { button.hidden = !markdown; button.classList.toggle('primary', button.dataset.artifactMode === mode) })
+        if (selectedFile.kind === 'image') preview.innerHTML = `<div class="dsh-sdd-image-preview"><img src="${escapeHtml(selectedFile.dataUrl ?? '')}" alt="${escapeHtml(selectedPath)}"></div>`
+        else if (selectedFile.kind === 'binary') preview.innerHTML = '<div class="dsh-sdd-file-note">该文件不能在浏览器中安全预览，请使用系统默认应用打开。</div>'
+        else if (markdown && mode === 'preview') preview.innerHTML = `<article class="dsh-sdd-markdown">${markdownHtml(selectedFile.content ?? '')}</article>`
+        else preview.innerHTML = `<pre class="dsh-sdd-template-preview">${escapeHtml(selectedFile.content ?? '')}</pre>`
+      }
+      const selectFile = async (path: string) => {
+        const response = await call({ kind: 'read-artifact-file', workspaceId: this.state.workspaceId!, artifactUid, path })
+        if (!response.ok) throw new Error(response.error); if (!('artifactFile' in response)) throw new Error('Host returned an unexpected artifact preview')
+        selectedPath = path; selectedFile = response.artifactFile; mode = 'preview'; current.textContent = path; openFile.disabled = false
+        backdrop.querySelectorAll<HTMLElement>('[data-artifact-file]').forEach(row => row.toggleAttribute('data-selected', row.dataset.artifactFile === path)); render()
+      }
+      const openPath = async (path: string) => { const response = await call({ kind: 'open-artifact-path', workspaceId: this.state.workspaceId!, artifactUid, path }); if (!response.ok) throw new Error(response.error) }
+      backdrop.querySelectorAll<HTMLButtonElement>('[data-artifact-file]').forEach(button => button.addEventListener('click', () => { void selectFile(button.dataset.artifactFile!).catch(error => { this.state.error = String(error); this.render() }) }))
+      backdrop.querySelectorAll<HTMLButtonElement>('[data-artifact-directory]').forEach(button => button.addEventListener('click', () => { void openPath(button.dataset.artifactDirectory!).catch(error => { this.state.error = String(error); this.render() }) }))
+      backdrop.querySelectorAll<HTMLButtonElement>('[data-artifact-mode]').forEach(button => button.addEventListener('click', () => { mode = button.dataset.artifactMode as 'preview' | 'source'; render() }))
+      backdrop.querySelector<HTMLElement>('[data-artifact-open-root]')!.addEventListener('click', () => { void openPath('').catch(error => { this.state.error = String(error); this.render() }) })
+      openFile.addEventListener('click', () => { void openPath(selectedPath).catch(error => { this.state.error = String(error); this.render() }) })
+      const close = () => backdrop.remove(); backdrop.querySelector<HTMLElement>('[data-artifact-close]')!.addEventListener('click', close); backdrop.addEventListener('click', event => { if (event.target === backdrop) close() })
+      await selectFile(artifact.entry)
     } catch (error) { this.state.error = error instanceof Error ? error.message : String(error); this.render() }
   }
 
@@ -281,20 +342,15 @@ class SddWorkbench {
     const snapshot = this.state.snapshot; const workItem = snapshot?.workItems.find(item => item.uid === this.state.workItemUid)
     if (snapshot?.project === undefined || workItem === undefined) return
     const repositories = snapshot.project.development.repositories
-    if (repositories.length === 0) { this.state.error = '请先在 .sdd/project.yaml 配置项目可用代码仓库'; return this.render() }
-    const values = await this.openForm({
-      title: `确认系统仓库范围 · ${workItem.key}`, description: '选择本需求可能影响的所有代码仓库。规格设计只能从这个范围中选择具体开发目标。', submitLabel: '保存仓库范围',
-      fields: repositories.map(repository => ({ name: `repo-${repository.id}`, label: `${repository.id} · ${repository.source}`, type: 'checkbox' as const, value: workItem.repositoryScope?.includes(repository.id) === true })),
-    })
-    if (values === undefined) return
-    const repositoryScope = repositories.filter(repository => values[`repo-${repository.id}`] === true).map(repository => repository.id)
+    if (repositories.length === 0) { this.state.error = '请先添加项目代码仓库'; return this.render() }
+    const repositoryScope = [...(this.container?.querySelectorAll<HTMLInputElement>('[data-repository-scope]:checked') ?? [])].map(input => input.dataset.repositoryScope!)
     const developmentTargets = (workItem.developmentTargets ?? []).filter(id => repositoryScope.includes(id))
     await this.mutate({ kind: 'update-work-item-settings', workspaceId: this.state.workspaceId!, workItemUid: workItem.uid, repositoryScope, developmentTargets, openSpec: developmentTargets.includes(workItem.openSpec?.repositoryId ?? '') ? workItem.openSpec : { enabled: false } })
   }
 
   private async addProjectRepository(): Promise<void> {
     const values = await this.openForm({
-      title: '添加项目代码仓库', description: '把代码仓库加入项目目录后，系统设计可以将它纳入具体需求的仓库范围。测试命令仍可在 project.yaml 中补充。', submitLabel: '添加仓库',
+      title: '添加项目代码仓库', description: '添加时只验证来源和基线分支，不复制或下载代码。添加成功后会立即显示；开发阶段才为具体需求创建本地 Worktree 或远程 Clone。测试命令仍可在 project.yaml 中补充。', submitLabel: '验证并添加',
       fields: [
         { name: 'id', label: '仓库标识', type: 'text', required: true, placeholder: '例如：payment-web' },
         { name: 'source', label: '本地路径或 Git 地址', type: 'text', required: true, placeholder: '例如：git@github.com:company/payment-web.git' },
@@ -303,6 +359,27 @@ class SddWorkbench {
     })
     if (values === undefined) return
     await this.mutate({ kind: 'add-project-repository', workspaceId: this.state.workspaceId!, id: String(values.id), source: String(values.source), baseBranch: String(values.baseBranch) })
+  }
+
+  private async removeProjectRepository(id: string): Promise<void> {
+    const values = await this.openForm({
+      title: `移除项目代码仓库 · ${id}`, description: '只移除 SDD 项目配置，不会删除本地或远程代码仓库。所有需求中对它的仓库范围、开发目标和 OpenSpec 关联也会一并清除。已创建隔离开发空间时不允许移除。', submitLabel: '确认移除',
+      fields: [{ name: 'confirmed', label: '我确认从项目配置中移除此仓库', type: 'checkbox', required: true }],
+    })
+    if (values?.confirmed !== true) return
+    await this.mutate({ kind: 'remove-project-repository', workspaceId: this.state.workspaceId!, id })
+  }
+
+  private async discardDraft(artifactUid: string): Promise<void> {
+    const artifact = this.state.snapshot?.artifacts.find(item => item.uid === artifactUid)
+    if (artifact === undefined) return
+    const values = await this.openForm({
+      title: `删除草稿 · ${artifact.key} v${artifact.version}`, description: '草稿交付包及其阶段运行记录会移入 .sdd/trash，可从文件仓库恢复；已验收的上一版本不会受影响。已创建代码开发空间时不允许删除。', submitLabel: '移入回收目录',
+      fields: [{ name: 'confirmed', label: '我确认删除这个草稿修订', type: 'checkbox', required: true }],
+    })
+    if (values?.confirmed !== true) return
+    if (this.state.targetArtifactUid === artifactUid) this.state.targetArtifactUid = undefined
+    await this.mutate({ kind: 'discard-draft', workspaceId: this.state.workspaceId!, artifactUid })
   }
 
   private async configureDevelopmentTargets(): Promise<void> {

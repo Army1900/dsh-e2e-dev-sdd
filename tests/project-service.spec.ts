@@ -1,18 +1,23 @@
-import { mkdtemp, readFile, writeFile } from 'node:fs/promises'
+import { execFileSync } from 'node:child_process'
+import { mkdir, mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { ApiProxy } from '@deepseek-ai/dsh-host-apiproxy'
 import { describe, expect, it } from 'vitest'
+import { parse, stringify } from 'yaml'
 import { SddProjectService } from '../src/project-service.ts'
 import type { SddSourceRegistry } from '../src/extensions.ts'
 import type { StageSessionController } from '../src/session-controller.ts'
 import type { SourceBundle } from '../src/protocol.ts'
 import { ManualSourceProvider } from '../src/providers/manual-source.ts'
 
-function api(path: string): ApiProxy {
+function api(path: string, opened: string[] = []): ApiProxy {
   return {
     workspace: {
       list: async (request: any) => ({ rpcId: request.rpcId, result: { ok: true, value: { archivedSessionIds: [], items: [{ workspaceId: 'w1', path, title: 'Demo', sessionIds: [], createdAt: new Date(0).toISOString(), updatedAt: new Date(0).toISOString() }] } } }),
+    },
+    host: {
+      openPath: async (request: any) => { opened.push(request.payload.path); return { rpcId: request.rpcId, result: { ok: true, value: { opened: true } } } },
     },
   } as unknown as ApiProxy
 }
@@ -69,19 +74,45 @@ describe('SddProjectService', () => {
     snapshot = await service.snapshot('w1')
     expect(snapshot.artifacts[0]?.status).toBe('accepted')
     expect(snapshot.artifacts[0]?.contentHash).toMatch(/^sha256:/)
-    expect(snapshot.artifacts[0]?.files.map(file => file.path)).toEqual(['deliverable.md', 'notes.txt'])
+    expect(snapshot.artifacts[0]?.files.map(file => file.path)).toEqual(['.template/deliverable.md', '.template/template.yaml', 'deliverable.md', 'notes.txt'])
     const preview = await service.execute({ kind: 'read-artifact-file', workspaceId: 'w1', artifactUid: snapshot.artifacts[0]!.uid, path: 'notes.txt' })
     expect(preview).toMatchObject({ artifactFile: { content: '评审附件。\n' } })
     await service.execute({ kind: 'create-revision', workspaceId: 'w1', artifactUid: snapshot.artifacts[0]!.uid })
     snapshot = await service.snapshot('w1')
-    const revision = snapshot.artifacts.find(item => item.status === 'draft')!
+    let revision = snapshot.artifacts.find(item => item.status === 'draft')!
     expect(revision).toMatchObject({ key: 'REQ-0001', version: '0.2.0', supersedes: { uid: snapshot.artifacts.find(item => item.status === 'accepted')!.uid } })
+    await service.execute({ kind: 'discard-draft', workspaceId: 'w1', artifactUid: revision.uid })
+    snapshot = await service.snapshot('w1')
+    expect(snapshot.artifacts).toHaveLength(1)
+    expect(await readdir(join(root, '.sdd/trash/artifacts'))).toHaveLength(1)
+    await service.execute({ kind: 'create-revision', workspaceId: 'w1', artifactUid: snapshot.artifacts[0]!.uid })
+    snapshot = await service.snapshot('w1'); revision = snapshot.artifacts.find(item => item.status === 'draft')!
     await service.execute({ kind: 'accept', workspaceId: 'w1', artifactUid: revision.uid, checklist: Object.fromEntries(Array.from({ length: 5 }, (_value, index) => [`item-${index + 1}`, true])) })
     snapshot = await service.snapshot('w1')
     expect(snapshot.artifacts.find(item => item.version === '0.1.0')?.status).toBe('superseded')
     expect(snapshot.artifacts.find(item => item.version === '0.2.0')?.status).toBe('accepted')
     expect(await readFile(join(root, '.sdd/project.yaml'), 'utf8')).toContain('dsh-sdd/project@1')
     expect(await readFile(join(root, '.sdd/business/README.md'), 'utf8')).toContain('唯一的项目级业务自定义目录')
+  })
+
+  it('uses editable project templates, snapshots them, and safely opens package paths', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-sdd-')); const opened: string[] = []
+    const service = new SddProjectService(api(root, opened))
+    await service.initialize('w1')
+    const configPath = join(root, '.sdd/templates/requirements/template.yaml')
+    const contentPath = join(root, '.sdd/templates/requirements/deliverable.md')
+    const config = parse(await readFile(configPath, 'utf8')) as { requiredSections: string[]; version: string }
+    config.version = '1.1.0'; config.requiredSections.push('企业扩展')
+    await writeFile(configPath, stringify(config), 'utf8')
+    await writeFile(contentPath, `${await readFile(contentPath, 'utf8')}\n## 企业扩展\n\n待补充。\n`, 'utf8')
+    await service.execute({ kind: 'create-draft', workspaceId: 'w1', stage: 'requirements', title: '定制模板需求', basedOn: [] })
+    const snapshot = await service.snapshot('w1'); const artifact = snapshot.artifacts[0]!
+    expect(artifact.template).toMatchObject({ version: '1.1.0', requiredSections: expect.arrayContaining(['企业扩展']), snapshotPath: '.template/deliverable.md' })
+    expect(await readFile(join(root, artifact.relativeDirectory, 'deliverable.md'), 'utf8')).toContain('## 企业扩展')
+    await service.execute({ kind: 'open-artifact-path', workspaceId: 'w1', artifactUid: artifact.uid, path: 'deliverable.md' })
+    await service.execute({ kind: 'open-stage-template', workspaceId: 'w1', stage: 'requirements', target: 'directory' })
+    expect(opened).toEqual([join(snapshot.workspace.path, artifact.relativeDirectory, 'deliverable.md'), join(snapshot.workspace.path, '.sdd/templates/requirements')])
+    await expect(service.execute({ kind: 'open-artifact-path', workspaceId: 'w1', artifactUid: artifact.uid, path: '../../project.yaml' })).rejects.toThrow('escapes')
   })
 
   it('pins only accepted upstream artifacts', async () => {
@@ -161,7 +192,10 @@ describe('SddProjectService', () => {
     expect(snapshot.workItems).toHaveLength(2)
     expect(snapshot.workItems.every(item => item.status === 'active')).toBe(true)
     const req1 = snapshot.workItems.find(item => item.key === 'REQ-1')!
-    await service.execute({ kind: 'add-project-repository', workspaceId: 'w1', id: 'web', source: '../web', baseBranch: 'main' })
+    const repository = join(root, 'web'); await mkdir(repository)
+    execFileSync('git', ['init', '-b', 'main'], { cwd: repository }); execFileSync('git', ['config', 'user.email', 'sdd@example.test'], { cwd: repository }); execFileSync('git', ['config', 'user.name', 'SDD Test'], { cwd: repository })
+    await writeFile(join(repository, 'README.md'), '# Web\n'); execFileSync('git', ['add', 'README.md'], { cwd: repository }); execFileSync('git', ['commit', '-m', 'initial'], { cwd: repository })
+    await service.execute({ kind: 'add-project-repository', workspaceId: 'w1', id: 'web', source: './web', baseBranch: 'main' })
     await service.execute({ kind: 'update-work-item-settings', workspaceId: 'w1', workItemUid: req1.uid, repositoryScope: ['web'], developmentTargets: ['web'], openSpec: { enabled: true, repositoryId: 'web', path: 'openspec' } })
     await service.execute({ kind: 'create-draft', workspaceId: 'w1', stage: 'requirements', title: req1.title, basedOn: [], sourceUids: [req1.sourceUid!, req1.bundleSourceUid!], workItemUid: req1.uid })
     snapshot = await service.snapshot('w1')
@@ -181,6 +215,10 @@ describe('SddProjectService', () => {
     expect(snapshot.workItems.find(item => item.key === 'REQ-1')).toMatchObject({ repositoryScope: ['web'], developmentTargets: ['web'], openSpec: { enabled: true, repositoryId: 'web', path: 'openspec' } })
     expect(snapshot.workItems.find(item => item.key === 'REQ-2')).toMatchObject({ status: 'removed-pending', change: { kind: 'removed' } })
     expect(snapshot.workItems.find(item => item.key === 'REQ-3')).toMatchObject({ status: 'active' })
+    await service.execute({ kind: 'remove-project-repository', workspaceId: 'w1', id: 'web' })
+    const withoutRepository = await service.snapshot('w1')
+    expect(withoutRepository.project?.development.repositories).toEqual([])
+    expect(withoutRepository.workItems.find(item => item.key === 'REQ-1')).toMatchObject({ repositoryScope: [], developmentTargets: [], openSpec: { enabled: false } })
     const removedReq2 = snapshot.workItems.find(item => item.key === 'REQ-2')!
     await service.execute({ kind: 'resolve-work-item-removal', workspaceId: 'w1', workItemUid: removedReq2.uid, decision: 'keep' })
     const retainedReq2 = (await service.snapshot('w1')).workItems.find(item => item.key === 'REQ-2')!

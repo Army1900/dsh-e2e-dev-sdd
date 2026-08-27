@@ -24,6 +24,7 @@
     "checklist": { "type": "object", "additionalProperties": { "type": "boolean" } },
     "workItemUid": { "type": "string", "format": "uuid" },
     "supersedes": { "$ref": "#/$defs/artifactReference" },
+    "template": { "$ref": "#/$defs/templateBinding" },
     "files": { "type": "array", "items": { "$ref": "#/$defs/artifactFile" } }
   },
   "$defs": {
@@ -38,6 +39,19 @@
         "size": { "type": "integer", "minimum": 0 },
         "contentHash": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
         "kind": { "enum": ["markdown", "text", "image", "binary"] }
+      }
+    },
+    "templateBinding": {
+      "type": "object", "additionalProperties": false,
+      "required": ["stage", "version", "sourcePath", "snapshotPath", "configSnapshotPath", "contentHash", "requiredSections"],
+      "properties": {
+        "stage": { "enum": ["requirements", "prototype", "architecture", "specification", "development"] },
+        "version": { "type": "string", "minLength": 1 },
+        "sourcePath": { "type": "string", "minLength": 1 },
+        "snapshotPath": { "type": "string", "minLength": 1 },
+        "configSnapshotPath": { "type": "string", "minLength": 1 },
+        "contentHash": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+        "requiredSections": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } }
       }
     },
     "sourceReference": {

@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { access, copyFile, mkdir, readFile, readdir, realpath, unlink, writeFile } from 'node:fs/promises'
+import { readFileSync } from 'node:fs'
+import { access, copyFile, mkdir, readFile, readdir, realpath, rename, unlink, writeFile } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import type { ApiProxy, RpcId } from '@deepseek-ai/dsh-host-apiproxy'
 import { parse, stringify } from 'yaml'
@@ -22,6 +23,7 @@ import {
   type SourceBundle,
   type SourceSummary,
   type StageRun,
+  type StageTemplatePreview,
   type StageId,
   type WorkItem,
   stageDefinition,
@@ -32,6 +34,7 @@ import { GitDevelopmentService, listDevelopmentWorkspaces } from './git-service.
 import { evaluateQuality } from './quality.ts'
 import { runtimeDefinition } from './stage-definitions.ts'
 import type { StageSessionController } from './session-controller.ts'
+import { ensureProjectTemplates, loadStageTemplate, renderStageTemplate, snapshotStageTemplate } from './template-store.ts'
 
 const PROJECT_FILE = '.sdd/project.yaml'
 interface StagedImport { preview: ImportPreview; bundle: SourceBundle }
@@ -169,6 +172,16 @@ function validateManifest(value: unknown, entryExists: boolean): string[] {
   if (!Array.isArray(manifest.basedOn)) errors.push('basedOn must be an array')
   if (!Array.isArray(manifest.derivedFrom)) errors.push('derivedFrom must be an array')
   if (!Array.isArray(manifest.externalRefs)) errors.push('externalRefs must be an array')
+  if (manifest.template !== undefined) {
+    if (!object(manifest.template)) errors.push('template must be an object')
+    else {
+      if (manifest.template.stage !== manifest.stage) errors.push('template.stage must match artifact stage')
+      if (!nonEmptyString(manifest.template.version)) errors.push('template.version is required')
+      if (!nonEmptyString(manifest.template.snapshotPath)) errors.push('template.snapshotPath is required')
+      if (!nonEmptyString(manifest.template.configSnapshotPath)) errors.push('template.configSnapshotPath is required')
+      if (!Array.isArray(manifest.template.requiredSections) || manifest.template.requiredSections.length === 0) errors.push('template.requiredSections must not be empty')
+    }
+  }
   if (typeof manifest.entry === 'string' && !entryExists) errors.push(`entry does not exist: ${manifest.entry}`)
   return errors
 }
@@ -266,7 +279,7 @@ export class SddProjectService {
     return { workspaceId, title: item.title, path: await realpath(item.path) }
   }
 
-  async execute(action: SddAction): Promise<ProjectSnapshot | ImportPreview | { prompt: string; run?: StageRun } | { artifactFile: { artifactUid: string; path: string; content: string } }> {
+  async execute(action: SddAction): Promise<ProjectSnapshot | ImportPreview | StageTemplatePreview | { prompt: string; run?: StageRun } | { artifactFile: { artifactUid: string; path: string; kind: ArtifactFileSummary['kind'] | 'manifest'; content?: string; dataUrl?: string } } | { opened: true }> {
     if (action.kind === 'snapshot') return this.snapshot(action.workspaceId)
     if (action.kind === 'initialize') { await this.initialize(action.workspaceId); return this.snapshot(action.workspaceId) }
     if (action.kind === 'reinitialize') { await this.reinitialize(action.workspaceId); return this.snapshot(action.workspaceId) }
@@ -275,13 +288,18 @@ export class SddProjectService {
       return this.snapshot(action.workspaceId)
     }
     if (action.kind === 'create-revision') { await this.createRevision(action.workspaceId, action.artifactUid); return this.snapshot(action.workspaceId) }
+    if (action.kind === 'discard-draft') { await this.discardDraft(action.workspaceId, action.artifactUid); return this.snapshot(action.workspaceId) }
     if (action.kind === 'accept') { await this.accept(action.workspaceId, action.artifactUid, action.checklist); return this.snapshot(action.workspaceId) }
     if (action.kind === 'read-artifact-file') return { artifactFile: await this.readArtifactFile(action.workspaceId, action.artifactUid, action.path) }
+    if (action.kind === 'open-artifact-path') { await this.openArtifactPath(action.workspaceId, action.artifactUid, action.path); return { opened: true } }
+    if (action.kind === 'read-stage-template') return this.readStageTemplate(action.workspaceId, action.stage)
+    if (action.kind === 'open-stage-template') { await this.openStageTemplate(action.workspaceId, action.stage, action.target); return { opened: true } }
     if (action.kind === 'update-work-item-settings') {
       await this.updateWorkItemSettings(action.workspaceId, action.workItemUid, action.repositoryScope, action.developmentTargets, action.openSpec)
       return this.snapshot(action.workspaceId)
     }
     if (action.kind === 'add-project-repository') { await this.addProjectRepository(action.workspaceId, action.id, action.source, action.baseBranch); return this.snapshot(action.workspaceId) }
+    if (action.kind === 'remove-project-repository') { await this.removeProjectRepository(action.workspaceId, action.id); return this.snapshot(action.workspaceId) }
     if (action.kind === 'quality') return this.snapshot(action.workspaceId)
     if (action.kind === 'import-source') {
       const preview = await this.previewSourceImport(action.workspaceId, action.provider, action.sourceKind, action.key, action.connector, action.input)
@@ -347,6 +365,7 @@ export class SddProjectService {
     await mkdir(join(sddRoot, 'runs'), { recursive: true })
     await mkdir(join(sddRoot, 'events'), { recursive: true })
     await mkdir(join(sddRoot, 'development'), { recursive: true })
+    await ensureProjectTemplates(workspace.path)
     for (const stage of STAGES) await mkdir(join(sddRoot, 'artifacts', stage.id), { recursive: true })
     const businessGuidePath = join(sddRoot, 'business', 'README.md')
     if (!(await exists(businessGuidePath))) await writeFile(businessGuidePath, BUSINESS_GUIDE, 'utf8')
@@ -418,6 +437,17 @@ export class SddProjectService {
         const entryPath = typeof manifest.entry === 'string' ? join(dirname(manifestPath), manifest.entry) : manifestPath
         const entryExists = await exists(entryPath)
         const validationErrors = validateManifest(manifest, entryExists)
+        if (manifest.template !== undefined) {
+          const artifactRoot = dirname(manifestPath)
+          const templatePath = resolve(artifactRoot, manifest.template.snapshotPath)
+          const configPath = resolve(artifactRoot, manifest.template.configSnapshotPath)
+          if (!contained(artifactRoot, templatePath) || !contained(artifactRoot, configPath)) validationErrors.push('template snapshot escapes artifact directory')
+          else if (!(await exists(templatePath)) || !(await exists(configPath))) validationErrors.push('template snapshot files are missing')
+          else {
+            const actualTemplateHash = `sha256:${createHash('sha256').update(await readFile(templatePath)).digest('hex')}`
+            if (actualTemplateHash !== manifest.template.contentHash) validationErrors.push('template snapshot differs from manifest hash')
+          }
+        }
         const files = await artifactFiles(dirname(manifestPath))
         if (entryExists && manifest.status === 'accepted') {
           const actualHash = artifactBundleHash(files)
@@ -498,6 +528,7 @@ export class SddProjectService {
     const workItem = workItemUid === undefined ? undefined : snapshot.workItems.find(item => item.uid === workItemUid)
     if (workItemUid !== undefined && workItem === undefined) throw new Error(`work item not found: ${workItemUid}`)
     const definition = stageDefinition(stage)
+    const stageTemplate = await loadStageTemplate(snapshot.workspace.path, stage)
     const key = this.nextKey(snapshot.artifacts, definition.prefix)
     if (snapshot.artifacts.some(item => item.key === key)) throw new Error(`artifact key already exists: ${key}`)
     const uid = randomUUID()
@@ -540,8 +571,9 @@ export class SddProjectService {
       checklist: Object.fromEntries(runtimeDefinition(stage).completionChecklist.map((_label, index) => [`item-${index + 1}`, false])),
       ...(workItem === undefined ? {} : { workItemUid: workItem.uid }),
     }
+    manifest.template = await snapshotStageTemplate(directory, stageTemplate)
     await writeFile(join(directory, 'manifest.yaml'), stringify(manifest), 'utf8')
-    await writeFile(join(directory, 'deliverable.md'), artifactTemplate(stage, key, title.trim()), 'utf8')
+    await writeFile(join(directory, 'deliverable.md'), renderStageTemplate(stageTemplate, key, title.trim()), 'utf8')
     await appendEvent(snapshot.workspace.path, 'artifact.created', key, stage, { artifactUid: uid })
   }
 
@@ -568,6 +600,7 @@ export class SddProjectService {
       version: nextVersion(previous.version), status: 'draft', entry: previous.entry, createdAt: now, updatedAt: now,
       basedOn: previous.basedOn, derivedFrom: previous.derivedFrom, externalRefs: previous.externalRefs,
       checklist: Object.fromEntries(runtimeDefinition(previous.stage).completionChecklist.map((_label, index) => [`item-${index + 1}`, false])),
+      ...(previous.template === undefined ? {} : { template: previous.template }),
       supersedes: { uid: previous.uid, version: previous.version, contentHash: previous.contentHash },
       ...(previous.workItemUid === undefined ? {} : { workItemUid: previous.workItemUid }),
     }
@@ -575,17 +608,80 @@ export class SddProjectService {
     await appendEvent(snapshot.workspace.path, 'artifact.revision-created', previous.key, previous.stage, { artifactUid: uid, supersedes: previous.uid, version: manifest.version })
   }
 
-  private async readArtifactFile(workspaceId: string, artifactUid: string, requestedPath: string): Promise<{ artifactUid: string; path: string; content: string }> {
+  private async discardDraft(workspaceId: string, artifactUid: string): Promise<void> {
     const snapshot = await this.requireSnapshot(workspaceId)
     const artifact = this.requireArtifact(snapshot, artifactUid)
-    const file = artifact.files.find(item => item.path === requestedPath)
-    if (file === undefined) throw new Error(`artifact file not found: ${requestedPath}`)
-    if (file.kind === 'binary' || file.kind === 'image') throw new Error('binary artifact files cannot be previewed as text')
-    if (file.size > 2 * 1024 * 1024) throw new Error('artifact text preview is limited to 2 MiB')
+    if (artifact.status !== 'draft' && artifact.status !== 'in-review') throw new Error('only a draft or in-review artifact can be discarded')
+    if (snapshot.developmentWorkspaces.some(item => item.artifactUid === artifact.uid)) throw new Error('cannot discard an artifact after its development workspace has been created')
+    const root = resolve(snapshot.workspace.path, '.sdd')
+    const source = resolve(snapshot.workspace.path, artifact.relativeDirectory)
+    if (!contained(root, source)) throw new Error('artifact directory escapes .sdd')
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+    const artifactTrash = join(root, 'trash', 'artifacts', `${stamp}-${artifact.uid}`)
+    await mkdir(dirname(artifactTrash), { recursive: true })
+    await rename(source, artifactTrash)
+    for (const run of snapshot.runs.filter(item => item.artifactUid === artifact.uid)) {
+      if (run.sessionId !== undefined) this.sessionController?.unbind(run.sessionId)
+      const runSource = join(root, 'runs', `${run.uid}.yaml`)
+      if (await exists(runSource)) {
+        const runTrash = join(root, 'trash', 'runs', `${stamp}-${run.uid}.yaml`)
+        await mkdir(dirname(runTrash), { recursive: true })
+        await rename(runSource, runTrash)
+      }
+    }
+    await appendEvent(snapshot.workspace.path, 'artifact.discarded', artifact.key, artifact.stage, { artifactUid, version: artifact.version, trashPath: relative(snapshot.workspace.path, artifactTrash) })
+  }
+
+  private async readArtifactFile(workspaceId: string, artifactUid: string, requestedPath: string): Promise<{ artifactUid: string; path: string; kind: ArtifactFileSummary['kind'] | 'manifest'; content?: string; dataUrl?: string }> {
+    const snapshot = await this.requireSnapshot(workspaceId)
+    const artifact = this.requireArtifact(snapshot, artifactUid)
+    const manifest = requestedPath === 'manifest.yaml'
+    const file = manifest ? undefined : artifact.files.find(item => item.path === requestedPath)
+    if (!manifest && file === undefined) throw new Error(`artifact file not found: ${requestedPath}`)
     const root = resolve(snapshot.workspace.path, artifact.relativeDirectory)
     const path = resolve(root, requestedPath)
     if (!contained(root, path)) throw new Error('artifact file escapes its directory')
-    return { artifactUid, path: requestedPath, content: await readFile(path, 'utf8') }
+    if (manifest) return { artifactUid, path: requestedPath, kind: 'manifest', content: await readFile(path, 'utf8') }
+    if (file!.kind === 'binary') return { artifactUid, path: requestedPath, kind: 'binary' }
+    if (file!.kind === 'image') {
+      if (file!.size > 8 * 1024 * 1024) throw new Error('artifact image preview is limited to 8 MiB')
+      const extension = requestedPath.toLowerCase().split('.').pop() ?? ''
+      const mime = ({ png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml' } as Record<string, string>)[extension] ?? 'application/octet-stream'
+      return { artifactUid, path: requestedPath, kind: 'image', dataUrl: `data:${mime};base64,${(await readFile(path)).toString('base64')}` }
+    }
+    if (file!.size > 2 * 1024 * 1024) throw new Error('artifact text preview is limited to 2 MiB')
+    return { artifactUid, path: requestedPath, kind: file!.kind, content: await readFile(path, 'utf8') }
+  }
+
+  private async openArtifactPath(workspaceId: string, artifactUid: string, requestedPath: string): Promise<void> {
+    const snapshot = await this.requireSnapshot(workspaceId)
+    const artifact = this.requireArtifact(snapshot, artifactUid)
+    const root = resolve(snapshot.workspace.path, artifact.relativeDirectory)
+    const path = resolve(root, requestedPath || '.')
+    if (!contained(root, path)) throw new Error('artifact path escapes its directory')
+    await access(path)
+    const response = await this.api.host.openPath(request({ path }), AbortSignal.timeout(15_000))
+    if (!response.result.ok) throw new Error(`${response.result.error.code}: ${response.result.error.message}`)
+  }
+
+  private async readStageTemplate(workspaceId: string, stage: StageId): Promise<StageTemplatePreview> {
+    const snapshot = await this.requireSnapshot(workspaceId)
+    const template = await loadStageTemplate(snapshot.workspace.path, stage)
+    return {
+      stage, version: template.config.version, documentName: template.config.documentName,
+      directory: template.directoryRelative, configPath: template.configRelative, contentPath: template.contentRelative,
+      contentHash: template.contentHash, requiredSections: template.config.requiredSections, content: template.content,
+    }
+  }
+
+  private async openStageTemplate(workspaceId: string, stage: StageId, target: 'directory' | 'config' | 'content'): Promise<void> {
+    const snapshot = await this.requireSnapshot(workspaceId)
+    const template = await loadStageTemplate(snapshot.workspace.path, stage)
+    const path = target === 'directory' ? template.directory : resolve(snapshot.workspace.path, target === 'config' ? template.configRelative : template.contentRelative)
+    const root = resolve(snapshot.workspace.path, '.sdd', 'templates')
+    if (!contained(root, path)) throw new Error('template path escapes .sdd/templates')
+    const response = await this.api.host.openPath(request({ path }), AbortSignal.timeout(15_000))
+    if (!response.result.ok) throw new Error(`${response.result.error.code}: ${response.result.error.message}`)
   }
 
   private async updateWorkItemSettings(
@@ -615,9 +711,33 @@ export class SddProjectService {
     if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(normalizedId)) throw new Error('repository id must be kebab-case')
     if (source.trim() === '' || baseBranch.trim() === '') throw new Error('repository source and base branch are required')
     if (snapshot.project.development.repositories.some(item => item.id === normalizedId)) throw new Error(`repository already exists: ${normalizedId}`)
+    const sourceKind = await this.git.validateSource(snapshot.workspace.path, source.trim(), baseBranch.trim())
     const project = { ...snapshot.project, development: { ...snapshot.project.development, repositories: [...snapshot.project.development.repositories, { id: normalizedId, source: source.trim(), baseBranch: baseBranch.trim(), testCommands: [] }] } }
     await writeFile(join(snapshot.workspace.path, PROJECT_FILE), stringify(project), 'utf8')
-    await appendEvent(snapshot.workspace.path, 'project.repository-added', normalizedId, undefined, { source: source.trim(), baseBranch: baseBranch.trim() })
+    await appendEvent(snapshot.workspace.path, 'project.repository-added', normalizedId, undefined, { source: source.trim(), baseBranch: baseBranch.trim(), sourceKind })
+  }
+
+  private async removeProjectRepository(workspaceId: string, id: string): Promise<void> {
+    const snapshot = await this.requireSnapshot(workspaceId)
+    const repository = snapshot.project.development.repositories.find(item => item.id === id)
+    if (repository === undefined) throw new Error(`repository not found: ${id}`)
+    if (snapshot.developmentWorkspaces.some(workspace => workspace.repositories.some(item => item.id === id))) {
+      throw new Error('cannot remove a repository after an isolated development workspace has been created')
+    }
+    const project = { ...snapshot.project, development: { ...snapshot.project.development, repositories: snapshot.project.development.repositories.filter(item => item.id !== id) } }
+    await writeFile(join(snapshot.workspace.path, PROJECT_FILE), stringify(project), 'utf8')
+    for (const workItem of snapshot.workItems) {
+      if (!(workItem.repositoryScope?.includes(id) || workItem.developmentTargets?.includes(id) || workItem.openSpec?.repositoryId === id)) continue
+      const updated: WorkItem = {
+        ...workItem,
+        repositoryScope: (workItem.repositoryScope ?? []).filter(item => item !== id),
+        developmentTargets: (workItem.developmentTargets ?? []).filter(item => item !== id),
+        openSpec: workItem.openSpec?.repositoryId === id ? { enabled: false } : workItem.openSpec,
+        updatedAt: new Date().toISOString(),
+      }
+      await writeFile(join(snapshot.workspace.path, '.sdd', 'work-items', workItem.uid, 'work-item.yaml'), stringify(updated), 'utf8')
+    }
+    await appendEvent(snapshot.workspace.path, 'project.repository-removed', id, undefined, { source: repository.source })
   }
 
   private nextKey(artifacts: ArtifactSummary[], prefix: string): string {
@@ -909,6 +1029,7 @@ export class SddProjectService {
       `阶段目标：${runtime.objective}`,
       workItem === undefined ? '' : `系统设计确认的仓库范围：${(workItem.repositoryScope ?? []).join('、') || '未配置'}\n规格设计确认的开发目标：${(workItem.developmentTargets ?? []).join('、') || '未配置'}\nOpenSpec：${workItem.openSpec?.enabled === true ? `${workItem.openSpec.repositoryId}:${workItem.openSpec.path}` : '未启用'}`,
       `完成清单：\n${runtime.completionChecklist.map((item, index) => `${index + 1}. ${item}`).join('\n')}`,
+      target.template === undefined ? '' : `本交付件固定模板快照：${target.relativeDirectory}/${target.template.snapshotPath}\n模板版本：${target.template.version}\n模板哈希：${target.template.contentHash}`,
       '先检查输入完整性，再与用户讨论。每轮形成的确定结论必须同步写入绑定交付件；不得创建或切换到另一个交付件。',
       ...inputs,
     ].filter(Boolean).join('\n\n')
@@ -983,10 +1104,19 @@ export class SddProjectService {
     sessionId: string, stage: StageId, workspacePath: string, project: ProjectConfig,
     artifact: ArtifactSummary, development: DevelopmentWorkspace | undefined, workItem?: WorkItem,
   ): void {
+    let boundTemplate = artifactTemplate(artifact.stage)
+    if (artifact.template !== undefined) {
+      const templatePath = resolve(workspacePath, artifact.relativeDirectory, artifact.template.snapshotPath)
+      const artifactRoot = resolve(workspacePath, artifact.relativeDirectory)
+      if (contained(artifactRoot, templatePath)) {
+        try { boundTemplate = readFileSync(templatePath, 'utf8') } catch { /* legacy or damaged snapshots fall back to the built-in template */ }
+      }
+    }
     this.sessionController?.bind({
       sessionId, stage, projectPath: workspacePath,
       artifactDirectory: resolve(workspacePath, artifact.relativeDirectory),
       developmentDirectories: development?.repositories.map(item => item.path) ?? [],
+      artifactTemplate: boundTemplate,
       systemPrompt: [
         `绑定项目：${project.project.key} · ${project.project.name}`,
         `绑定交付件：${artifact.key} (${artifact.uid})`,

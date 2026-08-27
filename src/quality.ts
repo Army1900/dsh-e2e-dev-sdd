@@ -43,7 +43,8 @@ export function evaluateQuality(
   const definition = runtimeDefinition(artifact.stage)
   const bodies = sectionBodies(content)
   const checks: QualityCheck[] = []
-  for (const section of definition.requiredSections) {
+  const requiredSections = artifact.template?.requiredSections ?? definition.requiredSections
+  for (const section of requiredSections) {
     const body = bodies.get(section)
     checks.push(check(`section:${section}`, `章节：${section}`, body !== undefined && meaningfulContent(body).length > 0, body === undefined ? '缺少必填章节' : '章节内容不能为空'))
     if (body !== undefined) {

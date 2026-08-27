@@ -181,13 +181,34 @@ export interface ArtifactManifest {
     checklist?: Record<string, boolean>;
     workItemUid?: string;
     supersedes?: ArtifactReference;
+    template?: ArtifactTemplateBinding;
     files?: ArtifactFileSummary[];
+}
+export interface ArtifactTemplateBinding {
+    stage: StageId;
+    version: string;
+    sourcePath: string;
+    snapshotPath: string;
+    configSnapshotPath: string;
+    contentHash: string;
+    requiredSections: string[];
 }
 export interface ArtifactFileSummary {
     path: string;
     size: number;
     contentHash: string;
     kind: 'markdown' | 'text' | 'image' | 'binary';
+}
+export interface StageTemplatePreview {
+    stage: StageId;
+    version: string;
+    documentName: string;
+    directory: string;
+    configPath: string;
+    contentPath: string;
+    contentHash: string;
+    requiredSections: string[];
+    content: string;
 }
 export interface QualityCheck {
     code: string;
@@ -402,6 +423,10 @@ export type SddAction = {
     workspaceId: string;
     artifactUid: string;
 } | {
+    kind: 'discard-draft';
+    workspaceId: string;
+    artifactUid: string;
+} | {
     kind: 'accept';
     workspaceId: string;
     artifactUid: string;
@@ -411,6 +436,20 @@ export type SddAction = {
     workspaceId: string;
     artifactUid: string;
     path: string;
+} | {
+    kind: 'open-artifact-path';
+    workspaceId: string;
+    artifactUid: string;
+    path: string;
+} | {
+    kind: 'read-stage-template';
+    workspaceId: string;
+    stage: StageId;
+} | {
+    kind: 'open-stage-template';
+    workspaceId: string;
+    stage: StageId;
+    target: 'directory' | 'config' | 'content';
 } | {
     kind: 'update-work-item-settings';
     workspaceId: string;
@@ -428,6 +467,10 @@ export type SddAction = {
     id: string;
     source: string;
     baseBranch: string;
+} | {
+    kind: 'remove-project-repository';
+    workspaceId: string;
+    id: string;
 } | {
     kind: 'quality';
     workspaceId: string;
@@ -519,8 +562,16 @@ export type SddResponse = {
     artifactFile: {
         artifactUid: string;
         path: string;
-        content: string;
+        kind: ArtifactFileSummary['kind'] | 'manifest';
+        content?: string;
+        dataUrl?: string;
     };
+} | {
+    ok: true;
+    template: StageTemplatePreview;
+} | {
+    ok: true;
+    opened: true;
 } | {
     ok: false;
     error: string;

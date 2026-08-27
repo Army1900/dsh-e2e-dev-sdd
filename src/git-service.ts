@@ -74,6 +74,18 @@ function repositoryConfig(project: ProjectConfig, id: string): DevelopmentReposi
 }
 
 export class GitDevelopmentService {
+  async validateSource(projectPath: string, source: string, baseBranch: string): Promise<'local' | 'remote'> {
+    const localSource = isAbsolute(source) ? source : resolve(projectPath, source)
+    if (await exists(localSource)) {
+      const repository = await run(['git', 'rev-parse', '--is-inside-work-tree'], localSource, 30_000, true)
+      if (repository.exitCode !== 0 || repository.stdout.trim() !== 'true') throw new Error(`local source is not a Git repository: ${source}`)
+      await run(['git', 'rev-parse', '--verify', `${baseBranch}^{commit}`], localSource, 30_000)
+      return 'local'
+    }
+    await run(['git', 'ls-remote', '--exit-code', '--heads', source, `refs/heads/${baseBranch}`], projectPath, 60_000)
+    return 'remote'
+  }
+
   async create(projectPath: string, project: ProjectConfig, artifact: ArtifactSummary, repositoryId: string): Promise<DevelopmentWorkspace> {
     if (artifact.stage !== 'development') throw new Error('isolated code workspaces are only available in development stage')
     const config = repositoryConfig(project, repositoryId)
