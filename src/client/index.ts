@@ -52,7 +52,7 @@ interface RuntimeState {
 }
 
 async function call(action: SddAction): Promise<SddResponse> {
-  const timeout = action.kind === 'add-project-repository' || action.kind === 'inspect-project-repository' || action.kind === 'update-project-repository-branch' ? 75_000 : 20_000
+  const timeout = action.kind === 'add-project-repository' || action.kind === 'inspect-project-repository' || action.kind === 'initialize-project-repository' || action.kind === 'update-project-repository-branch' ? 75_000 : 20_000
   const response = await fetch(API_PATH, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(action), signal: AbortSignal.timeout(timeout) })
   return await response.json() as SddResponse
 }
@@ -417,7 +417,22 @@ class SddWorkbench {
       const response = await call({ kind: 'inspect-project-repository', workspaceId: this.state.workspaceId!, source })
       if (!response.ok) throw new Error(response.error)
       if (!('repositoryInspection' in response)) throw new Error('Host returned an unexpected repository inspection')
-      return response.repositoryInspection
+      let inspection = response.repositoryInspection
+      if (!inspection.empty) return inspection
+      if (inspection.sourceKind === 'remote') throw new Error('远程仓库还没有任何分支。请先在本地创建初始提交并显式 push 到远程，再重新读取。')
+      const values = await this.openForm({
+        title: '初始化空 Git 仓库', description: '仓库还没有任何提交。插件可以创建一个不包含现有文件的空初始提交，使基线分支和 Worktree 可用；未跟踪文件保持原样。如果仓库已有暂存文件，系统会拒绝自动提交。', submitLabel: '创建空初始提交',
+        fields: [
+          { name: 'branch', label: '初始分支', type: 'text', required: true, value: inspection.defaultBranch, placeholder: '例如：main' },
+          { name: 'confirmed', label: '我确认创建空初始提交（不会提交当前文件）', type: 'checkbox', required: true },
+        ],
+      })
+      if (values?.confirmed !== true) return undefined
+      const initialized = await call({ kind: 'initialize-project-repository', workspaceId: this.state.workspaceId!, source: inspection.source, branch: String(values.branch) })
+      if (!initialized.ok) throw new Error(initialized.error)
+      if (!('repositoryInspection' in initialized)) throw new Error('Host returned an unexpected initialized repository inspection')
+      inspection = initialized.repositoryInspection
+      return inspection
     } catch (error) {
       this.state.error = error instanceof Error ? error.message : String(error); this.render(); return undefined
     }

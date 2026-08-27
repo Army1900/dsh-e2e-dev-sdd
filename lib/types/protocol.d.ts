@@ -285,6 +285,7 @@ export interface RepositoryInspection {
     sourceKind: 'local' | 'remote';
     branches: string[];
     defaultBranch: string;
+    empty: boolean;
 }
 export interface DevelopmentRepositoryState {
     id: string;
@@ -552,6 +553,11 @@ export type SddAction = {
     kind: 'inspect-project-repository';
     workspaceId: string;
     source: string;
+} | {
+    kind: 'initialize-project-repository';
+    workspaceId: string;
+    source: string;
+    branch: string;
 } | {
     kind: 'update-project-repository-branch';
     workspaceId: string;

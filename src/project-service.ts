@@ -320,6 +320,12 @@ export class SddProjectService {
       const snapshot = await this.requireSnapshot(action.workspaceId)
       return this.git.inspectSource(snapshot.workspace.path, action.source)
     }
+    if (action.kind === 'initialize-project-repository') {
+      const snapshot = await this.requireSnapshot(action.workspaceId)
+      const inspection = await this.git.initializeLocalSource(snapshot.workspace.path, action.source, action.branch)
+      await appendEvent(snapshot.workspace.path, 'project.repository-initialized', action.source, undefined, { branch: inspection.defaultBranch })
+      return inspection
+    }
     if (action.kind === 'update-project-repository-branch') { await this.updateProjectRepositoryBranch(action.workspaceId, action.id, action.baseBranch); return this.snapshot(action.workspaceId) }
     if (action.kind === 'remove-project-repository') { await this.removeProjectRepository(action.workspaceId, action.id); return this.snapshot(action.workspaceId) }
     if (action.kind === 'quality') return this.snapshot(action.workspaceId)

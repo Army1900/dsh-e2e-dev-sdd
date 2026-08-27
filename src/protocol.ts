@@ -342,6 +342,7 @@ export interface RepositoryInspection {
   sourceKind: 'local' | 'remote'
   branches: string[]
   defaultBranch: string
+  empty: boolean
 }
 
 export interface DevelopmentRepositoryState {
@@ -520,6 +521,7 @@ export type SddAction =
   | { kind: 'update-work-item-settings'; workspaceId: string; workItemUid: string; repositoryScope: string[]; developmentTargets: string[]; openSpec?: { enabled: boolean; repositoryId?: string; path?: string } }
   | { kind: 'add-project-repository'; workspaceId: string; id: string; source: string; baseBranch: string }
   | { kind: 'inspect-project-repository'; workspaceId: string; source: string }
+  | { kind: 'initialize-project-repository'; workspaceId: string; source: string; branch: string }
   | { kind: 'update-project-repository-branch'; workspaceId: string; id: string; baseBranch: string }
   | { kind: 'remove-project-repository'; workspaceId: string; id: string }
   | { kind: 'quality'; workspaceId: string; artifactUid: string }
@@ -573,6 +575,7 @@ export function parseAction(value: unknown): SddAction | undefined {
     && stringArray(action.developmentTargets) && (action.openSpec === undefined || (typeof action.openSpec === 'object' && action.openSpec !== null))) return action as unknown as SddAction
   if (action.kind === 'add-project-repository' && typeof action.id === 'string' && typeof action.source === 'string' && typeof action.baseBranch === 'string') return action as unknown as SddAction
   if (action.kind === 'inspect-project-repository' && typeof action.source === 'string') return action as unknown as SddAction
+  if (action.kind === 'initialize-project-repository' && typeof action.source === 'string' && typeof action.branch === 'string') return action as unknown as SddAction
   if (action.kind === 'update-project-repository-branch' && typeof action.id === 'string' && typeof action.baseBranch === 'string') return action as unknown as SddAction
   if (action.kind === 'remove-project-repository' && typeof action.id === 'string') return action as unknown as SddAction
   if (action.kind === 'context' && isStageId(action.stage) && typeof action.artifactUid === 'string' && stringArray(action.artifactUids)

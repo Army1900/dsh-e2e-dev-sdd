@@ -95,18 +95,32 @@ export class GitDevelopmentService {
         if (ref.startsWith('refs/remotes/origin/') && !ref.endsWith('/HEAD')) return [ref.slice('refs/remotes/origin/'.length)]
         return []
       }))].sort()
-      if (branches.length === 0) throw new Error('repository has no branches; create an initial commit or fetch the remote branches first')
       const current = await run(['git', 'symbolic-ref', '--quiet', '--short', 'HEAD'], localSource, 30_000, true)
       const preferred = current.exitCode === 0 ? current.stdout.trim() : ''
-      const defaultBranch = branches.includes(preferred) ? preferred : branches.includes('main') ? 'main' : branches.includes('master') ? 'master' : branches[0]!
-      return { source: normalized, sourceKind: 'local', branches, defaultBranch }
+      const defaultBranch = branches.includes(preferred) ? preferred : branches.includes('main') ? 'main' : branches.includes('master') ? 'master' : (branches[0] ?? preferred) || 'main'
+      return { source: normalized, sourceKind: 'local', branches, defaultBranch, empty: branches.length === 0 }
     }
     const refs = await run(['git', 'ls-remote', '--symref', normalized, 'HEAD', 'refs/heads/*'], projectPath, 60_000)
     const branches = [...new Set(refs.stdout.split(/\r?\n/).map(line => /\trefs\/heads\/(.+)$/.exec(line)?.[1]).filter((item): item is string => item !== undefined))].sort()
-    if (branches.length === 0) throw new Error('remote repository has no branches or is not accessible')
     const head = refs.stdout.split(/\r?\n/).map(line => /^ref:\s+refs\/heads\/(.+)\s+HEAD$/.exec(line)?.[1]).find((item): item is string => item !== undefined)
-    const defaultBranch = head !== undefined && branches.includes(head) ? head : branches.includes('main') ? 'main' : branches.includes('master') ? 'master' : branches[0]!
-    return { source: normalized, sourceKind: 'remote', branches, defaultBranch }
+    const defaultBranch = head !== undefined && branches.includes(head) ? head : branches.includes('main') ? 'main' : branches.includes('master') ? 'master' : branches[0] ?? 'main'
+    return { source: normalized, sourceKind: 'remote', branches, defaultBranch, empty: branches.length === 0 }
+  }
+
+  async initializeLocalSource(projectPath: string, source: string, branch: string): Promise<RepositoryInspection> {
+    const inspection = await this.inspectSource(projectPath, source)
+    if (inspection.sourceKind !== 'local') throw new Error('empty remote repositories must be initialized and pushed explicitly')
+    if (!inspection.empty) return inspection
+    const normalizedBranch = branch.trim()
+    if (normalizedBranch === '') throw new Error('initial branch is required')
+    const localSource = isAbsolute(inspection.source) ? inspection.source : resolve(projectPath, inspection.source)
+    await run(['git', 'check-ref-format', '--branch', normalizedBranch], localSource)
+    const staged = await run(['git', 'diff', '--cached', '--name-only'], localSource, 30_000, true)
+    if (staged.exitCode !== 0) throw new Error('cannot inspect the staged files in the empty repository')
+    if (staged.stdout.trim() !== '') throw new Error('repository already has staged files; commit them manually to avoid an unintended automatic commit')
+    await run(['git', 'symbolic-ref', 'HEAD', `refs/heads/${normalizedBranch}`], localSource)
+    await run(['git', '-c', 'user.name=DSH SDD', '-c', 'user.email=dsh-sdd@localhost', 'commit', '--allow-empty', '--no-verify', '-m', 'chore: initialize repository'], localSource)
+    return this.inspectSource(projectPath, source)
   }
 
   async validateSource(projectPath: string, source: string, baseBranch: string): Promise<'local' | 'remote'> {

@@ -25,6 +25,7 @@ describe('parseAction', () => {
     expect(parseAction({ kind: 'update-work-item-settings', workspaceId: 'w1', workItemUid: 'i1', repositoryScope: ['web'], developmentTargets: ['web'], openSpec: { enabled: true, repositoryId: 'web', path: 'openspec' } })).toMatchObject({ kind: 'update-work-item-settings' })
     expect(parseAction({ kind: 'add-project-repository', workspaceId: 'w1', id: 'web', source: '../web', baseBranch: 'main' })).toMatchObject({ kind: 'add-project-repository' })
     expect(parseAction({ kind: 'inspect-project-repository', workspaceId: 'w1', source: '../web' })).toMatchObject({ kind: 'inspect-project-repository' })
+    expect(parseAction({ kind: 'initialize-project-repository', workspaceId: 'w1', source: '../web', branch: 'main' })).toMatchObject({ kind: 'initialize-project-repository' })
     expect(parseAction({ kind: 'update-project-repository-branch', workspaceId: 'w1', id: 'web', baseBranch: 'release' })).toMatchObject({ kind: 'update-project-repository-branch' })
     expect(parseAction({ kind: 'remove-project-repository', workspaceId: 'w1', id: 'web' })).toMatchObject({ kind: 'remove-project-repository' })
     expect(parseAction({ kind: 'discard-draft', workspaceId: 'w1', artifactUid: 'a1' })).toMatchObject({ kind: 'discard-draft' })

@@ -17,7 +17,7 @@ describe('GitDevelopmentService', () => {
     const project = { development: { workspaceRoot: '.sdd-workspaces', branchPattern: 'sdd/{artifactKey}/{repositoryId}', mergeStrategy: 'manual', repositories: [{ id: 'app', source, baseBranch: 'main', testCommands: [{ id: 'unit', label: 'Unit', argv: [process.execPath, '-e', 'process.exit(0)'] }] }] } } as unknown as ProjectConfig
     const artifact = { uid: 'artifact-1', key: 'DEV-1', stage: 'development', basedOn: [] } as unknown as ArtifactSummary
     const service = new GitDevelopmentService()
-    await expect(service.inspectSource(projectPath, source)).resolves.toEqual({ source, sourceKind: 'local', branches: ['main', 'release'], defaultBranch: 'main' })
+    await expect(service.inspectSource(projectPath, source)).resolves.toEqual({ source, sourceKind: 'local', branches: ['main', 'release'], defaultBranch: 'main', empty: false })
     let workspace = await service.create(projectPath, project, artifact, 'app')
     await expect(service.validateSource(projectPath, source, 'main')).resolves.toBe('local')
     await expect(service.validateSource(projectPath, source, 'missing')).rejects.toThrow('base branch does not exist')
@@ -34,6 +34,25 @@ describe('GitDevelopmentService', () => {
     await writeFile(join(source, 'app.txt'), 'remote\n'); git(source, 'add', 'app.txt'); git(source, 'commit', '-m', 'initial'); git(source, 'branch', 'release')
     git(root, 'clone', '--bare', source, bare)
     const inspection = await new GitDevelopmentService().inspectSource(projectPath, `file://${bare}`)
-    expect(inspection).toEqual({ source: `file://${bare}`, sourceKind: 'remote', branches: ['develop', 'release'], defaultBranch: 'develop' })
+    expect(inspection).toEqual({ source: `file://${bare}`, sourceKind: 'remote', branches: ['develop', 'release'], defaultBranch: 'develop', empty: false })
+  })
+
+  it('creates a safe empty initial commit without adding untracked files', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-sdd-empty-')); const source = join(root, 'source'); const projectPath = join(root, 'project')
+    await mkdir(source); await mkdir(projectPath); git(source, 'init', '-b', 'main'); await writeFile(join(source, 'draft.txt'), 'not committed\n')
+    const service = new GitDevelopmentService()
+    await expect(service.inspectSource(projectPath, source)).resolves.toMatchObject({ sourceKind: 'local', branches: [], defaultBranch: 'main', empty: true })
+    const initialized = await service.initializeLocalSource(projectPath, source, 'main')
+    expect(initialized).toMatchObject({ branches: ['main'], defaultBranch: 'main', empty: false })
+    expect(git(source, 'show', '--pretty=', '--name-only', 'HEAD')).toBe('')
+    expect(await readFile(join(source, 'draft.txt'), 'utf8')).toBe('not committed\n')
+    expect(git(source, 'status', '--porcelain')).toContain('?? draft.txt')
+  })
+
+  it('refuses to include already staged files in an automatic initial commit', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-sdd-staged-')); const source = join(root, 'source'); const projectPath = join(root, 'project')
+    await mkdir(source); await mkdir(projectPath); git(source, 'init', '-b', 'main'); await writeFile(join(source, 'staged.txt'), 'staged\n'); git(source, 'add', 'staged.txt')
+    await expect(new GitDevelopmentService().initializeLocalSource(projectPath, source, 'main')).rejects.toThrow('staged files')
+    expect(git(source, 'status', '--porcelain')).toContain('A  staged.txt')
   })
 })

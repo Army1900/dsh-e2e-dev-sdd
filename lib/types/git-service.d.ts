@@ -3,6 +3,7 @@ export declare function readDevelopmentWorkspace(projectPath: string, artifactUi
 export declare function listDevelopmentWorkspaces(projectPath: string, artifacts: readonly ArtifactSummary[]): Promise<DevelopmentWorkspace[]>;
 export declare class GitDevelopmentService {
     inspectSource(projectPath: string, source: string): Promise<RepositoryInspection>;
+    initializeLocalSource(projectPath: string, source: string, branch: string): Promise<RepositoryInspection>;
     validateSource(projectPath: string, source: string, baseBranch: string): Promise<'local' | 'remote'>;
     create(projectPath: string, project: ProjectConfig, artifact: ArtifactSummary, repositoryId: string): Promise<DevelopmentWorkspace>;
     status(projectPath: string, artifactUid: string): Promise<DevelopmentWorkspace>;
