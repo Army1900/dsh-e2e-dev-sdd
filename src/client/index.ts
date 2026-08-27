@@ -52,7 +52,9 @@ interface RuntimeState {
 }
 
 async function call(action: SddAction): Promise<SddResponse> {
-  const timeout = action.kind === 'add-project-repository' || action.kind === 'inspect-project-repository' || action.kind === 'initialize-project-repository' || action.kind === 'update-project-repository-branch' ? 75_000 : 20_000
+  const timeout = action.kind === 'development-install-openspec' ? 330_000
+    : action.kind === 'development-initialize-openspec' ? 210_000
+      : action.kind === 'add-project-repository' || action.kind === 'inspect-project-repository' || action.kind === 'initialize-project-repository' || action.kind === 'update-project-repository-branch' ? 75_000 : 20_000
   const response = await fetch(API_PATH, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(action), signal: AbortSignal.timeout(timeout) })
   return await response.json() as SddResponse
 }
@@ -255,8 +257,13 @@ class SddWorkbench {
       const rows = repositories.map(repository => `<div class="dsh-sdd-row"><input type="checkbox" data-repository-scope="${escapeHtml(repository.id)}"${workItem.repositoryScope?.includes(repository.id) === true ? ' checked' : ''}><span><strong>${escapeHtml(repository.id)}</strong><span class="dsh-sdd-muted">${escapeHtml(repository.source)} · 基线 ${escapeHtml(repository.baseBranch)}；开发时自动创建独立特性分支</span></span><span><button class="dsh-sdd-button" data-change-repository-branch="${escapeHtml(repository.id)}">切换基线</button> <button class="dsh-sdd-button" data-remove-repository="${escapeHtml(repository.id)}">移除</button></span></div>`).join('')
       return `<section class="dsh-sdd-card" style="margin-bottom:14px"><h2>本需求代码仓库范围</h2><p class="dsh-sdd-muted">添加后仓库会立即显示。勾选本需求可能影响的仓库，再在当前页面确认范围。本地路径添加时只校验 Git 仓库和分支，开发阶段创建 Worktree；远程地址添加时只校验分支可访问，开发阶段才 Clone 到需求隔离空间。</p><div class="dsh-sdd-list">${rows || '<div class="dsh-sdd-empty">尚未添加项目代码仓库</div>'}</div><div class="dsh-sdd-actions"><button class="dsh-sdd-button" data-action="add-repository">添加项目代码仓库</button><button class="dsh-sdd-button primary" data-action="configure-scope"${repositories.length === 0 ? ' disabled' : ''}>确认当前勾选范围</button></div><p class="dsh-sdd-muted">已确认范围：${escapeHtml(scope)}　开发目标：${escapeHtml(targets)}　OpenSpec：${escapeHtml(openSpec)}</p></section>`
     }
-    const action = stage === 'specification' ? '<button class="dsh-sdd-button" data-action="configure-targets">确认开发目标与 OpenSpec</button>' : ''
-    return `<section class="dsh-sdd-card" style="margin-bottom:14px"><h2>本需求开发边界</h2><p class="dsh-sdd-muted">系统设计确认仓库范围，规格设计从该范围中确认具体开发目标。未确认时对应阶段不能开始对话或验收。</p><div>仓库范围：<strong>${escapeHtml(scope)}</strong>　开发目标：<strong>${escapeHtml(targets)}</strong>　OpenSpec：<strong>${escapeHtml(openSpec)}</strong></div>${action ? `<div class="dsh-sdd-actions">${action}</div>` : ''}</section>`
+    const openSpecActions = stage === 'development' && workItem.openSpec?.enabled === true ? [
+      openSpecValidation?.canInstall === true ? '<button class="dsh-sdd-button" data-action="install-openspec">安装 OpenSpec CLI</button>' : '',
+      openSpecValidation?.canInitialize === true ? '<button class="dsh-sdd-button" data-action="initialize-openspec">使用 OpenSpec CLI 初始化</button>' : '',
+      '<button class="dsh-sdd-button" data-action="disable-openspec">不使用 OpenSpec</button>',
+    ].filter(Boolean).join('') : ''
+    const action = stage === 'specification' ? '<button class="dsh-sdd-button" data-action="configure-targets">确认开发目标与 OpenSpec</button>' : openSpecActions
+    return `<section class="dsh-sdd-card" style="margin-bottom:14px"><h2>本需求开发边界</h2><p class="dsh-sdd-muted">系统设计确认仓库范围，规格设计从该范围中确认具体开发目标。OpenSpec 是可选增强：可以安装、初始化，也可以不使用，不会阻止开发流程。</p><div>仓库范围：<strong>${escapeHtml(scope)}</strong>　开发目标：<strong>${escapeHtml(targets)}</strong>　OpenSpec：<strong>${escapeHtml(openSpec)}</strong></div>${action ? `<div class="dsh-sdd-actions">${action}</div>` : ''}</section>`
   }
 
   private inputRow(item: ArtifactSummary): string { return `<label class="dsh-sdd-row"><input type="checkbox" data-input="${escapeHtml(item.uid)}" ${this.state.selected.has(item.uid) ? 'checked' : ''}><span><strong>${escapeHtml(item.key)} · ${escapeHtml(item.title)}</strong><span class="dsh-sdd-muted">${escapeHtml(item.stage)} · v${escapeHtml(item.version)} · ${escapeHtml(item.relativeDirectory)}</span></span><span class="dsh-sdd-badge">accepted</span></label>` }
@@ -292,6 +299,9 @@ class SddWorkbench {
     root.querySelectorAll<HTMLButtonElement>('[data-remove-repository]').forEach(button => button.addEventListener('click', () => { void this.removeProjectRepository(button.dataset.removeRepository!) }))
     root.querySelectorAll<HTMLButtonElement>('[data-change-repository-branch]').forEach(button => button.addEventListener('click', () => { void this.changeProjectRepositoryBranch(button.dataset.changeRepositoryBranch!) }))
     root.querySelector<HTMLElement>('[data-action="configure-targets"]')?.addEventListener('click', () => { void this.configureDevelopmentTargets() })
+    root.querySelector<HTMLElement>('[data-action="install-openspec"]')?.addEventListener('click', () => { void this.installOpenSpec() })
+    root.querySelector<HTMLElement>('[data-action="initialize-openspec"]')?.addEventListener('click', () => { void this.initializeOpenSpec() })
+    root.querySelector<HTMLElement>('[data-action="disable-openspec"]')?.addEventListener('click', () => { void this.disableOpenSpec() })
     root.querySelector<HTMLElement>('[data-action="reinitialize"]')?.addEventListener('click', () => { void this.reinitialize() })
     root.querySelectorAll<HTMLInputElement>('[data-input]').forEach(input => input.addEventListener('change', () => { const uid = input.dataset.input!; if (input.checked) this.state.selected.add(uid); else this.state.selected.delete(uid) }))
     root.querySelectorAll<HTMLInputElement>('[data-target]').forEach(input => input.addEventListener('change', () => { this.state.targetArtifactUid = input.dataset.target; const artifact = this.state.snapshot?.artifacts.find(item => item.uid === input.dataset.target); this.state.selected = new Set([...(artifact?.basedOn.map(item => item.uid) ?? []), ...(artifact?.derivedFrom.map(item => item.uid) ?? [])]); this.render() }))
@@ -774,6 +784,58 @@ class SddWorkbench {
     })
     if (values === undefined) return
     await this.mutate({ kind: 'development-create', workspaceId: this.state.workspaceId!, artifactUid: this.state.targetArtifactUid, repositoryId: String(values.repositoryId) })
+  }
+
+  private async initializeOpenSpec(): Promise<void> {
+    if (this.state.targetArtifactUid === undefined) { this.state.error = '请先选择一个开发测试交付件'; return this.render() }
+    const snapshot = this.state.snapshot
+    const artifact = snapshot?.artifacts.find(item => item.uid === this.state.targetArtifactUid)
+    const workItem = snapshot?.workItems.find(item => item.uid === artifact?.workItemUid)
+    if (artifact === undefined || workItem?.openSpec?.enabled !== true) return
+    const values = await this.openForm({
+      title: `初始化 OpenSpec · ${workItem.key}`,
+      description: `将在当前隔离特性分支中执行 openspec init，由 OpenSpec 官方 CLI 生成配置、skills 及所选工具支持的 commands。不会修改源仓库、自动提交或推送。`,
+      submitLabel: '运行 OpenSpec 初始化',
+      fields: [
+        { name: 'tools', label: '生成的工具集成', type: 'select', required: true, value: 'agents', options: [
+          { value: 'agents', label: 'DSH / 共享 .agents skills（推荐）' },
+          { value: 'agents,claude', label: 'DSH + Claude Code' },
+          { value: 'agents,cursor', label: 'DSH + Cursor' },
+          { value: 'agents,codex', label: 'DSH + Codex' },
+          { value: 'all', label: '全部 OpenSpec 支持工具' },
+          { value: 'none', label: '只创建 OpenSpec 目录' },
+        ], help: 'DSH 读取 .agents/skills。Slash commands 只由 OpenSpec 为支持命令形式的工具生成。' },
+        { name: 'confirmed', label: '我确认在当前隔离代码空间中运行 OpenSpec CLI', type: 'checkbox', required: true },
+      ],
+    })
+    if (values?.confirmed !== true) return
+    await this.mutate({ kind: 'development-initialize-openspec', workspaceId: this.state.workspaceId!, artifactUid: artifact.uid, tools: String(values.tools) })
+  }
+
+  private async installOpenSpec(): Promise<void> {
+    const workItem = this.state.snapshot?.workItems.find(item => item.uid === this.state.workItemUid)
+    if (workItem?.openSpec?.enabled !== true) return
+    const values = await this.openForm({
+      title: '安装 OpenSpec CLI',
+      description: '将按 OpenSpec 官方方式执行 npm install -g @fission-ai/openspec@latest。需要 Node.js 20.19+、网络访问及全局 npm 安装权限。',
+      submitLabel: '安装 OpenSpec',
+      fields: [{ name: 'confirmed', label: '我确认在当前电脑全局安装 OpenSpec CLI', type: 'checkbox', required: true }],
+    })
+    if (values?.confirmed !== true) return
+    await this.mutate({ kind: 'development-install-openspec', workspaceId: this.state.workspaceId!, workItemUid: workItem.uid })
+  }
+
+  private async disableOpenSpec(): Promise<void> {
+    const workItem = this.state.snapshot?.workItems.find(item => item.uid === this.state.workItemUid)
+    if (workItem === undefined) return
+    const values = await this.openForm({
+      title: `不使用 OpenSpec · ${workItem.key}`,
+      description: '只关闭当前需求的 OpenSpec 关联，不会删除代码仓中已有的 OpenSpec 文件；开发流程可以继续。',
+      submitLabel: '关闭 OpenSpec',
+      fields: [{ name: 'confirmed', label: '我确认当前需求不使用 OpenSpec', type: 'checkbox', required: true }],
+    })
+    if (values?.confirmed !== true) return
+    await this.mutate({ kind: 'update-work-item-settings', workspaceId: this.state.workspaceId!, workItemUid: workItem.uid, repositoryScope: workItem.repositoryScope ?? [], developmentTargets: workItem.developmentTargets ?? [], openSpec: { enabled: false } })
   }
 
   private async runTest(repositoryId: string): Promise<void> {

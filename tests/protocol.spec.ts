@@ -44,6 +44,10 @@ describe('parseAction', () => {
       .toMatchObject({ kind: 'bind-session', sessionId: 's1' })
     expect(parseAction({ kind: 'development-test', workspaceId: 'w1', artifactUid: 'a1', repositoryId: 'app', testId: 'unit' }))
       .toMatchObject({ kind: 'development-test', testId: 'unit' })
+    expect(parseAction({ kind: 'development-install-openspec', workspaceId: 'w1', workItemUid: 'w1' }))
+      .toMatchObject({ kind: 'development-install-openspec', workItemUid: 'w1' })
+    expect(parseAction({ kind: 'development-initialize-openspec', workspaceId: 'w1', artifactUid: 'a1', tools: 'agents' }))
+      .toMatchObject({ kind: 'development-initialize-openspec', artifactUid: 'a1', tools: 'agents' })
   })
 
   it('accepts requirement bundle preview and apply actions', () => {

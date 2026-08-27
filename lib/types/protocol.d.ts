@@ -385,6 +385,11 @@ export interface ProjectSnapshot {
 export interface OpenSpecValidation {
     status: 'pending' | 'valid' | 'invalid';
     message: string;
+    code?: 'cli-missing' | 'missing-directory' | 'missing-config' | 'not-directory' | 'unsafe-path' | 'invalid-settings';
+    cliInstalled: boolean;
+    cliVersion?: string;
+    canInstall?: boolean;
+    canInitialize?: boolean;
 }
 export interface StageProgress {
     stage: StageId;
@@ -600,6 +605,15 @@ export type SddAction = {
     workspaceId: string;
     artifactUid: string;
     repositoryId: string;
+} | {
+    kind: 'development-install-openspec';
+    workspaceId: string;
+    workItemUid: string;
+} | {
+    kind: 'development-initialize-openspec';
+    workspaceId: string;
+    artifactUid: string;
+    tools: string;
 } | {
     kind: 'development-status';
     workspaceId: string;

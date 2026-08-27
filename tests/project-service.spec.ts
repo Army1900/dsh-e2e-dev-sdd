@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { mkdir, mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { ApiProxy } from '@deepseek-ai/dsh-host-apiproxy'
@@ -23,6 +23,54 @@ function api(path: string, opened: string[] = []): ApiProxy {
 }
 
 describe('SddProjectService', () => {
+  it('initializes missing OpenSpec files inside the isolated development branch', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-sdd-'))
+    const originalPath = process.env.PATH
+    const bin = join(root, 'bin'); await mkdir(bin)
+    await writeFile(join(bin, 'openspec.cjs'), `const fs=require('node:fs');const path=require('node:path');if(process.argv.includes('--version')){console.log('1.8.0');process.exit(0)}if(process.argv.includes('init')){fs.mkdirSync(path.join(process.cwd(),'openspec','specs'),{recursive:true});fs.mkdirSync(path.join(process.cwd(),'openspec','changes','archive'),{recursive:true});fs.writeFileSync(path.join(process.cwd(),'openspec','config.yaml'),'schema: spec-driven\\n');fs.mkdirSync(path.join(process.cwd(),'.agents','skills','openspec-propose'),{recursive:true});fs.writeFileSync(path.join(process.cwd(),'.agents','skills','openspec-propose','SKILL.md'),'# OpenSpec propose\\n');process.exit(0)}process.exit(1)\n`)
+    if (process.platform === 'win32') await writeFile(join(bin, 'openspec.cmd'), '@node "%~dp0\\openspec.cjs" %*\r\n')
+    else { await writeFile(join(bin, 'openspec'), '#!/usr/bin/env node\nrequire("./openspec.cjs")\n'); await chmod(join(bin, 'openspec'), 0o755) }
+    process.env.PATH = `${bin}${process.platform === 'win32' ? ';' : ':'}${process.env.PATH ?? ''}`
+    const provider = new ManualSourceProvider()
+    const sources = { names: () => ['manual'], fetch: async (_name: string, request: any) => provider.get({ ...request, signal: request.signal ?? AbortSignal.timeout(1000) }) } as unknown as SddSourceRegistry
+    const service = new SddProjectService(api(root), sources)
+    await service.execute({ kind: 'import-source', workspaceId: 'w1', provider: 'manual', sourceKind: 'requirement', key: 'REQ-OPEN-SPEC', input: { title: 'OpenSpec 初始化' } })
+    let snapshot = await service.snapshot('w1')
+    const workItem = snapshot.workItems[0]!
+    const repository = join(root, 'app')
+    await mkdir(repository)
+    execFileSync('git', ['init', '-b', 'main'], { cwd: repository })
+    execFileSync('git', ['config', 'user.email', 'sdd@example.test'], { cwd: repository })
+    execFileSync('git', ['config', 'user.name', 'SDD Test'], { cwd: repository })
+    await writeFile(join(repository, 'README.md'), '# App\n')
+    execFileSync('git', ['add', 'README.md'], { cwd: repository })
+    execFileSync('git', ['commit', '-m', 'initial'], { cwd: repository })
+    await service.execute({ kind: 'add-project-repository', workspaceId: 'w1', id: 'app', source: './app', baseBranch: 'main' })
+    await service.execute({ kind: 'update-work-item-settings', workspaceId: 'w1', workItemUid: workItem.uid, repositoryScope: ['app'], developmentTargets: ['app'], openSpec: { enabled: true, repositoryId: 'app', path: 'openspec' } })
+    const projectPath = join(root, '.sdd', 'project.yaml')
+    const project = parse(await readFile(projectPath, 'utf8'))
+    project.dependencies.development = {}
+    await writeFile(projectPath, stringify(project), 'utf8')
+    await service.execute({ kind: 'create-draft', workspaceId: 'w1', stage: 'development', title: workItem.title, basedOn: [], workItemUid: workItem.uid })
+    snapshot = await service.snapshot('w1')
+    const artifact = snapshot.artifacts.find(item => item.stage === 'development')!
+    await service.execute({ kind: 'development-create', workspaceId: 'w1', artifactUid: artifact.uid, repositoryId: 'app' })
+    snapshot = await service.snapshot('w1')
+    expect(snapshot.openSpecValidation[workItem.uid]).toMatchObject({ status: 'invalid', code: 'missing-directory', cliInstalled: true, canInitialize: true })
+    await expect(service.execute({ kind: 'context', workspaceId: 'w1', stage: 'development', artifactUid: artifact.uid, artifactUids: [] }))
+      .resolves.toMatchObject({ prompt: expect.stringContaining('OpenSpec') })
+    await service.execute({ kind: 'development-initialize-openspec', workspaceId: 'w1', artifactUid: artifact.uid, tools: 'agents' })
+    snapshot = await service.snapshot('w1')
+    expect(snapshot.openSpecValidation[workItem.uid]).toMatchObject({ status: 'valid' })
+    const isolated = snapshot.developmentWorkspaces[0]!.repositories[0]!.path
+    expect(await readFile(join(isolated, 'openspec', 'config.yaml'), 'utf8')).toBe('schema: spec-driven\n')
+    expect(await readdir(join(isolated, 'openspec', 'specs'))).toEqual([])
+    expect(await readdir(join(isolated, 'openspec', 'changes', 'archive'))).toEqual([])
+    expect(await readFile(join(isolated, '.agents', 'skills', 'openspec-propose', 'SKILL.md'), 'utf8')).toContain('OpenSpec propose')
+    expect(execFileSync('git', ['status', '--short'], { cwd: repository, encoding: 'utf8' })).toBe('')
+    process.env.PATH = originalPath
+  })
+
   it('works out of the box with the built-in manual source', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-sdd-'))
     const provider = new ManualSourceProvider()
@@ -257,7 +305,7 @@ describe('SddProjectService', () => {
     snapshot = await service.snapshot('w1')
     expect(snapshot.workItems.find(item => item.key === 'REQ-1')).toMatchObject({ status: 'change-pending', change: { kind: 'modified', reviewRequiredStages: ['requirements'] } })
     expect(snapshot.workItems.find(item => item.key === 'REQ-1')).toMatchObject({ repositoryScope: ['web'], developmentTargets: ['web'], openSpec: { enabled: true, repositoryId: 'web', path: 'openspec' } })
-    expect(snapshot.openSpecValidation[req1.uid]).toEqual({ status: 'pending', message: '已配置，创建开发空间后验证' })
+    expect(snapshot.openSpecValidation[req1.uid]).toMatchObject({ status: 'pending', message: expect.stringContaining('创建开发空间后检查目录'), cliInstalled: expect.any(Boolean) })
     expect(snapshot.workItems.find(item => item.key === 'REQ-2')).toMatchObject({ status: 'removed-pending', change: { kind: 'removed' } })
     expect(snapshot.workItems.find(item => item.key === 'REQ-3')).toMatchObject({ status: 'active' })
     await service.execute({ kind: 'remove-project-repository', workspaceId: 'w1', id: 'web' })

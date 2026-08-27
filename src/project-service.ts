@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
+import { spawn } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { access, copyFile, mkdir, readFile, readdir, realpath, rename, stat, unlink, writeFile } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
@@ -96,6 +97,36 @@ async function exists(path: string): Promise<boolean> {
 function contained(root: string, target: string): boolean {
   const path = relative(root, target)
   return path === '' || (!path.startsWith('..') && !isAbsolute(path))
+}
+
+interface NativeCommandResult { stdout: string; stderr: string; exitCode: number }
+
+function nativeExecutable(name: 'npm' | 'openspec'): string {
+  return process.platform === 'win32' ? `${name}.cmd` : name
+}
+
+async function runNative(argv: string[], cwd: string, timeoutMs: number): Promise<NativeCommandResult> {
+  return await new Promise((resolveResult, reject) => {
+    const child = spawn(argv[0]!, argv.slice(1), { cwd, shell: process.platform === 'win32', env: process.env, stdio: ['ignore', 'pipe', 'pipe'], signal: AbortSignal.timeout(timeoutMs) })
+    const stdout: Buffer[] = []; const stderr: Buffer[] = []; let size = 0
+    const collect = (target: Buffer[]) => (chunk: Buffer) => { size += chunk.length; if (size > 1024 * 1024) child.kill(); else target.push(chunk) }
+    child.stdout.on('data', collect(stdout)); child.stderr.on('data', collect(stderr)); child.once('error', reject)
+    child.once('close', code => {
+      if (size > 1024 * 1024) return reject(new Error('OpenSpec command output exceeded 1 MiB'))
+      resolveResult({ stdout: Buffer.concat(stdout).toString('utf8'), stderr: Buffer.concat(stderr).toString('utf8'), exitCode: code ?? -1 })
+    })
+  })
+}
+
+async function inspectOpenSpecCli(cwd: string): Promise<{ installed: boolean; version?: string }> {
+  try {
+    const result = await runNative([nativeExecutable('openspec'), '--version', '--no-color'], cwd, 15_000)
+    const version = `${result.stdout}\n${result.stderr}`.trim().split(/\r?\n/).find(Boolean)
+    return result.exitCode === 0 ? { installed: true, ...(version === undefined ? {} : { version }) } : { installed: false }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { installed: false }
+    return { installed: false }
+  }
 }
 
 function openSpecDescription(workItem: WorkItem, validation?: OpenSpecValidation): string {
@@ -280,12 +311,21 @@ function validateProject(value: unknown): { project?: ProjectConfig; errors: str
 }
 
 export class SddProjectService {
+  private openSpecCliCache?: { expiresAt: number; value: { installed: boolean; version?: string } }
+
   constructor(
     private readonly api: ApiProxy,
     private readonly sourceRegistry?: SddSourceRegistry,
     private readonly sessionController?: StageSessionController,
     private readonly git = new GitDevelopmentService(),
   ) {}
+
+  private async openSpecCli(cwd: string, refresh = false): Promise<{ installed: boolean; version?: string }> {
+    if (!refresh && this.openSpecCliCache !== undefined && this.openSpecCliCache.expiresAt > Date.now()) return this.openSpecCliCache.value
+    const value = await inspectOpenSpecCli(cwd)
+    this.openSpecCliCache = { expiresAt: Date.now() + 10_000, value }
+    return value
+  }
 
   private async workspace(workspaceId: string): Promise<{ workspaceId: string; title: string; path: string }> {
     const response = await this.api.workspace.list(request({}))
@@ -354,6 +394,14 @@ export class SddProjectService {
       if (workItem !== undefined && !(workItem.developmentTargets ?? []).includes(action.repositoryId)) throw new Error(`repository ${action.repositoryId} is not a confirmed development target`)
       await this.git.create(snapshot.workspace.path, snapshot.project, artifact, action.repositoryId)
       await appendEvent(snapshot.workspace.path, 'development.workspace-created', artifact.key, artifact.stage, { repositoryId: action.repositoryId })
+      return this.snapshot(action.workspaceId)
+    }
+    if (action.kind === 'development-install-openspec') {
+      await this.installOpenSpec(action.workspaceId, action.workItemUid)
+      return this.snapshot(action.workspaceId)
+    }
+    if (action.kind === 'development-initialize-openspec') {
+      await this.initializeOpenSpec(action.workspaceId, action.artifactUid, action.tools)
       return this.snapshot(action.workspaceId)
     }
     if (action.kind === 'development-status') {
@@ -523,36 +571,47 @@ export class SddProjectService {
     workspacePath: string, project: ProjectConfig, workItems: WorkItem[], artifacts: ArtifactSummary[], developmentWorkspaces: DevelopmentWorkspace[],
   ): Promise<Record<string, OpenSpecValidation>> {
     const result: Record<string, OpenSpecValidation> = {}
+    const cli = await this.openSpecCli(workspacePath)
+    const cliFields = { cliInstalled: cli.installed, ...(cli.version === undefined ? {} : { cliVersion: cli.version }), ...(cli.installed ? {} : { canInstall: true as const }) }
     for (const workItem of workItems) {
       const configured = workItem.openSpec
       if (configured?.enabled !== true) continue
       if (configured.repositoryId === undefined || configured.path === undefined) {
-        result[workItem.uid] = { status: 'invalid', message: '配置缺少仓库或相对路径' }
+        result[workItem.uid] = { status: 'invalid', message: '配置缺少仓库或相对路径', code: 'invalid-settings', ...cliFields }
         continue
       }
       if (!project.development.repositories.some(item => item.id === configured.repositoryId) || !(workItem.developmentTargets ?? []).includes(configured.repositoryId)) {
-        result[workItem.uid] = { status: 'invalid', message: '配置仓库不属于本需求的开发目标' }
+        result[workItem.uid] = { status: 'invalid', message: '配置仓库不属于本需求的开发目标', code: 'invalid-settings', ...cliFields }
         continue
       }
       const developmentArtifactUids = new Set(artifacts.filter(item => item.stage === 'development' && item.workItemUid === workItem.uid).map(item => item.uid))
       const repository = developmentWorkspaces.filter(item => developmentArtifactUids.has(item.artifactUid)).flatMap(item => item.repositories).find(item => item.id === configured.repositoryId)
       if (repository === undefined) {
-        result[workItem.uid] = { status: 'pending', message: '已配置，创建开发空间后验证' }
+        result[workItem.uid] = { status: 'pending', message: `已配置，创建开发空间后检查目录；${cli.installed ? `CLI ${cli.version ?? '已安装'}` : 'CLI 未安装'}`, ...cliFields }
         continue
       }
       const root = resolve(repository.path)
       const target = resolve(root, configured.path)
       if (!contained(root, target)) {
-        result[workItem.uid] = { status: 'invalid', message: 'OpenSpec 路径超出代码仓库' }
+        result[workItem.uid] = { status: 'invalid', message: 'OpenSpec 路径超出代码仓库', code: 'unsafe-path', ...cliFields }
         continue
       }
       try {
         const info = await stat(target)
-        result[workItem.uid] = info.isDirectory()
-          ? { status: 'valid', message: '已在隔离代码空间验证目录' }
-          : { status: 'invalid', message: '配置路径不是目录' }
+        if (!info.isDirectory()) {
+          result[workItem.uid] = { status: 'invalid', message: '配置路径不是目录', code: 'not-directory', ...cliFields }
+          continue
+        }
+        const configExists = await exists(join(target, 'config.yaml')) || await exists(join(target, 'config.yml'))
+        if (!configExists) {
+          result[workItem.uid] = { status: 'invalid', message: `配置目录中不存在 config.yaml；${cli.installed ? '可使用 CLI 初始化' : 'CLI 未安装'}`, code: 'missing-config', canInitialize: cli.installed, ...cliFields }
+          continue
+        }
+        result[workItem.uid] = cli.installed
+          ? { status: 'valid', message: `配置目录与 CLI ${cli.version ?? ''} 已验证`.trim(), ...cliFields }
+          : { status: 'pending', message: '配置目录有效；OpenSpec CLI 未安装，可安装或忽略继续', code: 'cli-missing', ...cliFields }
       } catch {
-        result[workItem.uid] = { status: 'invalid', message: '隔离代码空间中不存在配置目录' }
+        result[workItem.uid] = { status: 'invalid', message: `隔离代码空间中不存在配置目录；${cli.installed ? '可使用 CLI 初始化' : 'CLI 未安装'}`, code: 'missing-directory', canInitialize: cli.installed, ...cliFields }
       }
     }
     return result
@@ -824,6 +883,45 @@ export class SddProjectService {
     if (!contained(root, path)) throw new Error('template path escapes .sdd/templates')
     const response = await this.api.host.openPath(request({ path }), AbortSignal.timeout(15_000))
     if (!response.result.ok) throw new Error(`${response.result.error.code}: ${response.result.error.message}`)
+  }
+
+  private async installOpenSpec(workspaceId: string, workItemUid: string): Promise<void> {
+    const snapshot = await this.requireSnapshot(workspaceId)
+    const workItem = snapshot.workItems.find(item => item.uid === workItemUid)
+    if (workItem?.openSpec?.enabled !== true) throw new Error('OpenSpec is not enabled for this work item')
+    const [nodeMajor, nodeMinor] = process.versions.node.split('.').map(Number)
+    if ((nodeMajor ?? 0) < 20 || (nodeMajor === 20 && (nodeMinor ?? 0) < 19)) throw new Error(`OpenSpec requires Node.js 20.19 or newer; current version is ${process.versions.node}`)
+    const result = await runNative([nativeExecutable('npm'), 'install', '-g', '@fission-ai/openspec@latest'], snapshot.workspace.path, 300_000)
+    if (result.exitCode !== 0) throw new Error(`OpenSpec installation failed: ${result.stderr.trim() || result.stdout.trim() || `exit ${result.exitCode}`}`)
+    const cli = await this.openSpecCli(snapshot.workspace.path, true)
+    if (!cli.installed) throw new Error('OpenSpec was installed but is not available on PATH; restart DSH or add the npm global bin directory to PATH')
+    await appendEvent(snapshot.workspace.path, 'development.openspec-cli-installed', workItem.key, 'development', { version: cli.version })
+  }
+
+  private async initializeOpenSpec(workspaceId: string, artifactUid: string, tools: string): Promise<void> {
+    const snapshot = await this.requireSnapshot(workspaceId)
+    const artifact = this.requireArtifact(snapshot, artifactUid)
+    if (artifact.stage !== 'development' || artifact.workItemUid === undefined) throw new Error('OpenSpec can only be initialized for a bound development artifact')
+    const workItem = snapshot.workItems.find(item => item.uid === artifact.workItemUid)
+    const configured = workItem?.openSpec
+    if (workItem === undefined || configured?.enabled !== true || configured.repositoryId === undefined || configured.path === undefined) throw new Error('OpenSpec is not configured for this work item')
+    if (!(workItem.developmentTargets ?? []).includes(configured.repositoryId)) throw new Error('OpenSpec repository is not a confirmed development target')
+    const workspace = snapshot.developmentWorkspaces.find(item => item.artifactUid === artifact.uid)
+    const repository = workspace?.repositories.find(item => item.id === configured.repositoryId)
+    if (repository === undefined) throw new Error('create the configured repository in the isolated development workspace first')
+    const root = resolve(repository.path)
+    const target = resolve(root, configured.path)
+    if (!contained(root, target)) throw new Error('OpenSpec path escapes the isolated repository')
+    if (basename(target) !== 'openspec') throw new Error('OpenSpec CLI initialization requires the configured path to end with openspec')
+    const normalizedTools = tools.trim()
+    if (!/^(?:all|none|[a-z0-9]+(?:-[a-z0-9]+)*(?:,[a-z0-9]+(?:-[a-z0-9]+)*)*)$/.test(normalizedTools)) throw new Error('invalid OpenSpec tool selection')
+    const cli = await this.openSpecCli(snapshot.workspace.path)
+    if (!cli.installed) throw new Error('OpenSpec CLI is not installed')
+    const projectRoot = dirname(target)
+    const command = await runNative([nativeExecutable('openspec'), 'init', '--tools', normalizedTools, '--no-color', '--no-animation'], projectRoot, 180_000)
+    if (command.exitCode !== 0) throw new Error(`OpenSpec initialization failed: ${command.stderr.trim() || command.stdout.trim() || `exit ${command.exitCode}`}`)
+    if (!(await exists(join(target, 'config.yaml'))) && !(await exists(join(target, 'config.yml')))) throw new Error('OpenSpec CLI completed without creating config.yaml')
+    await appendEvent(snapshot.workspace.path, 'development.openspec-initialized', artifact.key, artifact.stage, { repositoryId: configured.repositoryId, path: configured.path, tools: normalizedTools, version: cli.version })
   }
 
   private async updateWorkItemSettings(
@@ -1100,9 +1198,6 @@ export class SddProjectService {
       if ((workItem.developmentTargets ?? []).length === 0) return '规格设计阶段必须先确认本需求的开发目标仓库'
       if (workItem.developmentTargets!.some(id => !(workItem.repositoryScope ?? []).includes(id))) return '开发目标仓库必须属于系统设计确认的仓库范围'
     }
-    if (artifact.stage === 'development' && workItem.openSpec?.enabled === true && snapshot.openSpecValidation[workItem.uid]?.status !== 'valid') {
-      return `OpenSpec 尚未通过开发空间验证：${snapshot.openSpecValidation[workItem.uid]?.message ?? '缺少验证状态'}`
-    }
     return undefined
   }
 
@@ -1305,6 +1400,12 @@ export class SddProjectService {
       }
     }
     boundTemplate = renderStageTemplateContent(boundTemplate, artifact.key, artifact.title)
+    const openSpecRepository = workItem?.openSpec?.enabled === true
+      ? development?.repositories.find(item => item.id === workItem.openSpec?.repositoryId) : undefined
+    const openSpecTarget = openSpecRepository === undefined || workItem?.openSpec?.path === undefined
+      ? undefined : resolve(openSpecRepository.path, workItem.openSpec.path)
+    const openSpecRuntime = openSpecTarget === undefined || openSpecValidation?.status !== 'valid' ? ''
+      : `OpenSpec 已启用并通过检查。OpenSpec 项目根目录：${dirname(openSpecTarget)}。官方生成的共享 skills 位于 ${join(dirname(openSpecTarget), '.agents', 'skills')}；由于代码仓是当前 SDD 工作空间内的隔离 Worktree，执行 OpenSpec 工作流前必须先读取匹配的 openspec-*/SKILL.md 并遵循，在 OpenSpec 项目根目录运行 openspec 命令。`
     this.sessionController?.bind({
       sessionId, stage, projectPath: workspacePath,
       artifactDirectory: resolve(workspacePath, artifact.relativeDirectory),
@@ -1315,6 +1416,7 @@ export class SddProjectService {
         `绑定交付件：${artifact.key} (${artifact.uid})`,
         `交付件入口：${resolve(workspacePath, artifact.relativeDirectory, artifact.entry)}`,
         workItem === undefined ? '' : `仓库范围：${(workItem.repositoryScope ?? []).join('、') || '未配置'}\n开发目标：${(workItem.developmentTargets ?? []).join('、') || '未配置'}\nOpenSpec：${openSpecDescription(workItem, openSpecValidation)}`,
+        openSpecRuntime,
         development === undefined ? '' : `隔离代码目录：\n${development.repositories.map(item => `- ${item.id}: ${item.path}`).join('\n')}`,
       ].filter(Boolean).join('\n'),
     })

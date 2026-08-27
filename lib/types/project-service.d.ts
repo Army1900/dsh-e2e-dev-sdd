@@ -8,7 +8,9 @@ export declare class SddProjectService {
     private readonly sourceRegistry?;
     private readonly sessionController?;
     private readonly git;
+    private openSpecCliCache?;
     constructor(api: ApiProxy, sourceRegistry?: SddSourceRegistry | undefined, sessionController?: StageSessionController | undefined, git?: GitDevelopmentService);
+    private openSpecCli;
     private workspace;
     execute(action: SddAction): Promise<ProjectSnapshot | ImportPreview | StageTemplatePreview | RepositoryInspection | {
         revisionPreview: RevisionPreview;
@@ -41,6 +43,8 @@ export declare class SddProjectService {
     private openArtifactPath;
     private readStageTemplate;
     private openStageTemplate;
+    private installOpenSpec;
+    private initializeOpenSpec;
     private updateWorkItemSettings;
     private addProjectRepository;
     private updateProjectRepositoryBranch;

@@ -434,6 +434,11 @@ export interface ProjectSnapshot {
 export interface OpenSpecValidation {
   status: 'pending' | 'valid' | 'invalid'
   message: string
+  code?: 'cli-missing' | 'missing-directory' | 'missing-config' | 'not-directory' | 'unsafe-path' | 'invalid-settings'
+  cliInstalled: boolean
+  cliVersion?: string
+  canInstall?: boolean
+  canInitialize?: boolean
 }
 
 export interface StageProgress {
@@ -530,6 +535,8 @@ export type SddAction =
   | { kind: 'sync-run'; workspaceId: string; runUid: string }
   | { kind: 'complete-run'; workspaceId: string; runUid: string }
   | { kind: 'development-create'; workspaceId: string; artifactUid: string; repositoryId: string }
+  | { kind: 'development-install-openspec'; workspaceId: string; workItemUid: string }
+  | { kind: 'development-initialize-openspec'; workspaceId: string; artifactUid: string; tools: string }
   | { kind: 'development-status'; workspaceId: string; artifactUid: string }
   | { kind: 'development-test'; workspaceId: string; artifactUid: string; repositoryId: string; testId: string }
   | { kind: 'development-commit'; workspaceId: string; artifactUid: string; repositoryId: string; message: string }
@@ -587,6 +594,8 @@ export function parseAction(value: unknown): SddAction | undefined {
   if ((action.kind === 'sync-run' || action.kind === 'complete-run') && typeof action.runUid === 'string') return action as unknown as SddAction
   if ((action.kind === 'development-create' || action.kind === 'development-status') && typeof action.artifactUid === 'string'
     && (action.kind === 'development-status' || typeof action.repositoryId === 'string')) return action as unknown as SddAction
+  if (action.kind === 'development-install-openspec' && typeof action.workItemUid === 'string') return action as unknown as SddAction
+  if (action.kind === 'development-initialize-openspec' && typeof action.artifactUid === 'string' && typeof action.tools === 'string') return action as unknown as SddAction
   if (action.kind === 'development-test' && typeof action.artifactUid === 'string' && typeof action.repositoryId === 'string'
     && typeof action.testId === 'string') return action as unknown as SddAction
   if (action.kind === 'development-commit' && typeof action.artifactUid === 'string' && typeof action.repositoryId === 'string'
