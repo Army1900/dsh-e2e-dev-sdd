@@ -9,6 +9,8 @@ import {
   artifactTemplate,
   type ArtifactManifest,
   type ArtifactFileSummary,
+  type ArtifactReference,
+  type ArtifactRevision,
   type ArtifactSummary,
   type DashboardSnapshot,
   type DeliveryCellStatus,
@@ -22,9 +24,12 @@ import {
   type ProjectSnapshot,
   type QualityReport,
   type RepositoryInspection,
+  type RevisionInputChange,
+  type RevisionPreview,
   type SddAction,
   type SddEvent,
   type SourceEnvelope,
+  type SourceReference,
   type SourceBundle,
   type SourceSummary,
   type StageRun,
@@ -290,7 +295,7 @@ export class SddProjectService {
     return { workspaceId, title: item.title, path: await realpath(item.path) }
   }
 
-  async execute(action: SddAction): Promise<ProjectSnapshot | ImportPreview | StageTemplatePreview | RepositoryInspection | { prompt: string; run?: StageRun } | { artifactFile: { artifactUid: string; path: string; kind: ArtifactFileSummary['kind'] | 'manifest'; content?: string; dataUrl?: string } } | { opened: true }> {
+  async execute(action: SddAction): Promise<ProjectSnapshot | ImportPreview | StageTemplatePreview | RepositoryInspection | { revisionPreview: RevisionPreview } | { prompt: string; run?: StageRun } | { artifactFile: { artifactUid: string; path: string; kind: ArtifactFileSummary['kind'] | 'manifest'; content?: string; dataUrl?: string } } | { opened: true }> {
     if (action.kind === 'snapshot') return this.snapshot(action.workspaceId)
     if (action.kind === 'initialize') { await this.initialize(action.workspaceId); return this.snapshot(action.workspaceId) }
     if (action.kind === 'reinitialize') { await this.reinitialize(action.workspaceId); return this.snapshot(action.workspaceId) }
@@ -298,7 +303,8 @@ export class SddProjectService {
       await this.createDraft(action.workspaceId, action.stage, action.title, action.basedOn, action.sourceUids ?? [], action.workItemUid)
       return this.snapshot(action.workspaceId)
     }
-    if (action.kind === 'create-revision') { await this.createRevision(action.workspaceId, action.artifactUid); return this.snapshot(action.workspaceId) }
+    if (action.kind === 'preview-revision') return { revisionPreview: await this.previewRevision(action.workspaceId, action.artifactUid) }
+    if (action.kind === 'create-revision') { await this.createRevision(action.workspaceId, action.artifactUid, action.revisionKind, action.reason, action.affectedAreas); return this.snapshot(action.workspaceId) }
     if (action.kind === 'discard-draft') { await this.discardDraft(action.workspaceId, action.artifactUid); return this.snapshot(action.workspaceId) }
     if (action.kind === 'accept') { await this.accept(action.workspaceId, action.artifactUid, action.checklist); return this.snapshot(action.workspaceId) }
     if (action.kind === 'read-artifact-file') return { artifactFile: await this.readArtifactFile(action.workspaceId, action.artifactUid, action.path) }
@@ -636,11 +642,73 @@ export class SddProjectService {
     await appendEvent(snapshot.workspace.path, 'artifact.created', key, stage, { artifactUid: uid })
   }
 
-  private async createRevision(workspaceId: string, artifactUid: string): Promise<void> {
+  private async revisionPlan(snapshot: ProjectSnapshot & { project: ProjectConfig }, previous: ArtifactSummary): Promise<{ preview: RevisionPreview; basedOn: ArtifactReference[]; derivedFrom: SourceReference[]; templateChanged: boolean }> {
+    const changes: RevisionInputChange[] = []
+    const workItem = previous.workItemUid === undefined ? undefined : snapshot.workItems.find(item => item.uid === previous.workItemUid)
+    const previousByStage = new Map<StageId, ArtifactReference>()
+    for (const reference of previous.basedOn) {
+      const input = snapshot.artifacts.find(item => item.uid === reference.uid)
+      if (input !== undefined) previousByStage.set(input.stage, reference)
+    }
+    const dependencyStages = new Set<StageId>([...previousByStage.keys(), ...Object.entries(snapshot.project.dependencies[previous.stage] ?? {}).filter(([, mode]) => mode === 'required').map(([stage]) => stage as StageId)])
+    const basedOn: ArtifactReference[] = []
+    for (const stage of dependencyStages) {
+      const current = snapshot.artifacts.filter(item => item.stage === stage && item.status === 'accepted' && (workItem === undefined || item.workItemUid === workItem.uid))
+        .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0]
+      const old = previousByStage.get(stage)
+      if (current === undefined) {
+        if ((snapshot.project.dependencies[previous.stage] ?? {})[stage] === 'required') throw new Error(`missing accepted ${stage} input for revision`)
+        if (old !== undefined) basedOn.push(old)
+        continue
+      }
+      const next = { uid: current.uid, version: current.version, contentHash: current.contentHash }
+      basedOn.push(next)
+      if (old?.uid !== next.uid || old.version !== next.version || old.contentHash !== next.contentHash) {
+        changes.push({ kind: 'artifact', label: `${stageDefinition(stage).label} · ${current.key}`, ...(old === undefined ? {} : { previous: old }), current: next })
+      }
+    }
+    const currentSourceUids = workItem === undefined ? previous.derivedFrom.map(item => item.uid)
+      : [...new Set([workItem.sourceUid, workItem.bundleSourceUid].filter((uid): uid is string => uid !== undefined))]
+    const useCurrentSources = previous.stage === 'requirements' || previous.derivedFrom.length > 0
+    const derivedFrom: SourceReference[] = useCurrentSources ? currentSourceUids.map(uid => {
+      const source = snapshot.sources.find(item => item.uid === uid)
+      if (source === undefined) throw new Error(`current source not found: ${uid}`)
+      return { uid: source.uid, provider: source.provider, kind: source.kind, ...(source.externalKey === undefined ? {} : { externalKey: source.externalKey }), ...(source.contentHash === undefined ? {} : { contentHash: source.contentHash }) }
+    }) : []
+    const sourceKey = (source: SourceReference) => `${source.provider}:${source.kind}:${source.externalKey ?? source.uid}`
+    const oldSources = new Map(previous.derivedFrom.map(item => [sourceKey(item), item]))
+    const newSources = new Map(derivedFrom.map(item => [sourceKey(item), item]))
+    for (const key of new Set([...oldSources.keys(), ...newSources.keys()])) {
+      const old = oldSources.get(key); const current = newSources.get(key)
+      if (old?.uid !== current?.uid || old?.contentHash !== current?.contentHash) {
+        changes.push({ kind: 'source', label: current?.externalKey ?? old?.externalKey ?? key, ...(old === undefined ? {} : { previous: old }), ...(current === undefined ? {} : { current }) })
+      }
+    }
+    const currentTemplate = await loadStageTemplate(snapshot.workspace.path, previous.stage)
+    const templateChanged = previous.template !== undefined && (previous.template.contentHash !== currentTemplate.contentHash || previous.template.version !== currentTemplate.config.version)
+    if (templateChanged) changes.push({ kind: 'template', label: `${stageDefinition(previous.stage).label}交付件模板`, ...(previous.template === undefined ? {} : { previous: { version: previous.template.version, contentHash: previous.template.contentHash } }), current: { version: currentTemplate.config.version, contentHash: currentTemplate.contentHash } })
+    return {
+      preview: { schema: 'dsh-sdd/revision-preview@1', artifactUid: previous.uid, key: previous.key, version: previous.version, nextVersion: nextVersion(previous.version), changes, canCreateFromUpstream: changes.length > 0 },
+      basedOn, derivedFrom, templateChanged,
+    }
+  }
+
+  private async previewRevision(workspaceId: string, artifactUid: string): Promise<RevisionPreview> {
+    const snapshot = await this.requireSnapshot(workspaceId)
+    const previous = this.requireArtifact(snapshot, artifactUid)
+    if (previous.status !== 'accepted') throw new Error('only an accepted artifact can start a new revision')
+    return (await this.revisionPlan(snapshot, previous)).preview
+  }
+
+  private async createRevision(workspaceId: string, artifactUid: string, revisionKind: 'upstream' | 'user-intent', reason?: string, affectedAreas?: string[]): Promise<void> {
     const snapshot = await this.requireSnapshot(workspaceId)
     const previous = this.requireArtifact(snapshot, artifactUid)
     if (previous.status !== 'accepted') throw new Error('only an accepted artifact can start a new revision')
     if (snapshot.artifacts.some(item => item.supersedes?.uid === previous.uid && item.status !== 'superseded')) throw new Error('this artifact already has an active revision')
+    const plan = await this.revisionPlan(snapshot, previous)
+    if (revisionKind === 'upstream' && !plan.preview.canCreateFromUpstream) throw new Error('upstream inputs, source hashes and template are unchanged; no upstream revision can be created')
+    const normalizedReason = reason?.trim()
+    if (revisionKind === 'user-intent' && !normalizedReason) throw new Error('a user-intent revision requires a change reason')
     const uid = randomUUID()
     const previousDirectory = resolve(snapshot.workspace.path, previous.relativeDirectory)
     const parent = dirname(previousDirectory)
@@ -654,17 +722,26 @@ export class SddProjectService {
       await copyFile(source, target)
     }
     const now = new Date().toISOString()
+    const previousRunUid = snapshot.runs.filter(item => item.artifactUid === previous.uid).sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0]?.uid
+    const revision: ArtifactRevision = {
+      kind: revisionKind, createdAt: now, changes: plan.preview.changes,
+      ...(normalizedReason === undefined ? {} : { reason: normalizedReason }),
+      ...((affectedAreas ?? []).map(item => item.trim()).filter(Boolean).length === 0 ? {} : { affectedAreas: [...new Set(affectedAreas!.map(item => item.trim()).filter(Boolean))] }),
+      ...(previousRunUid === undefined ? {} : { previousRunUid }),
+    }
     const manifest: ArtifactManifest = {
       schema: 'dsh-sdd/artifact@1', uid, key: previous.key, title: previous.title, stage: previous.stage, type: previous.type,
       version: nextVersion(previous.version), status: 'draft', entry: previous.entry, createdAt: now, updatedAt: now,
-      basedOn: previous.basedOn, derivedFrom: previous.derivedFrom, externalRefs: previous.externalRefs,
+      basedOn: plan.basedOn, derivedFrom: plan.derivedFrom, externalRefs: previous.externalRefs,
       checklist: Object.fromEntries(runtimeDefinition(previous.stage).completionChecklist.map((_label, index) => [`item-${index + 1}`, false])),
       ...(previous.template === undefined ? {} : { template: previous.template }),
       supersedes: { uid: previous.uid, version: previous.version, contentHash: previous.contentHash },
+      revision,
       ...(previous.workItemUid === undefined ? {} : { workItemUid: previous.workItemUid }),
     }
+    if (plan.templateChanged) manifest.template = await snapshotStageTemplate(directory, await loadStageTemplate(snapshot.workspace.path, previous.stage))
     await writeFile(join(directory, 'manifest.yaml'), stringify(manifest), 'utf8')
-    await appendEvent(snapshot.workspace.path, 'artifact.revision-created', previous.key, previous.stage, { artifactUid: uid, supersedes: previous.uid, version: manifest.version })
+    await appendEvent(snapshot.workspace.path, 'artifact.revision-created', previous.key, previous.stage, { artifactUid: uid, supersedes: previous.uid, version: manifest.version, revisionKind, changes: revision.changes.length, previousRunUid })
   }
 
   private async discardDraft(workspaceId: string, artifactUid: string): Promise<void> {
@@ -986,6 +1063,24 @@ export class SddProjectService {
     })
   }
 
+  private staleInputLabels(snapshot: Pick<ProjectSnapshot, 'artifacts' | 'workItems'>, artifact: ArtifactSummary): string[] {
+    const labels: string[] = []
+    for (const reference of artifact.basedOn) {
+      const previous = snapshot.artifacts.find(item => item.uid === reference.uid)
+      if (previous === undefined) { labels.push(`缺失上游交付件 ${reference.uid}`); continue }
+      const current = snapshot.artifacts.filter(item => item.stage === previous.stage && item.status === 'accepted' && item.workItemUid === artifact.workItemUid)
+        .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0]
+      if (current !== undefined && (current.uid !== reference.uid || current.version !== reference.version || current.contentHash !== reference.contentHash)) {
+        labels.push(`${stageDefinition(previous.stage).label}已从 ${previous.version} 更新到 ${current.version}`)
+      }
+    }
+    if (artifact.stage === 'requirements' && artifact.workItemUid !== undefined) {
+      const workItem = snapshot.workItems.find(item => item.uid === artifact.workItemUid)
+      if (workItem?.sourceUid !== undefined && !artifact.derivedFrom.some(reference => reference.uid === workItem.sourceUid)) labels.push('原始需求来源已更新')
+    }
+    return labels
+  }
+
   private stageSettingsError(snapshot: ProjectSnapshot & { project?: ProjectConfig }, artifact: ArtifactSummary): string | undefined {
     if (artifact.workItemUid === undefined) return undefined
     const workItem = snapshot.workItems.find(item => item.uid === artifact.workItemUid)
@@ -1014,6 +1109,8 @@ export class SddProjectService {
     const changedWorkItem = artifact.workItemUid === undefined ? undefined : snapshot.workItems.find(item => item.uid === artifact!.workItemUid)
     if (changedWorkItem?.status === 'removed-pending') throw new Error(`work item ${changedWorkItem.key} was removed externally; resolve the removal before accepting artifacts`)
     if (changedWorkItem !== undefined && !this.hasCurrentChangeEvidence(snapshot, artifact, changedWorkItem)) throw new Error(`artifact does not include current change evidence for work item ${changedWorkItem.key}`)
+    const staleInputs = this.staleInputLabels(snapshot, artifact)
+    if (staleInputs.length > 0) throw new Error(`artifact inputs are stale: ${staleInputs.join('; ')}`)
     const settingsError = this.stageSettingsError(snapshot, artifact)
     if (settingsError !== undefined) throw new Error(settingsError)
     const directory = resolve(snapshot.workspace.path, artifact.relativeDirectory)
@@ -1040,6 +1137,10 @@ export class SddProjectService {
     manifest.updatedAt = new Date().toISOString()
     manifest.files = await artifactFiles(directory)
     manifest.contentHash = artifactBundleHash(manifest.files)
+    if (manifest.supersedes !== undefined) {
+      const previous = snapshot.artifacts.find(item => item.uid === manifest.supersedes!.uid)
+      if (previous?.contentHash === manifest.contentHash) throw new Error('revision deliverable content is unchanged from the accepted version')
+    }
     await writeFile(manifestPath, stringify(manifest), 'utf8')
     if (manifest.supersedes !== undefined) {
       const previous = snapshot.artifacts.find(item => item.uid === manifest.supersedes!.uid)
@@ -1082,6 +1183,8 @@ export class SddProjectService {
     const workItem = target.workItemUid === undefined ? undefined : snapshot.workItems.find(item => item.uid === target.workItemUid)
     if (workItem?.status === 'removed-pending') throw new Error(`work item ${workItem.key} was removed externally; its stage conversations are blocked`)
     if (workItem !== undefined && !this.hasCurrentChangeEvidence(snapshot, target, workItem)) throw new Error(`bound artifact does not include current change evidence for work item ${workItem.key}; create a new revision from the latest source and upstream artifacts`)
+    const staleInputs = this.staleInputLabels(snapshot, target)
+    if (staleInputs.length > 0) throw new Error(`bound artifact uses stale inputs: ${staleInputs.join('; ')}`)
     const settingsError = this.stageSettingsError(snapshot, target)
     if (settingsError !== undefined) throw new Error(settingsError)
     const definition = stageDefinition(stage)
@@ -1110,6 +1213,7 @@ export class SddProjectService {
       workItem === undefined ? '' : `系统设计确认的仓库范围：${(workItem.repositoryScope ?? []).join('、') || '未配置'}\n规格设计确认的开发目标：${(workItem.developmentTargets ?? []).join('、') || '未配置'}\nOpenSpec：${openSpecDescription(workItem, snapshot.openSpecValidation[workItem.uid])}`,
       `完成清单：\n${runtime.completionChecklist.map((item, index) => `${index + 1}. ${item}`).join('\n')}`,
       target.template === undefined ? '' : `本交付件固定模板快照：${target.relativeDirectory}/${target.template.snapshotPath}\n模板版本：${target.template.version}\n模板哈希：${target.template.contentHash}`,
+      target.revision === undefined ? '' : `本次修订类型：${target.revision.kind === 'upstream' ? '上游输入变更' : '用户主动调整'}\n变更原因：${target.revision.reason ?? '由结构化输入差异触发'}\n影响范围：${target.revision.affectedAreas?.join('、') || '待讨论确认'}\n输入差异：\n${target.revision.changes.map(change => `- ${change.label}：${change.previous?.version ?? change.previous?.contentHash ?? '无'} → ${change.current?.version ?? change.current?.contentHash ?? '无'}`).join('\n') || '- 用户主动调整，上游输入未变化'}\n历史阶段运行：${target.revision.previousRunUid ?? '无'}`,
       '先检查输入完整性，再与用户讨论。每轮形成的确定结论必须同步写入绑定交付件；不得创建或切换到另一个交付件。',
       ...inputs,
     ].filter(Boolean).join('\n\n')
@@ -1133,6 +1237,7 @@ export class SddProjectService {
     const run: StageRun = existing === undefined ? {
       schema: 'dsh-sdd/run@1', uid: randomUUID(), stage, artifactUid, sessionId, status: 'active',
       startedAt: now, updatedAt: now, inputArtifactUids: [...artifactUids], sourceUids: [...sourceUids],
+      ...(artifact.revision?.previousRunUid === undefined ? {} : { previousRunUid: artifact.revision.previousRunUid }),
     } : { ...existing, sessionId, status: 'active', updatedAt: now, inputArtifactUids: [...artifactUids], sourceUids: [...sourceUids] }
     if (this.sessionController === undefined) throw new Error('stage session runtime is unavailable')
     const workItem = snapshot.workItems.find(item => item.uid === artifact.workItemUid)
@@ -1255,6 +1360,7 @@ export class SddProjectService {
       ...workItems.filter(item => item.change !== undefined).map(item => `${item.key}：${item.status === 'removed-pending' ? '外部需求已移除，等待确认' : `需求已变更，需重审 ${item.change!.reviewRequiredStages.map(stage => stageDefinition(stage).label).join('、')}`}`),
       ...workItems.filter(item => artifacts.some(artifact => artifact.workItemUid === item.uid && artifact.stage === 'architecture') && (item.repositoryScope ?? []).length === 0).map(item => `${item.key}：系统设计尚未确认代码仓库范围`),
       ...workItems.filter(item => artifacts.some(artifact => artifact.workItemUid === item.uid && (artifact.stage === 'specification' || artifact.stage === 'development')) && (item.developmentTargets ?? []).length === 0).map(item => `${item.key}：规格设计尚未确认开发目标仓库`),
+      ...artifacts.filter(item => item.status === 'accepted').flatMap(item => this.staleInputLabels({ artifacts, workItems }, item).map(label => `${item.key} v${item.version}：${label}，需要创建变更修订`)),
       ...Object.values(quality).flatMap(report => report.checks.filter(item => item.status === 'failed').map(item => `${stageDefinition(report.stage).label}：${item.label}`)),
     ].slice(0, 12)
     const resolvedStatuses = new Set(['resolved', 'done', 'cancelled'])
@@ -1273,7 +1379,7 @@ export class SddProjectService {
         const artifact = stageArtifacts.find(item => item.status === 'draft' || item.status === 'in-review')
           ?? stageArtifacts.filter(item => item.status === 'accepted').sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0]
         let status: DeliveryCellStatus = 'not-started'
-        if (workItem.change?.reviewRequiredStages.includes(stage.id) === true) status = 'blocked'
+        if (workItem.change?.reviewRequiredStages.includes(stage.id) === true || (artifact !== undefined && this.staleInputLabels({ artifacts, workItems }, artifact).length > 0)) status = 'blocked'
         else if (artifact?.status === 'accepted') status = 'completed'
         else if (artifact !== undefined && quality[artifact.uid]?.ready === true) status = 'ready-for-review'
         else if (artifact !== undefined) status = 'in-progress'

@@ -28,6 +28,8 @@ describe('parseAction', () => {
     expect(parseAction({ kind: 'update-project-repository-branch', workspaceId: 'w1', id: 'web', baseBranch: 'release' })).toMatchObject({ kind: 'update-project-repository-branch' })
     expect(parseAction({ kind: 'remove-project-repository', workspaceId: 'w1', id: 'web' })).toMatchObject({ kind: 'remove-project-repository' })
     expect(parseAction({ kind: 'discard-draft', workspaceId: 'w1', artifactUid: 'a1' })).toMatchObject({ kind: 'discard-draft' })
+    expect(parseAction({ kind: 'preview-revision', workspaceId: 'w1', artifactUid: 'a1' })).toMatchObject({ kind: 'preview-revision' })
+    expect(parseAction({ kind: 'create-revision', workspaceId: 'w1', artifactUid: 'a1', revisionKind: 'user-intent', reason: '调整规则', affectedAreas: ['验收条件'] })).toMatchObject({ kind: 'create-revision', revisionKind: 'user-intent' })
     expect(parseAction({ kind: 'preview-source-import', workspaceId: 'w1', provider: 'manual', sourceKind: 'requirement', key: 'M-1', input: { title: '手工需求' } })).toMatchObject({ provider: 'manual', input: { title: '手工需求' } })
   })
 

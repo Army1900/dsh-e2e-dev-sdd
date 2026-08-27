@@ -77,22 +77,58 @@ describe('SddProjectService', () => {
     expect(snapshot.artifacts[0]?.files.map(file => file.path)).toEqual(['.template/deliverable.md', '.template/template.yaml', 'deliverable.md', 'notes.txt'])
     const preview = await service.execute({ kind: 'read-artifact-file', workspaceId: 'w1', artifactUid: snapshot.artifacts[0]!.uid, path: 'notes.txt' })
     expect(preview).toMatchObject({ artifactFile: { content: '评审附件。\n' } })
-    await service.execute({ kind: 'create-revision', workspaceId: 'w1', artifactUid: snapshot.artifacts[0]!.uid })
+    const revisionPreview = await service.execute({ kind: 'preview-revision', workspaceId: 'w1', artifactUid: snapshot.artifacts[0]!.uid })
+    expect(revisionPreview).toMatchObject({ revisionPreview: { changes: [], canCreateFromUpstream: false, nextVersion: '0.2.0' } })
+    await expect(service.execute({ kind: 'create-revision', workspaceId: 'w1', artifactUid: snapshot.artifacts[0]!.uid, revisionKind: 'upstream' })).rejects.toThrow('unchanged')
+    await service.execute({ kind: 'create-revision', workspaceId: 'w1', artifactUid: snapshot.artifacts[0]!.uid, revisionKind: 'user-intent', reason: '调整支付业务规则', affectedAreas: ['功能需求'] })
     snapshot = await service.snapshot('w1')
     let revision = snapshot.artifacts.find(item => item.status === 'draft')!
-    expect(revision).toMatchObject({ key: 'REQ-0001', version: '0.2.0', supersedes: { uid: snapshot.artifacts.find(item => item.status === 'accepted')!.uid } })
+    expect(revision).toMatchObject({ key: 'REQ-0001', version: '0.2.0', supersedes: { uid: snapshot.artifacts.find(item => item.status === 'accepted')!.uid }, revision: { kind: 'user-intent', reason: '调整支付业务规则', affectedAreas: ['功能需求'], changes: [] } })
+    await expect(service.execute({ kind: 'accept', workspaceId: 'w1', artifactUid: revision.uid, checklist: Object.fromEntries(Array.from({ length: 5 }, (_value, index) => [`item-${index + 1}`, true])) })).rejects.toThrow('content is unchanged')
     await service.execute({ kind: 'discard-draft', workspaceId: 'w1', artifactUid: revision.uid })
     snapshot = await service.snapshot('w1')
     expect(snapshot.artifacts).toHaveLength(1)
     expect(await readdir(join(root, '.sdd/trash/artifacts'))).toHaveLength(1)
-    await service.execute({ kind: 'create-revision', workspaceId: 'w1', artifactUid: snapshot.artifacts[0]!.uid })
+    await service.execute({ kind: 'create-revision', workspaceId: 'w1', artifactUid: snapshot.artifacts[0]!.uid, revisionKind: 'user-intent', reason: '再次调整支付规则' })
     snapshot = await service.snapshot('w1'); revision = snapshot.artifacts.find(item => item.status === 'draft')!
+    await writeFile(join(root, revision.relativeDirectory, 'deliverable.md'), `${await readFile(join(root, revision.relativeDirectory, 'deliverable.md'), 'utf8')}\n本修订将支付重试次数调整为三次。\n`)
     await service.execute({ kind: 'accept', workspaceId: 'w1', artifactUid: revision.uid, checklist: Object.fromEntries(Array.from({ length: 5 }, (_value, index) => [`item-${index + 1}`, true])) })
     snapshot = await service.snapshot('w1')
     expect(snapshot.artifacts.find(item => item.version === '0.1.0')?.status).toBe('superseded')
     expect(snapshot.artifacts.find(item => item.version === '0.2.0')?.status).toBe('accepted')
     expect(await readFile(join(root, '.sdd/project.yaml'), 'utf8')).toContain('dsh-sdd/project@1')
     expect(await readFile(join(root, '.sdd/business/README.md'), 'utf8')).toContain('唯一的项目级业务自定义目录')
+  })
+
+  it('detects accepted upstream hash changes before creating a downstream revision', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-sdd-revision-')); const service = new SddProjectService(api(root))
+    const complete = async (uid: string, note: string) => {
+      const artifact = (await service.snapshot('w1')).artifacts.find(item => item.uid === uid)!
+      const path = join(root, artifact.relativeDirectory, 'deliverable.md')
+      await writeFile(path, (await readFile(path, 'utf8')).replaceAll('待补充。', `已确认：${note}。`))
+      await service.execute({ kind: 'accept', workspaceId: 'w1', artifactUid: uid, checklist: Object.fromEntries(Array.from({ length: 12 }, (_value, index) => [`item-${index + 1}`, true])) })
+    }
+    await service.execute({ kind: 'create-draft', workspaceId: 'w1', stage: 'requirements', title: '支付需求', basedOn: [] })
+    let snapshot = await service.snapshot('w1'); const requirementV1 = snapshot.artifacts[0]!; await complete(requirementV1.uid, '初始支付规则')
+    snapshot = await service.snapshot('w1'); const acceptedRequirementV1 = snapshot.artifacts.find(item => item.uid === requirementV1.uid)!
+    await service.execute({ kind: 'create-draft', workspaceId: 'w1', stage: 'prototype', title: '支付原型', basedOn: [acceptedRequirementV1.uid] })
+    snapshot = await service.snapshot('w1'); const prototypeV1 = snapshot.artifacts.find(item => item.stage === 'prototype')!; await complete(prototypeV1.uid, '初始支付原型')
+    await service.execute({ kind: 'create-revision', workspaceId: 'w1', artifactUid: acceptedRequirementV1.uid, revisionKind: 'user-intent', reason: '增加支付确认步骤' })
+    snapshot = await service.snapshot('w1'); const requirementV2 = snapshot.artifacts.find(item => item.stage === 'requirements' && item.status === 'draft')!
+    await writeFile(join(root, requirementV2.relativeDirectory, 'deliverable.md'), `${await readFile(join(root, requirementV2.relativeDirectory, 'deliverable.md'), 'utf8')}\n新增支付确认步骤。\n`)
+    await service.execute({ kind: 'accept', workspaceId: 'w1', artifactUid: requirementV2.uid, checklist: Object.fromEntries(Array.from({ length: 12 }, (_value, index) => [`item-${index + 1}`, true])) })
+    snapshot = await service.snapshot('w1')
+    expect(snapshot.dashboard.stages.find(item => item.stage === 'prototype')).toBeDefined()
+    expect(snapshot.dashboard.blockers).toEqual(expect.arrayContaining([expect.stringContaining('需要创建变更修订')]))
+    const preview = await service.execute({ kind: 'preview-revision', workspaceId: 'w1', artifactUid: prototypeV1.uid })
+    if (!('revisionPreview' in preview)) throw new Error('expected revision preview')
+    expect(preview.revisionPreview.canCreateFromUpstream).toBe(true)
+    expect(preview.revisionPreview.changes[0]).toMatchObject({ kind: 'artifact', label: expect.stringContaining('需求讨论') })
+    expect(preview.revisionPreview.changes[0]?.previous?.uid).toBe(acceptedRequirementV1.uid)
+    expect(preview.revisionPreview.changes[0]?.current?.uid).toBe(requirementV2.uid)
+    await service.execute({ kind: 'create-revision', workspaceId: 'w1', artifactUid: prototypeV1.uid, revisionKind: 'upstream' })
+    snapshot = await service.snapshot('w1'); const prototypeV2 = snapshot.artifacts.find(item => item.stage === 'prototype' && item.status === 'draft')!
+    expect(prototypeV2).toMatchObject({ basedOn: [{ uid: requirementV2.uid }], revision: { kind: 'upstream', changes: [expect.objectContaining({ kind: 'artifact' })] } })
   })
 
   it('uses editable project templates, snapshots them, and safely opens package paths', async () => {
@@ -258,5 +294,14 @@ describe('SddProjectService', () => {
     expect(bindings).toEqual(expect.arrayContaining([expect.objectContaining({ sessionId: 'session-1' }), expect.objectContaining({ sessionId: 'session-2' })]))
     expect(bindings).toEqual(expect.arrayContaining([expect.objectContaining({ artifactTemplate: expect.stringContaining(`# ${artifact.key} ${artifact.title}`) })]))
     expect(bindings.map(binding => JSON.stringify(binding)).join('\n')).not.toContain('{{artifactKey}}')
+    const path = join(root, artifact.relativeDirectory, 'deliverable.md')
+    await writeFile(path, (await readFile(path, 'utf8')).replaceAll('待补充。', '已确认。'))
+    await service.execute({ kind: 'accept', workspaceId: 'w1', artifactUid: artifact.uid, checklist: Object.fromEntries(Array.from({ length: 12 }, (_value, index) => [`item-${index + 1}`, true])) })
+    await service.execute({ kind: 'complete-run', workspaceId: 'w1', runUid: run.uid })
+    await service.execute({ kind: 'create-revision', workspaceId: 'w1', artifactUid: artifact.uid, revisionKind: 'user-intent', reason: '调整用户场景' })
+    const revision = (await service.snapshot('w1')).artifacts.find(item => item.status === 'draft')!
+    expect(revision.revision?.previousRunUid).toBe(run.uid)
+    const changed = await service.execute({ kind: 'bind-session', workspaceId: 'w1', stage: 'requirements', artifactUid: revision.uid, sessionId: 'session-3', artifactUids: [] })
+    expect(changed).toMatchObject({ run: { previousRunUid: run.uid }, prompt: expect.stringContaining(`历史阶段运行：${run.uid}`) })
   })
 })

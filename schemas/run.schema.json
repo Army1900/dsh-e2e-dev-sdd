@@ -10,6 +10,7 @@
     "artifactUid": { "type": "string" }, "sessionId": { "type": "string" },
     "status": { "enum": ["active", "syncing", "ready-for-review", "completed"] },
     "startedAt": { "type": "string", "format": "date-time" }, "updatedAt": { "type": "string", "format": "date-time" }, "lastSyncedAt": { "type": "string", "format": "date-time" },
-    "inputArtifactUids": { "type": "array", "items": { "type": "string" } }, "sourceUids": { "type": "array", "items": { "type": "string" } }
+    "inputArtifactUids": { "type": "array", "items": { "type": "string" } }, "sourceUids": { "type": "array", "items": { "type": "string" } },
+    "previousRunUid": { "type": "string" }
   }
 }

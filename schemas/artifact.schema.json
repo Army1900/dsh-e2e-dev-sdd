@@ -24,6 +24,7 @@
     "checklist": { "type": "object", "additionalProperties": { "type": "boolean" } },
     "workItemUid": { "type": "string", "format": "uuid" },
     "supersedes": { "$ref": "#/$defs/artifactReference" },
+    "revision": { "$ref": "#/$defs/revision" },
     "template": { "$ref": "#/$defs/templateBinding" },
     "files": { "type": "array", "items": { "$ref": "#/$defs/artifactFile" } }
   },
@@ -40,6 +41,28 @@
         "contentHash": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
         "kind": { "enum": ["markdown", "text", "image", "binary"] }
       }
+    },
+    "revision": {
+      "type": "object", "additionalProperties": false, "required": ["kind", "createdAt", "changes"],
+      "properties": {
+        "kind": { "enum": ["upstream", "user-intent"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "reason": { "type": "string" },
+        "affectedAreas": { "type": "array", "items": { "type": "string" } },
+        "changes": { "type": "array", "items": { "$ref": "#/$defs/revisionInputChange" } },
+        "previousRunUid": { "type": "string" }
+      }
+    },
+    "revisionInputChange": {
+      "type": "object", "additionalProperties": false, "required": ["kind", "label"],
+      "properties": {
+        "kind": { "enum": ["artifact", "source", "template"] }, "label": { "type": "string" },
+        "previous": { "$ref": "#/$defs/revisionInput" }, "current": { "$ref": "#/$defs/revisionInput" }
+      }
+    },
+    "revisionInput": {
+      "type": "object", "additionalProperties": false,
+      "properties": { "uid": { "type": "string" }, "version": { "type": "string" }, "contentHash": { "type": "string" } }
     },
     "templateBinding": {
       "type": "object", "additionalProperties": false,

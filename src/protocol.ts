@@ -220,6 +220,32 @@ export interface SourceReference {
   contentHash?: string
 }
 
+export interface RevisionInputChange {
+  kind: 'artifact' | 'source' | 'template'
+  label: string
+  previous?: { uid?: string; version?: string; contentHash?: string }
+  current?: { uid?: string; version?: string; contentHash?: string }
+}
+
+export interface ArtifactRevision {
+  kind: 'upstream' | 'user-intent'
+  createdAt: string
+  reason?: string
+  affectedAreas?: string[]
+  changes: RevisionInputChange[]
+  previousRunUid?: string
+}
+
+export interface RevisionPreview {
+  schema: 'dsh-sdd/revision-preview@1'
+  artifactUid: string
+  key: string
+  version: string
+  nextVersion: string
+  changes: RevisionInputChange[]
+  canCreateFromUpstream: boolean
+}
+
 export interface ArtifactManifest {
   schema: 'dsh-sdd/artifact@1'
   uid: string
@@ -239,6 +265,7 @@ export interface ArtifactManifest {
   checklist?: Record<string, boolean>
   workItemUid?: string
   supersedes?: ArtifactReference
+  revision?: ArtifactRevision
   template?: ArtifactTemplateBinding
   files?: ArtifactFileSummary[]
 }
@@ -300,6 +327,7 @@ export interface StageRun {
   lastSyncedAt?: string
   inputArtifactUids: string[]
   sourceUids: string[]
+  previousRunUid?: string
 }
 
 export interface DevelopmentRepositoryConfig {
@@ -481,7 +509,8 @@ export type SddAction =
   | { kind: 'initialize'; workspaceId: string }
   | { kind: 'reinitialize'; workspaceId: string }
   | { kind: 'create-draft'; workspaceId: string; stage: StageId; title: string; basedOn: string[]; sourceUids?: string[]; workItemUid?: string }
-  | { kind: 'create-revision'; workspaceId: string; artifactUid: string }
+  | { kind: 'preview-revision'; workspaceId: string; artifactUid: string }
+  | { kind: 'create-revision'; workspaceId: string; artifactUid: string; revisionKind: 'upstream' | 'user-intent'; reason?: string; affectedAreas?: string[] }
   | { kind: 'discard-draft'; workspaceId: string; artifactUid: string }
   | { kind: 'accept'; workspaceId: string; artifactUid: string; checklist?: Record<string, boolean> }
   | { kind: 'read-artifact-file'; workspaceId: string; artifactUid: string; path: string }
@@ -514,6 +543,7 @@ export type SddResponse =
   | { ok: true; artifactFile: { artifactUid: string; path: string; kind: ArtifactFileSummary['kind'] | 'manifest'; content?: string; dataUrl?: string } }
   | { ok: true; template: StageTemplatePreview }
   | { ok: true; repositoryInspection: RepositoryInspection }
+  | { ok: true; revisionPreview: RevisionPreview }
   | { ok: true; opened: true }
   | { ok: false; error: string }
 
@@ -530,7 +560,10 @@ export function parseAction(value: unknown): SddAction | undefined {
   const action = value as Record<string, unknown>
   if (typeof action.kind !== 'string' || typeof action.workspaceId !== 'string') return undefined
   if (action.kind === 'snapshot' || action.kind === 'initialize' || action.kind === 'reinitialize') return action as unknown as SddAction
-  if ((action.kind === 'create-revision' || action.kind === 'discard-draft') && typeof action.artifactUid === 'string') return action as unknown as SddAction
+  if (action.kind === 'preview-revision' && typeof action.artifactUid === 'string') return action as unknown as SddAction
+  if (action.kind === 'create-revision' && typeof action.artifactUid === 'string' && (action.revisionKind === 'upstream' || action.revisionKind === 'user-intent')
+    && (action.reason === undefined || typeof action.reason === 'string') && (action.affectedAreas === undefined || stringArray(action.affectedAreas))) return action as unknown as SddAction
+  if (action.kind === 'discard-draft' && typeof action.artifactUid === 'string') return action as unknown as SddAction
   if ((action.kind === 'accept' || action.kind === 'quality') && typeof action.artifactUid === 'string') return action as unknown as SddAction
   if (action.kind === 'read-artifact-file' && typeof action.artifactUid === 'string' && typeof action.path === 'string') return action as unknown as SddAction
   if (action.kind === 'open-artifact-path' && typeof action.artifactUid === 'string' && typeof action.path === 'string') return action as unknown as SddAction

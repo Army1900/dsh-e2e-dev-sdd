@@ -162,6 +162,37 @@ export interface SourceReference {
     externalKey?: string;
     contentHash?: string;
 }
+export interface RevisionInputChange {
+    kind: 'artifact' | 'source' | 'template';
+    label: string;
+    previous?: {
+        uid?: string;
+        version?: string;
+        contentHash?: string;
+    };
+    current?: {
+        uid?: string;
+        version?: string;
+        contentHash?: string;
+    };
+}
+export interface ArtifactRevision {
+    kind: 'upstream' | 'user-intent';
+    createdAt: string;
+    reason?: string;
+    affectedAreas?: string[];
+    changes: RevisionInputChange[];
+    previousRunUid?: string;
+}
+export interface RevisionPreview {
+    schema: 'dsh-sdd/revision-preview@1';
+    artifactUid: string;
+    key: string;
+    version: string;
+    nextVersion: string;
+    changes: RevisionInputChange[];
+    canCreateFromUpstream: boolean;
+}
 export interface ArtifactManifest {
     schema: 'dsh-sdd/artifact@1';
     uid: string;
@@ -181,6 +212,7 @@ export interface ArtifactManifest {
     checklist?: Record<string, boolean>;
     workItemUid?: string;
     supersedes?: ArtifactReference;
+    revision?: ArtifactRevision;
     template?: ArtifactTemplateBinding;
     files?: ArtifactFileSummary[];
 }
@@ -236,6 +268,7 @@ export interface StageRun {
     lastSyncedAt?: string;
     inputArtifactUids: string[];
     sourceUids: string[];
+    previousRunUid?: string;
 }
 export interface DevelopmentRepositoryConfig {
     id: string;
@@ -460,9 +493,16 @@ export type SddAction = {
     sourceUids?: string[];
     workItemUid?: string;
 } | {
+    kind: 'preview-revision';
+    workspaceId: string;
+    artifactUid: string;
+} | {
     kind: 'create-revision';
     workspaceId: string;
     artifactUid: string;
+    revisionKind: 'upstream' | 'user-intent';
+    reason?: string;
+    affectedAreas?: string[];
 } | {
     kind: 'discard-draft';
     workspaceId: string;
@@ -622,6 +662,9 @@ export type SddResponse = {
 } | {
     ok: true;
     repositoryInspection: RepositoryInspection;
+} | {
+    ok: true;
+    revisionPreview: RevisionPreview;
 } | {
     ok: true;
     opened: true;

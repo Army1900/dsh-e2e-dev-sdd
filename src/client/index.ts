@@ -266,7 +266,8 @@ class SddWorkbench {
     const report = snapshot.quality[item.uid]; const run = snapshot.runs.find(value => value.artifactUid === item.uid && value.status !== 'completed')
     const selectable = item.status === 'draft' || item.status === 'in-review'
     const checks = report === undefined ? '' : `<ul class="dsh-sdd-checks">${report.checks.filter(check => check.status !== 'passed').slice(0, 6).map(check => `<li data-fail>${escapeHtml(check.label)}：${escapeHtml(check.message)}</li>`).join('')}</ul>`
-    return `<div class="dsh-sdd-row">${selectable ? `<input type="radio" name="sdd-target" data-target="${escapeHtml(item.uid)}" ${this.state.targetArtifactUid === item.uid ? 'checked' : ''}>` : '<span></span>'}<span><strong>${escapeHtml(item.key)} · ${escapeHtml(item.title)}</strong><span class="dsh-sdd-muted">v${escapeHtml(item.version)} · ${escapeHtml(item.relativeDirectory)}/${escapeHtml(item.entry)} · 文件 ${item.files.length}</span>${checks}<div class="dsh-sdd-actions"><button class="dsh-sdd-button" data-preview-artifact="${escapeHtml(item.uid)}">查看交付包</button><button class="dsh-sdd-button" data-quality="${escapeHtml(item.uid)}">质量检查 ${report?.score ?? 0}%</button>${run?.sessionId ? `<button class="dsh-sdd-button" data-resume="${escapeHtml(run.uid)}">恢复对话</button><button class="dsh-sdd-button" data-sync="${escapeHtml(run.uid)}">同步结论</button>` : ''}${selectable ? `<button class="dsh-sdd-button" data-accept="${escapeHtml(item.uid)}">验收</button><button class="dsh-sdd-button" data-discard="${escapeHtml(item.uid)}">删除草稿</button>` : ''}${item.status === 'accepted' ? `<button class="dsh-sdd-button" data-revision="${escapeHtml(item.uid)}">发起变更（新修订）</button>` : ''}${run !== undefined && item.status === 'accepted' ? `<button class="dsh-sdd-button" data-complete="${escapeHtml(run.uid)}">完成阶段运行</button>` : ''}</div></span><span><span class="dsh-sdd-badge">${escapeHtml(item.status)}</span>${run ? `<span class="dsh-sdd-badge">${escapeHtml(run.status)}</span>` : ''}</span></div>`
+    const revisionBadge = item.revision === undefined ? '' : `<span class="dsh-sdd-badge">${item.revision.kind === 'upstream' ? '上游变更' : '主动调整'}</span>`
+    return `<div class="dsh-sdd-row">${selectable ? `<input type="radio" name="sdd-target" data-target="${escapeHtml(item.uid)}" ${this.state.targetArtifactUid === item.uid ? 'checked' : ''}>` : '<span></span>'}<span><strong>${escapeHtml(item.key)} · ${escapeHtml(item.title)}</strong><span class="dsh-sdd-muted">v${escapeHtml(item.version)} · ${escapeHtml(item.relativeDirectory)}/${escapeHtml(item.entry)} · 文件 ${item.files.length}</span>${checks}<div class="dsh-sdd-actions"><button class="dsh-sdd-button" data-preview-artifact="${escapeHtml(item.uid)}">查看交付包</button><button class="dsh-sdd-button" data-quality="${escapeHtml(item.uid)}">质量检查 ${report?.score ?? 0}%</button>${run?.sessionId ? `<button class="dsh-sdd-button" data-resume="${escapeHtml(run.uid)}">恢复对话</button><button class="dsh-sdd-button" data-sync="${escapeHtml(run.uid)}">同步结论</button>` : ''}${selectable ? `<button class="dsh-sdd-button" data-accept="${escapeHtml(item.uid)}">验收</button><button class="dsh-sdd-button" data-discard="${escapeHtml(item.uid)}">删除草稿</button>` : ''}${item.status === 'accepted' ? `<button class="dsh-sdd-button" data-revision="${escapeHtml(item.uid)}">检查变更 / 提出调整</button>` : ''}${run !== undefined && item.status === 'accepted' ? `<button class="dsh-sdd-button" data-complete="${escapeHtml(run.uid)}">完成阶段运行</button>` : ''}</div></span><span><span class="dsh-sdd-badge">${escapeHtml(item.status)}</span>${revisionBadge}${run ? `<span class="dsh-sdd-badge">${escapeHtml(run.status)}</span>` : ''}</span></div>`
   }
 
   private developmentHtml(snapshot: ProjectSnapshot): string {
@@ -296,7 +297,7 @@ class SddWorkbench {
     root.querySelectorAll<HTMLInputElement>('[data-target]').forEach(input => input.addEventListener('change', () => { this.state.targetArtifactUid = input.dataset.target; const artifact = this.state.snapshot?.artifacts.find(item => item.uid === input.dataset.target); this.state.selected = new Set([...(artifact?.basedOn.map(item => item.uid) ?? []), ...(artifact?.derivedFrom.map(item => item.uid) ?? [])]); this.render() }))
     root.querySelectorAll<HTMLButtonElement>('[data-quality]').forEach(button => button.addEventListener('click', () => { void this.mutate({ kind: 'quality', workspaceId: this.state.workspaceId!, artifactUid: button.dataset.quality! }) }))
     root.querySelectorAll<HTMLButtonElement>('[data-preview-artifact]').forEach(button => button.addEventListener('click', () => { void this.showArtifact(button.dataset.previewArtifact!) }))
-    root.querySelectorAll<HTMLButtonElement>('[data-revision]').forEach(button => button.addEventListener('click', () => { void this.mutate({ kind: 'create-revision', workspaceId: this.state.workspaceId!, artifactUid: button.dataset.revision! }) }))
+    root.querySelectorAll<HTMLButtonElement>('[data-revision]').forEach(button => button.addEventListener('click', () => { void this.createRevision(button.dataset.revision!) }))
     root.querySelectorAll<HTMLButtonElement>('[data-discard]').forEach(button => button.addEventListener('click', () => { void this.discardDraft(button.dataset.discard!) }))
     root.querySelectorAll<HTMLButtonElement>('[data-accept]').forEach(button => button.addEventListener('click', () => { void this.accept(button.dataset.accept!) }))
     root.querySelectorAll<HTMLButtonElement>('[data-resume]').forEach(button => button.addEventListener('click', () => { void this.resumeRun(button.dataset.resume!, false) }))
@@ -587,6 +588,40 @@ class SddWorkbench {
     }
   }
 
+  private async createRevision(artifactUid: string): Promise<void> {
+    const snapshot = this.state.snapshot; const previous = snapshot?.artifacts.find(item => item.uid === artifactUid)
+    if (snapshot === undefined || previous === undefined) return
+    this.state.loading = true; this.state.error = undefined; this.render()
+    let response: SddResponse
+    try { response = await call({ kind: 'preview-revision', workspaceId: this.state.workspaceId!, artifactUid }) }
+    catch (error) { this.state.error = error instanceof Error ? error.message : String(error); this.state.loading = false; return this.render() }
+    this.state.loading = false; this.render()
+    if (!response.ok) { this.state.error = response.error; return this.render() }
+    if (!('revisionPreview' in response)) { this.state.error = 'Host returned an unexpected revision preview'; return this.render() }
+    const preview = response.revisionPreview
+    const detail = preview.changes.length === 0 ? '当前来源、上游交付件和模板哈希均未变化。若是业务意图调整，请明确填写原因后创建修订'
+      : `检测到 ${preview.changes.length} 项实际变化：${preview.changes.map(change => `${change.label}（${change.previous?.version ?? change.previous?.contentHash?.slice(0, 16) ?? '无'} → ${change.current?.version ?? change.current?.contentHash?.slice(0, 16) ?? '无'}）`).join('；')}`
+    const values = await this.openForm({
+      title: `创建变更修订 · ${preview.key} v${preview.nextVersion}`, description: `${detail}。旧会话保持只读，新修订将创建名称可区分的新会话并关联历史运行。`, submitLabel: '创建并选中变更修订',
+      fields: [
+        ...(preview.canCreateFromUpstream ? [{ name: 'revisionKind', label: '变更类型', type: 'select' as const, required: true, value: 'upstream', options: [{ value: 'upstream', label: '处理检测到的上游变更' }, { value: 'user-intent', label: '用户主动调整' }] }] : []),
+        { name: 'reason', label: '主动调整原因', type: 'textarea', required: !preview.canCreateFromUpstream, placeholder: preview.canCreateFromUpstream ? '说明希望调整什么以及为什么调整；上游变更模式可以留空。' : '说明希望调整什么以及为什么调整。', showWhen: preview.canCreateFromUpstream ? { field: 'revisionKind', value: 'user-intent' } : undefined },
+        { name: 'affectedAreas', label: '预计影响范围（可选，每行一项）', type: 'textarea', placeholder: '例如：退款业务规则\n验收条件 AC-03' },
+      ],
+    })
+    if (values === undefined) return
+    const revisionKind = preview.canCreateFromUpstream ? String(values.revisionKind) as 'upstream' | 'user-intent' : 'user-intent'
+    const affectedAreas = String(values.affectedAreas ?? '').split(/\r?\n/).map(item => item.trim()).filter(Boolean)
+    const before = new Set(snapshot.artifacts.map(item => item.uid))
+    await this.mutate({ kind: 'create-revision', workspaceId: this.state.workspaceId!, artifactUid, revisionKind, reason: String(values.reason ?? ''), affectedAreas })
+    const created = this.state.snapshot?.artifacts.find(item => !before.has(item.uid) && item.supersedes?.uid === artifactUid)
+    if (created !== undefined) {
+      this.state.targetArtifactUid = created.uid
+      this.state.selected = new Set([...created.basedOn.map(item => item.uid), ...created.derivedFrom.map(item => item.uid)])
+      this.render()
+    }
+  }
+
   private async importSource(forcedKind?: string): Promise<void> {
     const snapshot = this.state.snapshot; const providers = snapshot?.sourceProviders ?? []
     if (providers.length === 0) { this.state.error = '当前没有可用的业务数据获取方式'; return this.render() }
@@ -658,7 +693,11 @@ class SddWorkbench {
       const binding = this.sessions.binding(sessionId); if (binding === undefined) throw new Error('新会话尚未在客户端就绪')
       if (response.run !== undefined) this.trackRun(binding.session, response.run, this.state.workspaceId!)
       const accepted = await binding.session.prompt([{ type: 'text', text: response.prompt }], 'queue'); if (!accepted.ok) throw new Error(`${accepted.error.code}: ${accepted.error.message}`)
-      const artifact = this.state.snapshot?.artifacts.find(item => item.uid === this.state.targetArtifactUid); if (artifact) void binding.session.rename(`[SDD] ${artifact.key} ${artifact.title}`)
+      const artifact = this.state.snapshot?.artifacts.find(item => item.uid === this.state.targetArtifactUid)
+      if (artifact) {
+        const prefix = artifact.revision?.kind === 'upstream' ? '[SDD变更·上游]' : artifact.revision?.kind === 'user-intent' ? '[SDD变更·主动]' : '[SDD]'
+        void binding.session.rename(`${prefix} ${artifact.key} v${artifact.version} ${artifact.title}`)
+      }
       this.sessions.open(sessionId); this.close()
     } catch (error) { this.state.error = error instanceof Error ? error.message : String(error) }
     finally { this.state.loading = false; this.render() }
