@@ -339,7 +339,12 @@ export interface ProjectSnapshot {
     runs: StageRun[];
     quality: Record<string, QualityReport>;
     developmentWorkspaces: DevelopmentWorkspace[];
+    openSpecValidation: Record<string, OpenSpecValidation>;
     dashboard: DashboardSnapshot;
+}
+export interface OpenSpecValidation {
+    status: 'pending' | 'valid' | 'invalid';
+    message: string;
 }
 export interface StageProgress {
     stage: StageId;

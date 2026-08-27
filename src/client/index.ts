@@ -213,7 +213,11 @@ class SddWorkbench {
     if (workItem === undefined || (stage !== 'architecture' && stage !== 'specification' && stage !== 'development')) return ''
     const scope = workItem.repositoryScope?.join('、') || '未确认'
     const targets = workItem.developmentTargets?.join('、') || '未确认'
-    const openSpec = workItem.openSpec?.enabled === true ? `${workItem.openSpec.repositoryId}:${workItem.openSpec.path}` : '未启用'
+    const openSpecValidation = snapshot.openSpecValidation[workItem.uid]
+    const openSpecState = openSpecValidation?.status === 'valid' ? '已验证'
+      : openSpecValidation?.status === 'invalid' ? `验证失败：${openSpecValidation.message}`
+        : openSpecValidation?.status === 'pending' ? '已配置，待开发空间验证' : '已配置，待验证'
+    const openSpec = workItem.openSpec?.enabled === true ? `${workItem.openSpec.repositoryId}:${workItem.openSpec.path} · ${openSpecState}` : '本需求未配置'
     if (stage === 'architecture') {
       const repositories = snapshot.project?.development.repositories ?? []
       const rows = repositories.map(repository => `<div class="dsh-sdd-row"><input type="checkbox" data-repository-scope="${escapeHtml(repository.id)}"${workItem.repositoryScope?.includes(repository.id) === true ? ' checked' : ''}><span><strong>${escapeHtml(repository.id)}</strong><span class="dsh-sdd-muted">${escapeHtml(repository.source)} · 基线 ${escapeHtml(repository.baseBranch)}</span></span><button class="dsh-sdd-button" data-remove-repository="${escapeHtml(repository.id)}">移除</button></div>`).join('')

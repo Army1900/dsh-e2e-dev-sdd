@@ -74,6 +74,10 @@ export async function loadStageTemplate(workspacePath: string, stage: StageId): 
   const config = validateConfig(parse(await readFile(configPath, 'utf8')), stage)
   const content = await readFile(contentPath, 'utf8')
   if (content.trim() === '') throw new Error(`${stage} deliverable template is empty`)
+  const placeholders = [...content.matchAll(/\{\{([^{}]*)\}\}/g)].map(match => match[1])
+  if (placeholders.some(name => name !== 'artifactKey' && name !== 'artifactTitle')) throw new Error(`${stage} deliverable template contains an unsupported placeholder`)
+  const withoutSupportedPlaceholders = content.replaceAll('{{artifactKey}}', '').replaceAll('{{artifactTitle}}', '')
+  if (withoutSupportedPlaceholders.includes('{{') || withoutSupportedPlaceholders.includes('}}')) throw new Error(`${stage} deliverable template contains a malformed placeholder`)
   for (const section of config.requiredSections) {
     if (!new RegExp(`^##\\s+${escapeRegex(section)}\\s*$`, 'm').test(content)) throw new Error(`${stage} deliverable template is missing required section: ${section}`)
   }
@@ -84,9 +88,11 @@ export async function loadStageTemplate(workspacePath: string, stage: StageId): 
   }
 }
 
-export function renderStageTemplate(bundle: StageTemplateBundle, key: string, title: string): string {
-  return bundle.content.replaceAll('{{artifactKey}}', key).replaceAll('{{artifactTitle}}', title)
+export function renderStageTemplateContent(content: string, key: string, title: string): string {
+  return content.replaceAll('{{artifactKey}}', key).replaceAll('{{artifactTitle}}', title)
 }
+
+export function renderStageTemplate(bundle: StageTemplateBundle, key: string, title: string): string { return renderStageTemplateContent(bundle.content, key, title) }
 
 export async function snapshotStageTemplate(artifactDirectory: string, bundle: StageTemplateBundle): Promise<ArtifactTemplateBinding> {
   const directory = join(artifactDirectory, '.template')

@@ -1,4 +1,5 @@
 import { Context, Service } from '@deepseek-ai/cordis'
+import { renderPrompt } from '@deepseek-ai/dsh-system-prompt'
 import { describe, expect, it } from 'vitest'
 import { StageSessionController } from '../src/session-controller.ts'
 
@@ -25,8 +26,10 @@ describe('StageSessionController', () => {
     const ctx = new Context(); const prompts = new FakePrompt(ctx); const tools = new FakeTools(ctx); const agents = new FakeAgents(ctx)
     agents.agent = { id: 's1', ctx }
     const controller = new StageSessionController(ctx)
-    controller.bind({ sessionId: 's1', stage: 'requirements', systemPrompt: 'BOUND', projectPath: '/project', artifactDirectory: '/project/.sdd/artifacts/requirements/a1', developmentDirectories: [], artifactTemplate: '# Requirements template' })
+    controller.bind({ sessionId: 's1', stage: 'requirements', systemPrompt: 'BOUND {{project}}', projectPath: '/project', artifactDirectory: '/project/.sdd/artifacts/requirements/a1', developmentDirectories: [], artifactTemplate: '# {{artifactKey}} Requirements template' })
     expect(prompts.sections[0]?.text).toContain('BOUND')
+    expect(prompts.sections[0]?.text).not.toContain('{{')
+    expect(() => renderPrompt({ sections: [{ name: 'sdd:stage-runtime', text: prompts.sections[0]!.text }], contexts: [], tools: [], variables: {} })).not.toThrow()
     const guard = tools.guards[0]!
     expect(guard({ name: 'bash', arguments: {}, agent: agents.agent })).toContain('禁止')
     expect(guard({ name: 'pwsh', arguments: {}, agent: agents.agent })).toContain('禁止')

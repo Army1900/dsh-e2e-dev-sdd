@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { readFileSync } from 'node:fs'
-import { access, copyFile, mkdir, readFile, readdir, realpath, rename, unlink, writeFile } from 'node:fs/promises'
+import { access, copyFile, mkdir, readFile, readdir, realpath, rename, stat, unlink, writeFile } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import type { ApiProxy, RpcId } from '@deepseek-ai/dsh-host-apiproxy'
 import { parse, stringify } from 'yaml'
@@ -14,6 +14,7 @@ import {
   type DevelopmentWorkspace,
   type ImportPreview,
   type ImportPreviewItem,
+  type OpenSpecValidation,
   type ProjectConfig,
   type ProjectSnapshot,
   type QualityReport,
@@ -34,7 +35,7 @@ import { GitDevelopmentService, listDevelopmentWorkspaces } from './git-service.
 import { evaluateQuality } from './quality.ts'
 import { runtimeDefinition } from './stage-definitions.ts'
 import type { StageSessionController } from './session-controller.ts'
-import { ensureProjectTemplates, loadStageTemplate, renderStageTemplate, snapshotStageTemplate } from './template-store.ts'
+import { ensureProjectTemplates, loadStageTemplate, renderStageTemplate, renderStageTemplateContent, snapshotStageTemplate } from './template-store.ts'
 
 const PROJECT_FILE = '.sdd/project.yaml'
 interface StagedImport { preview: ImportPreview; bundle: SourceBundle }
@@ -86,6 +87,12 @@ async function exists(path: string): Promise<boolean> {
 function contained(root: string, target: string): boolean {
   const path = relative(root, target)
   return path === '' || (!path.startsWith('..') && !isAbsolute(path))
+}
+
+function openSpecDescription(workItem: WorkItem, validation?: OpenSpecValidation): string {
+  if (workItem.openSpec?.enabled !== true) return '本需求未配置'
+  const location = `${workItem.openSpec.repositoryId}:${workItem.openSpec.path}`
+  return validation === undefined ? location : `${location}（${validation.message}）`
 }
 
 async function walkForManifest(root: string): Promise<string[]> {
@@ -401,20 +408,20 @@ export class SddProjectService {
     const projectPath = join(workspace.path, PROJECT_FILE)
     if (!(await exists(projectPath))) return {
       workspace, initialized: false, configuration: { status: 'missing', path: PROJECT_FILE, errors: [] }, artifacts: [], sources: [], sourceProviders: this.sourceRegistry?.names() ?? [], connectors: [], workItems: [],
-      runs: [], quality: {}, developmentWorkspaces: [], dashboard: this.emptyDashboard(),
+      runs: [], quality: {}, developmentWorkspaces: [], openSpecValidation: {}, dashboard: this.emptyDashboard(),
     }
     let parsedProject: unknown
     try { parsedProject = parse(await readFile(projectPath, 'utf8')) }
     catch (error) {
       return {
         workspace, initialized: true, configuration: { status: 'invalid', path: PROJECT_FILE, errors: [`YAML 解析失败：${error instanceof Error ? error.message : String(error)}`] },
-        artifacts: [], sources: [], sourceProviders: this.sourceRegistry?.names() ?? [], connectors: [], workItems: [], runs: [], quality: {}, developmentWorkspaces: [], dashboard: this.emptyDashboard(),
+        artifacts: [], sources: [], sourceProviders: this.sourceRegistry?.names() ?? [], connectors: [], workItems: [], runs: [], quality: {}, developmentWorkspaces: [], openSpecValidation: {}, dashboard: this.emptyDashboard(),
       }
     }
     const validation = validateProject(parsedProject)
     if (validation.project === undefined) return {
       workspace, initialized: true, configuration: { status: 'invalid', path: PROJECT_FILE, errors: validation.errors },
-      artifacts: [], sources: [], sourceProviders: this.sourceRegistry?.names() ?? [], connectors: [], workItems: [], runs: [], quality: {}, developmentWorkspaces: [], dashboard: this.emptyDashboard(),
+      artifacts: [], sources: [], sourceProviders: this.sourceRegistry?.names() ?? [], connectors: [], workItems: [], runs: [], quality: {}, developmentWorkspaces: [], openSpecValidation: {}, dashboard: this.emptyDashboard(),
     }
     const parsed = validation.project
     const project: ProjectConfig = {
@@ -471,10 +478,14 @@ export class SddProjectService {
     const connectors = await this.listConnectors(workspace.path)
     const runs = await this.listRuns(workspace.path)
     const developmentWorkspaces = await listDevelopmentWorkspaces(workspace.path, artifacts)
+    const openSpecValidation = await this.validateOpenSpecSettings(workspace.path, project, workItems, artifacts, developmentWorkspaces)
     for (const run of runs) {
       if (run.status === 'completed' || run.sessionId === undefined) continue
       const artifact = artifacts.find(item => item.uid === run.artifactUid)
-      if (artifact !== undefined) this.bindRuntime(run.sessionId, run.stage, workspace.path, project, artifact, developmentWorkspaces.find(item => item.artifactUid === artifact.uid), workItems.find(item => item.uid === artifact.workItemUid))
+      if (artifact !== undefined) {
+        const workItem = workItems.find(item => item.uid === artifact.workItemUid)
+        this.bindRuntime(run.sessionId, run.stage, workspace.path, project, artifact, developmentWorkspaces.find(item => item.artifactUid === artifact.uid), workItem, workItem === undefined ? undefined : openSpecValidation[workItem.uid])
+      }
     }
     const quality: Record<string, QualityReport> = {}
     const partial = { artifacts, developmentWorkspaces }
@@ -484,7 +495,46 @@ export class SddProjectService {
     }
     const recentEvents = await readRecentEvents(workspace.path)
     const dashboard = this.dashboard(artifacts, sources, workItems, quality, developmentWorkspaces, recentEvents)
-    return { workspace, initialized: true, configuration: { status: 'valid', path: PROJECT_FILE, errors: [] }, project, artifacts, sources, sourceProviders: this.sourceRegistry?.names() ?? [], connectors, workItems, runs, quality, developmentWorkspaces, dashboard }
+    return { workspace, initialized: true, configuration: { status: 'valid', path: PROJECT_FILE, errors: [] }, project, artifacts, sources, sourceProviders: this.sourceRegistry?.names() ?? [], connectors, workItems, runs, quality, developmentWorkspaces, openSpecValidation, dashboard }
+  }
+
+  private async validateOpenSpecSettings(
+    workspacePath: string, project: ProjectConfig, workItems: WorkItem[], artifacts: ArtifactSummary[], developmentWorkspaces: DevelopmentWorkspace[],
+  ): Promise<Record<string, OpenSpecValidation>> {
+    const result: Record<string, OpenSpecValidation> = {}
+    for (const workItem of workItems) {
+      const configured = workItem.openSpec
+      if (configured?.enabled !== true) continue
+      if (configured.repositoryId === undefined || configured.path === undefined) {
+        result[workItem.uid] = { status: 'invalid', message: '配置缺少仓库或相对路径' }
+        continue
+      }
+      if (!project.development.repositories.some(item => item.id === configured.repositoryId) || !(workItem.developmentTargets ?? []).includes(configured.repositoryId)) {
+        result[workItem.uid] = { status: 'invalid', message: '配置仓库不属于本需求的开发目标' }
+        continue
+      }
+      const developmentArtifactUids = new Set(artifacts.filter(item => item.stage === 'development' && item.workItemUid === workItem.uid).map(item => item.uid))
+      const repository = developmentWorkspaces.filter(item => developmentArtifactUids.has(item.artifactUid)).flatMap(item => item.repositories).find(item => item.id === configured.repositoryId)
+      if (repository === undefined) {
+        result[workItem.uid] = { status: 'pending', message: '已配置，创建开发空间后验证' }
+        continue
+      }
+      const root = resolve(repository.path)
+      const target = resolve(root, configured.path)
+      if (!contained(root, target)) {
+        result[workItem.uid] = { status: 'invalid', message: 'OpenSpec 路径超出代码仓库' }
+        continue
+      }
+      try {
+        const info = await stat(target)
+        result[workItem.uid] = info.isDirectory()
+          ? { status: 'valid', message: '已在隔离代码空间验证目录' }
+          : { status: 'invalid', message: '配置路径不是目录' }
+      } catch {
+        result[workItem.uid] = { status: 'invalid', message: '隔离代码空间中不存在配置目录' }
+      }
+    }
+    return result
   }
 
   private async listConnectors(workspacePath: string): Promise<string[]> {
@@ -922,6 +972,9 @@ export class SddProjectService {
       if ((workItem.developmentTargets ?? []).length === 0) return '规格设计阶段必须先确认本需求的开发目标仓库'
       if (workItem.developmentTargets!.some(id => !(workItem.repositoryScope ?? []).includes(id))) return '开发目标仓库必须属于系统设计确认的仓库范围'
     }
+    if (artifact.stage === 'development' && workItem.openSpec?.enabled === true && snapshot.openSpecValidation[workItem.uid]?.status !== 'valid') {
+      return `OpenSpec 尚未通过开发空间验证：${snapshot.openSpecValidation[workItem.uid]?.message ?? '缺少验证状态'}`
+    }
     return undefined
   }
 
@@ -1027,7 +1080,7 @@ export class SddProjectService {
       `项目仓库：${snapshot.workspace.path}`,
       `本次固定绑定交付件：${target.key}，路径 ${target.relativeDirectory}/${target.entry}。`,
       `阶段目标：${runtime.objective}`,
-      workItem === undefined ? '' : `系统设计确认的仓库范围：${(workItem.repositoryScope ?? []).join('、') || '未配置'}\n规格设计确认的开发目标：${(workItem.developmentTargets ?? []).join('、') || '未配置'}\nOpenSpec：${workItem.openSpec?.enabled === true ? `${workItem.openSpec.repositoryId}:${workItem.openSpec.path}` : '未启用'}`,
+      workItem === undefined ? '' : `系统设计确认的仓库范围：${(workItem.repositoryScope ?? []).join('、') || '未配置'}\n规格设计确认的开发目标：${(workItem.developmentTargets ?? []).join('、') || '未配置'}\nOpenSpec：${openSpecDescription(workItem, snapshot.openSpecValidation[workItem.uid])}`,
       `完成清单：\n${runtime.completionChecklist.map((item, index) => `${index + 1}. ${item}`).join('\n')}`,
       target.template === undefined ? '' : `本交付件固定模板快照：${target.relativeDirectory}/${target.template.snapshotPath}\n模板版本：${target.template.version}\n模板哈希：${target.template.contentHash}`,
       '先检查输入完整性，再与用户讨论。每轮形成的确定结论必须同步写入绑定交付件；不得创建或切换到另一个交付件。',
@@ -1055,7 +1108,8 @@ export class SddProjectService {
       startedAt: now, updatedAt: now, inputArtifactUids: [...artifactUids], sourceUids: [...sourceUids],
     } : { ...existing, sessionId, status: 'active', updatedAt: now, inputArtifactUids: [...artifactUids], sourceUids: [...sourceUids] }
     if (this.sessionController === undefined) throw new Error('stage session runtime is unavailable')
-    this.bindRuntime(sessionId, stage, snapshot.workspace.path, snapshot.project, artifact, snapshot.developmentWorkspaces.find(item => item.artifactUid === artifactUid), snapshot.workItems.find(item => item.uid === artifact.workItemUid))
+    const workItem = snapshot.workItems.find(item => item.uid === artifact.workItemUid)
+    this.bindRuntime(sessionId, stage, snapshot.workspace.path, snapshot.project, artifact, snapshot.developmentWorkspaces.find(item => item.artifactUid === artifactUid), workItem, workItem === undefined ? undefined : snapshot.openSpecValidation[workItem.uid])
     await this.writeRun(snapshot.workspace.path, run)
     await appendEvent(snapshot.workspace.path, existing === undefined ? 'run.started' : 'run.resumed', artifact.key, stage, { runUid: run.uid, sessionId })
     return { prompt, run }
@@ -1102,9 +1156,9 @@ export class SddProjectService {
 
   private bindRuntime(
     sessionId: string, stage: StageId, workspacePath: string, project: ProjectConfig,
-    artifact: ArtifactSummary, development: DevelopmentWorkspace | undefined, workItem?: WorkItem,
+    artifact: ArtifactSummary, development: DevelopmentWorkspace | undefined, workItem?: WorkItem, openSpecValidation?: OpenSpecValidation,
   ): void {
-    let boundTemplate = artifactTemplate(artifact.stage)
+    let boundTemplate = artifactTemplate(artifact.stage, artifact.key, artifact.title)
     if (artifact.template !== undefined) {
       const templatePath = resolve(workspacePath, artifact.relativeDirectory, artifact.template.snapshotPath)
       const artifactRoot = resolve(workspacePath, artifact.relativeDirectory)
@@ -1112,6 +1166,7 @@ export class SddProjectService {
         try { boundTemplate = readFileSync(templatePath, 'utf8') } catch { /* legacy or damaged snapshots fall back to the built-in template */ }
       }
     }
+    boundTemplate = renderStageTemplateContent(boundTemplate, artifact.key, artifact.title)
     this.sessionController?.bind({
       sessionId, stage, projectPath: workspacePath,
       artifactDirectory: resolve(workspacePath, artifact.relativeDirectory),
@@ -1121,7 +1176,7 @@ export class SddProjectService {
         `绑定项目：${project.project.key} · ${project.project.name}`,
         `绑定交付件：${artifact.key} (${artifact.uid})`,
         `交付件入口：${resolve(workspacePath, artifact.relativeDirectory, artifact.entry)}`,
-        workItem === undefined ? '' : `仓库范围：${(workItem.repositoryScope ?? []).join('、') || '未配置'}\n开发目标：${(workItem.developmentTargets ?? []).join('、') || '未配置'}\nOpenSpec：${workItem.openSpec?.enabled === true ? `${workItem.openSpec.repositoryId}:${workItem.openSpec.path}` : '未启用'}`,
+        workItem === undefined ? '' : `仓库范围：${(workItem.repositoryScope ?? []).join('、') || '未配置'}\n开发目标：${(workItem.developmentTargets ?? []).join('、') || '未配置'}\nOpenSpec：${openSpecDescription(workItem, openSpecValidation)}`,
         development === undefined ? '' : `隔离代码目录：\n${development.repositories.map(item => `- ${item.id}: ${item.path}`).join('\n')}`,
       ].filter(Boolean).join('\n'),
     })

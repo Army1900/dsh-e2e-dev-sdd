@@ -27,6 +27,7 @@ export declare class SddProjectService {
     initialize(workspaceId: string): Promise<void>;
     private reinitialize;
     snapshot(workspaceId: string): Promise<ProjectSnapshot>;
+    private validateOpenSpecSettings;
     private listConnectors;
     private listWorkItems;
     private createDraft;

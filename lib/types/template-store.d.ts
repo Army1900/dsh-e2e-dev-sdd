@@ -18,5 +18,6 @@ export interface StageTemplateBundle {
 }
 export declare function ensureProjectTemplates(workspacePath: string): Promise<void>;
 export declare function loadStageTemplate(workspacePath: string, stage: StageId): Promise<StageTemplateBundle>;
+export declare function renderStageTemplateContent(content: string, key: string, title: string): string;
 export declare function renderStageTemplate(bundle: StageTemplateBundle, key: string, title: string): string;
 export declare function snapshotStageTemplate(artifactDirectory: string, bundle: StageTemplateBundle): Promise<ArtifactTemplateBinding>;
