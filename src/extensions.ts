@@ -14,6 +14,8 @@ export interface SourceGetRequest {
   readonly key: string
   readonly workspace: SddWorkspaceContext
   readonly connector?: string
+  /** Provider-specific structured input, used by built-in manual intake and extensible providers. */
+  readonly input?: unknown
   readonly signal: AbortSignal
 }
 
@@ -38,34 +40,6 @@ export interface SourceProviderControl {
 
 export type SourceProviderFactory = (control: SourceProviderControl) => SddSourceProvider
 
-export interface IdentifierAllocationRequest {
-  readonly namespace: string
-  readonly project: ProjectConfig
-  readonly workspacePath: string
-  readonly context?: Readonly<Record<string, unknown>>
-  readonly signal: AbortSignal
-}
-
-export interface IdentifierValidationRequest {
-  readonly namespace: string
-  readonly key: string
-  readonly project: ProjectConfig
-  readonly workspacePath: string
-  readonly signal: AbortSignal
-}
-
-export interface SddIdentifierProvider {
-  readonly name: string
-  allocate(request: IdentifierAllocationRequest): Promise<string>
-  validate?(request: IdentifierValidationRequest): Promise<{ valid: boolean; message?: string }>
-}
-
-export interface IdentifierProviderControl {
-  readonly signal: AbortSignal
-}
-
-export type IdentifierProviderFactory = (control: IdentifierProviderControl) => SddIdentifierProvider
-
 interface Registered<T> {
   provider: T
   lifecycle: AbortController
@@ -74,7 +48,6 @@ interface Registered<T> {
 declare module '@deepseek-ai/cordis' {
   interface Context {
     dshSddSources: SddSourceRegistry
-    dshSddIdentifiers: SddIdentifierRegistry
   }
 }
 
@@ -167,36 +140,6 @@ export class SddSourceRegistry extends Service {
       : AbortSignal.any([request.signal, registered.lifecycle.signal])
     return validateSourceBundle(await registered.provider.get({ ...request, signal }))
   }
-}
-
-export class SddIdentifierRegistry extends Service {
-  private readonly providers = new Map<string, Registered<SddIdentifierProvider>>()
-
-  constructor(ctx: Context) { super(ctx, 'dshSddIdentifiers') }
-
-  register(providerOrFactory: SddIdentifierProvider | IdentifierProviderFactory): () => void {
-    const lifecycle = new AbortController()
-    let provider: SddIdentifierProvider
-    try {
-      provider = typeof providerOrFactory === 'function'
-        ? providerOrFactory({ signal: lifecycle.signal })
-        : providerOrFactory
-      assertProviderName(provider.name)
-      if (this.providers.has(provider.name)) throw new Error(`identifier provider already registered: ${provider.name}`)
-      this.providers.set(provider.name, { provider, lifecycle })
-      return this.ctx.effect(() => () => {
-        if (this.providers.get(provider.name)?.provider === provider) this.providers.delete(provider.name)
-        lifecycle.abort(new Error(`identifier provider "${provider.name}" disposed`))
-      }, `dsh-sdd: identifier provider ${provider.name}`)
-    } catch (error) {
-      lifecycle.abort(error)
-      throw error
-    }
-  }
-
-  names(): string[] { return [...this.providers.keys()].sort() }
-
-  get(name: string): SddIdentifierProvider | undefined { return this.providers.get(name)?.provider }
 }
 
 export default SddSourceRegistry

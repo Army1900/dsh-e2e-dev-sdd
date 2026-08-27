@@ -10,6 +10,8 @@ export interface SourceGetRequest {
     readonly key: string;
     readonly workspace: SddWorkspaceContext;
     readonly connector?: string;
+    /** Provider-specific structured input, used by built-in manual intake and extensible providers. */
+    readonly input?: unknown;
     readonly signal: AbortSignal;
 }
 export interface SourceSearchRequest {
@@ -29,36 +31,9 @@ export interface SourceProviderControl {
     readonly signal: AbortSignal;
 }
 export type SourceProviderFactory = (control: SourceProviderControl) => SddSourceProvider;
-export interface IdentifierAllocationRequest {
-    readonly namespace: string;
-    readonly project: ProjectConfig;
-    readonly workspacePath: string;
-    readonly context?: Readonly<Record<string, unknown>>;
-    readonly signal: AbortSignal;
-}
-export interface IdentifierValidationRequest {
-    readonly namespace: string;
-    readonly key: string;
-    readonly project: ProjectConfig;
-    readonly workspacePath: string;
-    readonly signal: AbortSignal;
-}
-export interface SddIdentifierProvider {
-    readonly name: string;
-    allocate(request: IdentifierAllocationRequest): Promise<string>;
-    validate?(request: IdentifierValidationRequest): Promise<{
-        valid: boolean;
-        message?: string;
-    }>;
-}
-export interface IdentifierProviderControl {
-    readonly signal: AbortSignal;
-}
-export type IdentifierProviderFactory = (control: IdentifierProviderControl) => SddIdentifierProvider;
 declare module '@deepseek-ai/cordis' {
     interface Context {
         dshSddSources: SddSourceRegistry;
-        dshSddIdentifiers: SddIdentifierRegistry;
     }
 }
 export declare function validateSourceEnvelope(value: unknown): SourceEnvelope;
@@ -72,12 +47,5 @@ export declare class SddSourceRegistry extends Service {
     fetch(name: string, request: Omit<SourceGetRequest, 'signal'> & {
         signal?: AbortSignal;
     }): Promise<SourceBundle>;
-}
-export declare class SddIdentifierRegistry extends Service {
-    private readonly providers;
-    constructor(ctx: Context);
-    register(providerOrFactory: SddIdentifierProvider | IdentifierProviderFactory): () => void;
-    names(): string[];
-    get(name: string): SddIdentifierProvider | undefined;
 }
 export default SddSourceRegistry;

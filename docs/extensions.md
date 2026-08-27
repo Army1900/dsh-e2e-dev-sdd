@@ -1,6 +1,6 @@
 # Provider 扩展开发
 
-插件公开两个 Cordis 服务：`ctx.dshSddSources` 管理需求、缺陷和问题来源；`ctx.dshSddIdentifiers` 管理项目编号。第三方插件只依赖 `dsh-e2e-dev-sdd/extensions` 的接口，不需要修改核心包。
+插件公开 Cordis 服务 `ctx.dshSddSources`，用于管理企业需求、缺陷和问题来源。第三方插件只依赖 `dsh-e2e-dev-sdd/extensions` 的接口，不需要修改核心包。
 
 ## Source Provider
 
@@ -54,42 +54,9 @@ sources:
 
 读取接口必须响应 `request.signal`。创建、修改外部单据属于另一个具有用户确认的写能力，不应塞入只读 Source Provider。
 
-## Identifier Provider
+## 企业编号的处理方式
 
-```ts
-import type { Context } from '@deepseek-ai/cordis'
-import type { SddIdentifierProvider } from 'dsh-e2e-dev-sdd/extensions'
-
-const provider: SddIdentifierProvider = {
-  name: 'company-identifiers',
-  async allocate(request) {
-    return companyIds.allocate(request.project.project.key, request.namespace)
-  },
-  async validate(request) {
-    return companyIds.validate(request.namespace, request.key)
-  },
-}
-
-export const inject = ['dshSddIdentifiers']
-
-export function apply(ctx: Context) {
-  ctx.dshSddIdentifiers.register(provider)
-}
-```
-
-项目选择该实现：
-
-```yaml
-identifiers:
-  internal:
-    strategy: uuid
-  namespaces:
-    requirement:
-      strategy: provider
-      provider: company-identifiers
-```
-
-Provider 只生成项目显示编号；交付件内部 UUID 始终由核心生成。
+企业需求号、子需求号、缺陷号由 Source Provider 填入 `externalKey`，并在 `relations` 中返回父子或其他业务关系。核心会把这些编号保存到 Source/Work Item，并与 SDD 交付件建立追踪关系。企业适配器不分配或改写插件的 `REQ/UX/ARCH/SPEC/DEV` 交付件编号。
 
 ## 命令型 Connector
 

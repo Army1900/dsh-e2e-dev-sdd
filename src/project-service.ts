@@ -26,7 +26,7 @@ import {
   type WorkItem,
   stageDefinition,
 } from './protocol.ts'
-import { type SddIdentifierRegistry, type SddSourceRegistry, validateSourceEnvelope } from './extensions.ts'
+import { type SddSourceRegistry, validateSourceEnvelope } from './extensions.ts'
 import { appendEvent, readRecentEvents } from './event-log.ts'
 import { GitDevelopmentService, listDevelopmentWorkspaces } from './git-service.ts'
 import { evaluateQuality } from './quality.ts'
@@ -139,7 +139,7 @@ function defaultProject(path: string): ProjectConfig {
       internal: { strategy: 'uuid' },
       namespaces: Object.fromEntries(STAGES.map(stage => [stage.id, {
         strategy: 'template', template: `${stage.prefix}-{sequence:04}`, sequenceScope: 'project',
-      }])),
+      }])) as ProjectConfig['identifiers']['namespaces'],
     },
     sources: {},
     dependencies: {
@@ -194,12 +194,13 @@ function validateProject(value: unknown): { project?: ProjectConfig; errors: str
   else {
     if (!object(value.identifiers.internal) || value.identifiers.internal.strategy !== 'uuid') errors.push('identifiers.internal.strategy：必须是 uuid')
     if (!object(value.identifiers.namespaces)) errors.push('identifiers.namespaces：必须是对象')
-    else for (const [namespace, policy] of Object.entries(value.identifiers.namespaces)) {
-      const base = `identifiers.namespaces.${namespace}`
+    else for (const stage of STAGES) {
+      const policy = value.identifiers.namespaces[stage.id]
+      const base = `identifiers.namespaces.${stage.id}`
       if (!object(policy)) { errors.push(`${base}：必须是对象`); continue }
-      if (!['template', 'manual', 'external', 'script', 'provider'].includes(String(policy.strategy))) errors.push(`${base}.strategy：值无效`)
-      if (policy.strategy === 'template' && !nonEmptyString(policy.template)) errors.push(`${base}.template：模板策略必须配置模板`)
-      if ((policy.strategy === 'provider' || policy.strategy === 'script') && !nonEmptyString(policy.provider)) errors.push(`${base}.provider：当前策略必须配置 Provider`)
+      if (policy.strategy !== 'template') errors.push(`${base}.strategy：必须是 template`)
+      if (policy.template !== `${stage.prefix}-{sequence:04}`) errors.push(`${base}.template：必须是 ${stage.prefix}-{sequence:04}`)
+      if (policy.sequenceScope !== 'project') errors.push(`${base}.sequenceScope：必须是 project`)
     }
   }
   if (!object(value.sources)) errors.push('sources：必须是对象')
@@ -253,7 +254,6 @@ export class SddProjectService {
   constructor(
     private readonly api: ApiProxy,
     private readonly sourceRegistry?: SddSourceRegistry,
-    private readonly identifierRegistry?: SddIdentifierRegistry,
     private readonly sessionController?: StageSessionController,
     private readonly git = new GitDevelopmentService(),
   ) {}
@@ -271,7 +271,7 @@ export class SddProjectService {
     if (action.kind === 'initialize') { await this.initialize(action.workspaceId); return this.snapshot(action.workspaceId) }
     if (action.kind === 'reinitialize') { await this.reinitialize(action.workspaceId); return this.snapshot(action.workspaceId) }
     if (action.kind === 'create-draft') {
-      await this.createDraft(action.workspaceId, action.stage, action.title, action.key, action.basedOn, action.sourceUids ?? [], action.workItemUid)
+      await this.createDraft(action.workspaceId, action.stage, action.title, action.basedOn, action.sourceUids ?? [], action.workItemUid)
       return this.snapshot(action.workspaceId)
     }
     if (action.kind === 'create-revision') { await this.createRevision(action.workspaceId, action.artifactUid); return this.snapshot(action.workspaceId) }
@@ -284,11 +284,11 @@ export class SddProjectService {
     if (action.kind === 'add-project-repository') { await this.addProjectRepository(action.workspaceId, action.id, action.source, action.baseBranch); return this.snapshot(action.workspaceId) }
     if (action.kind === 'quality') return this.snapshot(action.workspaceId)
     if (action.kind === 'import-source') {
-      const preview = await this.previewSourceImport(action.workspaceId, action.provider, action.sourceKind, action.key, action.connector)
+      const preview = await this.previewSourceImport(action.workspaceId, action.provider, action.sourceKind, action.key, action.connector, action.input)
       await this.applySourceImport(action.workspaceId, preview.uid, preview.items.filter(item => item.change !== 'unchanged').map(item => item.identity))
       return this.snapshot(action.workspaceId)
     }
-    if (action.kind === 'preview-source-import') return this.previewSourceImport(action.workspaceId, action.provider, action.sourceKind, action.key, action.connector)
+    if (action.kind === 'preview-source-import') return this.previewSourceImport(action.workspaceId, action.provider, action.sourceKind, action.key, action.connector, action.input)
     if (action.kind === 'apply-source-import') {
       await this.applySourceImport(action.workspaceId, action.previewUid, action.identities)
       return this.snapshot(action.workspaceId)
@@ -488,7 +488,6 @@ export class SddProjectService {
     workspaceId: string,
     stage: StageId,
     title: string,
-    requestedKey: string | undefined,
     basedOn: string[],
     sourceUids: string[],
     workItemUid: string | undefined,
@@ -499,7 +498,7 @@ export class SddProjectService {
     const workItem = workItemUid === undefined ? undefined : snapshot.workItems.find(item => item.uid === workItemUid)
     if (workItemUid !== undefined && workItem === undefined) throw new Error(`work item not found: ${workItemUid}`)
     const definition = stageDefinition(stage)
-    const key = requestedKey?.trim() || await this.allocateKey(snapshot, stage, definition.prefix)
+    const key = this.nextKey(snapshot.artifacts, definition.prefix)
     if (snapshot.artifacts.some(item => item.key === key)) throw new Error(`artifact key already exists: ${key}`)
     const uid = randomUUID()
     const artifactRoot = workItem === undefined
@@ -630,28 +629,6 @@ export class SddProjectService {
     return `${prefix}-${String(largest + 1).padStart(4, '0')}`
   }
 
-  private async allocateKey(snapshot: ProjectSnapshot, stage: StageId, prefix: string): Promise<string> {
-    const policy = snapshot.project?.identifiers.namespaces[stage]
-    if (policy?.strategy === 'manual' || policy?.strategy === 'external') {
-      throw new Error(`identifier for ${stage} must be supplied manually`)
-    }
-    if (policy?.strategy === 'provider' || policy?.strategy === 'script') {
-      const providerName = policy.provider
-      if (providerName === undefined) throw new Error(`identifier provider is not configured for ${stage}`)
-      const provider = this.identifierRegistry?.get(providerName)
-      if (provider === undefined) throw new Error(`identifier provider not found: ${providerName}`)
-      const key = (await provider.allocate({
-        namespace: stage,
-        project: snapshot.project!,
-        workspacePath: snapshot.workspace.path,
-        signal: AbortSignal.timeout(30_000),
-      })).trim()
-      if (key === '') throw new Error(`identifier provider "${providerName}" returned an empty key`)
-      return key
-    }
-    return this.nextKey(snapshot.artifacts, prefix)
-  }
-
   private async listSources(workspacePath: string): Promise<SourceSummary[]> {
     const root = join(workspacePath, '.sdd', 'sources')
     if (!(await exists(root))) return []
@@ -683,6 +660,7 @@ export class SddProjectService {
     kind: string,
     key: string,
     connector: string | undefined,
+    input: unknown,
   ): Promise<ImportPreview> {
     if (kind.trim() === '' || key.trim() === '') throw new Error('source kind and key are required')
     await this.initialize(workspaceId)
@@ -693,6 +671,7 @@ export class SddProjectService {
       kind: kind.trim(), key: key.trim(),
       workspace: { workspaceId, path: snapshot.workspace.path, project: snapshot.project },
       ...(connector === undefined ? {} : { connector }),
+      ...(input === undefined ? {} : { input }),
       signal: AbortSignal.timeout(60_000),
     })
     const incoming = bundle.items

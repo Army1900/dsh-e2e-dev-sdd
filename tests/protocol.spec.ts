@@ -21,6 +21,7 @@ describe('parseAction', () => {
     expect(parseAction({ kind: 'read-artifact-file', workspaceId: 'w1', artifactUid: 'a1', path: 'deliverable.md' })).toMatchObject({ kind: 'read-artifact-file' })
     expect(parseAction({ kind: 'update-work-item-settings', workspaceId: 'w1', workItemUid: 'i1', repositoryScope: ['web'], developmentTargets: ['web'], openSpec: { enabled: true, repositoryId: 'web', path: 'openspec' } })).toMatchObject({ kind: 'update-work-item-settings' })
     expect(parseAction({ kind: 'add-project-repository', workspaceId: 'w1', id: 'web', source: '../web', baseBranch: 'main' })).toMatchObject({ kind: 'add-project-repository' })
+    expect(parseAction({ kind: 'preview-source-import', workspaceId: 'w1', provider: 'manual', sourceKind: 'requirement', key: 'M-1', input: { title: '手工需求' } })).toMatchObject({ provider: 'manual', input: { title: '手工需求' } })
   })
 
   it('rejects unknown stages and malformed arrays', () => {

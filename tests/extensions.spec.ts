@@ -4,8 +4,9 @@ import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import { describe, expect, it } from 'vitest'
 import { stringify } from 'yaml'
-import { SddIdentifierRegistry, SddSourceRegistry, validateSourceBundle } from '../src/extensions.ts'
+import { SddSourceRegistry, validateSourceBundle } from '../src/extensions.ts'
 import { CommandSourceProvider } from '../src/providers/command-source.ts'
+import { ManualSourceProvider } from '../src/providers/manual-source.ts'
 import type { ProjectConfig } from '../src/protocol.ts'
 
 const project = {
@@ -41,15 +42,6 @@ describe('SDD extension registries', () => {
     expect(source.items[0]?.title).toBe('REQ-1')
     dispose()
     expect(ctx.dshSddSources.names()).toEqual([])
-  })
-
-  it('supports class or object identifier implementations', async () => {
-    const ctx = new Context()
-    await ctx.plugin(SddIdentifierRegistry)
-    ctx.dshSddIdentifiers.register({ name: 'company-ids', async allocate() { return 'COMPANY-42' } })
-    expect(await ctx.dshSddIdentifiers.get('company-ids')!.allocate({
-      namespace: 'requirement', project, workspacePath: '/tmp', signal: AbortSignal.timeout(1000),
-    })).toBe('COMPANY-42')
   })
 
   it('validates a provider bundle with independently identifiable children', async () => {
@@ -91,5 +83,26 @@ describe('CommandSourceProvider', () => {
       workspace: { workspaceId: 'w1', path: root, project }, signal: AbortSignal.timeout(5000),
     })
     expect(source).toMatchObject({ provider: 'demo-cli', kind: 'defect', externalKey: 'BUG-9', items: [{ externalKey: 'BUG-9' }] })
+  })
+})
+
+describe('ManualSourceProvider', () => {
+  it('creates a one-item bundle without any enterprise connector', async () => {
+    const provider = new ManualSourceProvider()
+    const bundle = await provider.get({
+      kind: 'requirement', key: 'MANUAL-1', input: { title: '订单部分退款', description: '具体规则待讨论' },
+      workspace: { workspaceId: 'w1', path: '/tmp', project }, signal: AbortSignal.timeout(1000),
+    })
+    expect(bundle).toMatchObject({ provider: 'manual', externalKey: 'MANUAL-1', items: [{ externalKey: 'MANUAL-1', title: '订单部分退款', content: { description: '具体规则待讨论' } }] })
+  })
+
+  it('normalizes multiple manually entered children into independent work items', async () => {
+    const provider = new ManualSourceProvider()
+    const bundle = await provider.get({
+      kind: 'requirement', key: 'EPIC-1', input: { title: '支付升级', items: [{ key: 'REQ-1', title: '微信支付' }, { title: '支付通知' }] },
+      workspace: { workspaceId: 'w1', path: '/tmp', project }, signal: AbortSignal.timeout(1000),
+    })
+    expect(bundle.items.map(item => item.externalKey)).toEqual(['REQ-1', 'EPIC-1-02'])
+    expect(bundle.relations).toEqual([{ from: 'REQ-1', to: 'EPIC-1', type: 'child-of' }, { from: 'EPIC-1-02', to: 'EPIC-1', type: 'child-of' }])
   })
 })

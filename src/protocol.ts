@@ -312,11 +312,9 @@ export interface DevelopmentWorkspace {
 }
 
 export interface IdentifierPolicy {
-  strategy: 'template' | 'manual' | 'external' | 'script' | 'provider'
-  template?: string
-  sequenceScope?: string
-  provider?: string
-  command?: string[]
+  strategy: 'template'
+  template: string
+  sequenceScope: 'project'
 }
 
 export interface ProjectConfig {
@@ -324,7 +322,7 @@ export interface ProjectConfig {
   project: { key: string; name: string }
   identifiers: {
     internal: { strategy: 'uuid' }
-    namespaces: Record<string, IdentifierPolicy>
+    namespaces: Record<StageId, IdentifierPolicy>
   }
   sources: Record<string, { provider: string; connector?: string }>
   dependencies: Record<StageId, Partial<Record<StageId, DependencyMode>>>
@@ -405,11 +403,17 @@ export interface SddEvent {
   detail?: Record<string, unknown>
 }
 
+export interface ManualSourceInput {
+  title: string
+  description?: string
+  items?: Array<{ key?: string; title: string; description?: string }>
+}
+
 export type SddAction =
   | { kind: 'snapshot'; workspaceId: string }
   | { kind: 'initialize'; workspaceId: string }
   | { kind: 'reinitialize'; workspaceId: string }
-  | { kind: 'create-draft'; workspaceId: string; stage: StageId; title: string; key?: string; basedOn: string[]; sourceUids?: string[]; workItemUid?: string }
+  | { kind: 'create-draft'; workspaceId: string; stage: StageId; title: string; basedOn: string[]; sourceUids?: string[]; workItemUid?: string }
   | { kind: 'create-revision'; workspaceId: string; artifactUid: string }
   | { kind: 'accept'; workspaceId: string; artifactUid: string; checklist?: Record<string, boolean> }
   | { kind: 'read-artifact-file'; workspaceId: string; artifactUid: string; path: string }
@@ -424,8 +428,8 @@ export type SddAction =
   | { kind: 'development-status'; workspaceId: string; artifactUid: string }
   | { kind: 'development-test'; workspaceId: string; artifactUid: string; repositoryId: string; testId: string }
   | { kind: 'development-commit'; workspaceId: string; artifactUid: string; repositoryId: string; message: string }
-  | { kind: 'import-source'; workspaceId: string; provider: string; sourceKind: string; key: string; connector?: string }
-  | { kind: 'preview-source-import'; workspaceId: string; provider: string; sourceKind: string; key: string; connector?: string }
+  | { kind: 'import-source'; workspaceId: string; provider: string; sourceKind: string; key: string; connector?: string; input?: ManualSourceInput }
+  | { kind: 'preview-source-import'; workspaceId: string; provider: string; sourceKind: string; key: string; connector?: string; input?: ManualSourceInput }
   | { kind: 'apply-source-import'; workspaceId: string; previewUid: string; identities: string[] }
   | { kind: 'resolve-work-item-removal'; workspaceId: string; workItemUid: string; decision: 'keep' | 'archive' }
 
@@ -469,14 +473,14 @@ export function parseAction(value: unknown): SddAction | undefined {
   if (action.kind === 'development-commit' && typeof action.artifactUid === 'string' && typeof action.repositoryId === 'string'
     && typeof action.message === 'string' && action.message.trim() !== '') return action as unknown as SddAction
   if ((action.kind === 'import-source' || action.kind === 'preview-source-import') && typeof action.provider === 'string' && typeof action.sourceKind === 'string'
-    && typeof action.key === 'string' && (action.connector === undefined || typeof action.connector === 'string')) {
+    && typeof action.key === 'string' && (action.connector === undefined || typeof action.connector === 'string')
+    && (action.input === undefined || (typeof action.input === 'object' && action.input !== null && !Array.isArray(action.input)))) {
     return action as unknown as SddAction
   }
   if (action.kind === 'apply-source-import' && typeof action.previewUid === 'string' && stringArray(action.identities)) return action as unknown as SddAction
   if (action.kind === 'resolve-work-item-removal' && typeof action.workItemUid === 'string' && (action.decision === 'keep' || action.decision === 'archive')) return action as unknown as SddAction
   if (action.kind === 'create-draft' && isStageId(action.stage) && typeof action.title === 'string'
-    && (action.key === undefined || typeof action.key === 'string') && stringArray(action.basedOn)
-    && (action.sourceUids === undefined || stringArray(action.sourceUids))
+    && stringArray(action.basedOn) && (action.sourceUids === undefined || stringArray(action.sourceUids))
     && (action.workItemUid === undefined || typeof action.workItemUid === 'string')) {
     return action as unknown as SddAction
   }

@@ -7,6 +7,7 @@ import { SddProjectService } from '../src/project-service.ts'
 import type { SddSourceRegistry } from '../src/extensions.ts'
 import type { StageSessionController } from '../src/session-controller.ts'
 import type { SourceBundle } from '../src/protocol.ts'
+import { ManualSourceProvider } from '../src/providers/manual-source.ts'
 
 function api(path: string): ApiProxy {
   return {
@@ -17,6 +18,19 @@ function api(path: string): ApiProxy {
 }
 
 describe('SddProjectService', () => {
+  it('works out of the box with the built-in manual source', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-sdd-'))
+    const provider = new ManualSourceProvider()
+    const sources = { names: () => ['manual'], fetch: async (_name: string, request: any) => provider.get({ ...request, signal: request.signal ?? AbortSignal.timeout(1000) }) } as unknown as SddSourceRegistry
+    const service = new SddProjectService(api(root), sources)
+    const preview = await service.execute({ kind: 'preview-source-import', workspaceId: 'w1', provider: 'manual', sourceKind: 'requirement', key: 'MANUAL-1', input: { title: '订单部分退款', description: '规则待讨论' } })
+    if (!('schema' in preview)) throw new Error('expected import preview')
+    await service.execute({ kind: 'apply-source-import', workspaceId: 'w1', previewUid: preview.uid, identities: preview.items.map(item => item.identity) })
+    const snapshot = await service.snapshot('w1')
+    expect(snapshot.workItems).toEqual([expect.objectContaining({ key: 'MANUAL-1', title: '订单部分退款', provider: 'manual' })])
+    expect(snapshot.sources).toEqual([expect.objectContaining({ content: expect.objectContaining({ description: '规则待讨论' }) })])
+  })
+
   it('initializes a project and creates an accepted artifact', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-sdd-'))
     const service = new SddProjectService(api(root))
@@ -77,6 +91,16 @@ describe('SddProjectService', () => {
     const input = (await service.snapshot('w1')).artifacts[0]!
     await expect(service.execute({ kind: 'create-draft', workspaceId: 'w1', stage: 'prototype', title: '原型', basedOn: [input.uid] }))
       .rejects.toThrow('not accepted')
+  })
+
+  it('always allocates the plugin stage prefix independently of enterprise identifiers', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-sdd-'))
+    const service = new SddProjectService(api(root))
+    await service.execute({ kind: 'create-draft', workspaceId: 'w1', stage: 'requirements', title: '需求', basedOn: [] })
+    await service.execute({ kind: 'create-draft', workspaceId: 'w1', stage: 'requirements', title: '另一需求', basedOn: [] })
+    const snapshot = await service.snapshot('w1')
+    expect(snapshot.artifacts.map(item => item.key)).toEqual(['REQ-0001', 'REQ-0002'])
+    expect(snapshot.project?.identifiers.namespaces.architecture).toEqual({ strategy: 'template', template: 'ARCH-{sequence:04}', sequenceScope: 'project' })
   })
 
   it('reports invalid project configuration and preserves a backup when reinitializing', async () => {
@@ -176,7 +200,7 @@ describe('SddProjectService', () => {
   it('persists one session binding for one target artifact and resumes it', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-sdd-')); const bindings: unknown[] = []
     const sessions = { bind: (binding: unknown) => { bindings.push(binding) }, unbind: () => {} } as unknown as StageSessionController
-    const service = new SddProjectService(api(root), undefined, undefined, sessions)
+    const service = new SddProjectService(api(root), undefined, sessions)
     await service.execute({ kind: 'create-draft', workspaceId: 'w1', stage: 'requirements', title: '绑定需求', basedOn: [] })
     const artifact = (await service.snapshot('w1')).artifacts[0]!
     const started = await service.execute({ kind: 'bind-session', workspaceId: 'w1', stage: 'requirements', artifactUid: artifact.uid, sessionId: 'session-1', artifactUids: [] })

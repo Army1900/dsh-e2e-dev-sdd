@@ -42,7 +42,13 @@ Host 通过 DSH Workspace registry 校验 `workspaceId`，浏览器不能直接�
 
 ## 身份与编号
 
-每个交付件的 `uid` 是不可变内部身份。`key` 是项目显示编号，可以由模板、人工、外部系统或脚本提供。父子关系和追踪关系必须引用 UID 或带命名空间的外部引用，禁止从 `1.2.3`、`REQ-001` 等显示字符串推导领域关系。
+编号分为三层，不能相互替代：
+
+- `uid` 是插件生成的不可变技术身份。
+- 交付件 `key` 是插件生成的阶段编号，固定采用 `REQ/UX/ARCH/SPEC/DEV` 前缀和项目内四位递增序号。
+- 企业需求号、子需求号、缺陷号是 Source/Work Item 的外部编号，由人工录入或 Source Provider 原样返回。
+
+企业编号通过来源引用和追踪关系关联到工作单元及交付件，不参与交付件编号分配。父子关系和追踪关系必须引用 UID 或带命名空间的外部引用，禁止从编号字符串推导领域关系。`project.key` 只是当前本地 SDD 工作空间的标识，初始化时默认取目录名，也不是企业需求编号。
 
 Git-only 的并行分支无法安全分配全局连续序号，所以模板序号只是便捷显示值；冲突由校验器拒绝，内部 UUID 不受影响。
 
@@ -51,10 +57,12 @@ Git-only 的并行分支无法安全分配全局连续序号，所以模板序�
 所有对话、文件、CLI、MCP 和外部系统内容统一转换成 `dsh-sdd/source-bundle@1`，其中 `items` 至少包含一个 `source@1`：
 
 ```text
-source provider -> Source/Bundle -> change preview -> work item -> AI synthesis -> draft artifact -> human acceptance
+manual/CLI/MCP provider -> Source/Bundle -> change preview -> work item -> AI synthesis -> draft artifact -> human acceptance
 ```
 
 Connector 只提供来源，不直接创建 accepted 交付件。命令型 Connector 使用 stdin JSON / stdout JSON，命令以 argv 数组存储，凭证只从声明的环境变量读取。
+
+内置 `manual` Provider 不需要 Connector。用户只填写标题、初始描述和可选的多行子项，Provider 将其归一化为同一个 `source-bundle@1` 协议；信息不完整是允许的，需求讨论阶段的 Agent 负责追问并把确认结论写入正式交付件。
 
 再次导入同一需求包即为同步。核心按 `provider + kind + externalKey` 匹配工作单元，比较来源内容、标题、状态和版本，预览新增、修改、移除、无变化四类结果。应用变更会新增来源快照而不覆盖历史版本；已有 accepted 交付件保持冻结，工作单元进入 `change-pending`，相关阶段必须使用最新来源和重新接受的上游交付件完成评审。外部移除进入 `removed-pending`，负责人可以保留本地继续推进或归档工作单元；两种操作都不会删除历史文件。
 

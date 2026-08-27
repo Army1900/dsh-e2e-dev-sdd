@@ -37,8 +37,7 @@ describe('plugin composition', () => {
     await ctx.plugin(inner => { new FakeDependency(inner, 'systemPrompt') })
     await ctx.plugin(inner => { new FakeDependency(inner, 'tools') })
     await ctx.plugin(Plugin)
-    expect(ctx.dshSddSources.names()).toEqual(['command'])
-    expect(ctx.dshSddIdentifiers.names()).toEqual([])
+    expect(ctx.dshSddSources.names()).toEqual(['command', 'manual'])
     const web = ctx.get('webServer') as unknown as FakeWebServer
     expect(web.routes).toEqual([expect.objectContaining({ kind: 'exact', path: '/api/dsh-e2e-dev-sdd' })])
   })

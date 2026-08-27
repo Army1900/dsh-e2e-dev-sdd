@@ -259,11 +259,9 @@ export interface DevelopmentWorkspace {
     updatedAt: string;
 }
 export interface IdentifierPolicy {
-    strategy: 'template' | 'manual' | 'external' | 'script' | 'provider';
-    template?: string;
-    sequenceScope?: string;
-    provider?: string;
-    command?: string[];
+    strategy: 'template';
+    template: string;
+    sequenceScope: 'project';
 }
 export interface ProjectConfig {
     schema: 'dsh-sdd/project@1';
@@ -275,7 +273,7 @@ export interface ProjectConfig {
         internal: {
             strategy: 'uuid';
         };
-        namespaces: Record<string, IdentifierPolicy>;
+        namespaces: Record<StageId, IdentifierPolicy>;
     };
     sources: Record<string, {
         provider: string;
@@ -373,6 +371,15 @@ export interface SddEvent {
     stage?: StageId;
     detail?: Record<string, unknown>;
 }
+export interface ManualSourceInput {
+    title: string;
+    description?: string;
+    items?: Array<{
+        key?: string;
+        title: string;
+        description?: string;
+    }>;
+}
 export type SddAction = {
     kind: 'snapshot';
     workspaceId: string;
@@ -387,7 +394,6 @@ export type SddAction = {
     workspaceId: string;
     stage: StageId;
     title: string;
-    key?: string;
     basedOn: string[];
     sourceUids?: string[];
     workItemUid?: string;
@@ -478,6 +484,7 @@ export type SddAction = {
     sourceKind: string;
     key: string;
     connector?: string;
+    input?: ManualSourceInput;
 } | {
     kind: 'preview-source-import';
     workspaceId: string;
@@ -485,6 +492,7 @@ export type SddAction = {
     sourceKind: string;
     key: string;
     connector?: string;
+    input?: ManualSourceInput;
 } | {
     kind: 'apply-source-import';
     workspaceId: string;

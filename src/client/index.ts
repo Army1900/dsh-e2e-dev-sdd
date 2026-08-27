@@ -1,5 +1,5 @@
 import type { ClientContext, ISessions, IWorkspaces, WorkspaceId } from '@deepseek-ai/dsh-client-runtime/client'
-import { STAGES, artifactTemplate, type ArtifactSummary, type ProjectSnapshot, type SddAction, type SddResponse, type SourceSummary, type StageId, type StageRun } from '../protocol.ts'
+import { STAGES, STAGE_ARTIFACT_TEMPLATES, artifactTemplate, type ArtifactSummary, type ProjectSnapshot, type SddAction, type SddResponse, type SourceSummary, type StageId, type StageRun } from '../protocol.ts'
 
 export const name = 'dsh-e2e-dev-sdd-client'
 export const inject = ['workspaces', 'sessions']
@@ -18,13 +18,14 @@ html[${ACTIVE_ATTR}] [data-dsh-sdd-view]{display:block}html[${ACTIVE_ATTR}] [dat
 .dsh-sdd-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:14px}.dsh-sdd-stat{border:1px solid var(--dsw-alias-border-l1,#ddd);border-radius:12px;padding:14px;background:var(--dsw-alias-bg-layer-2,#fafafa)}.dsh-sdd-stat b{display:block;font-size:25px;margin-top:5px}.dsh-sdd-progress{height:8px;background:var(--dsw-alias-interactive-bg-hover,#e5e5e5);border-radius:999px;overflow:hidden;margin-top:7px}.dsh-sdd-progress span{display:block;height:100%;background:var(--dsw-alias-brand-primary,#3b63f3)}.dsh-sdd-stage-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px}.dsh-sdd-checks{margin:7px 0 0;padding-left:17px;font-size:12px}.dsh-sdd-checks li[data-fail]{color:#c53030}.dsh-sdd-checks li[data-pass]{color:#238636}.dsh-sdd-wide{grid-column:1/-1}
 .dsh-sdd-modal-backdrop{position:fixed;inset:0;z-index:200;display:flex;align-items:center;justify-content:center;padding:20px;background:#0008}.dsh-sdd-modal{box-sizing:border-box;width:min(520px,100%);max-height:min(760px,calc(100vh - 40px));overflow:auto;border:1px solid var(--dsw-alias-border-l1,#ddd);border-radius:14px;background:var(--dsw-alias-bg-base,#fff);box-shadow:0 20px 60px #0005}.dsh-sdd-modal-header{padding:18px 20px 10px}.dsh-sdd-modal-header h2{margin:0 0 6px;font-size:18px}.dsh-sdd-modal-body{display:flex;flex-direction:column;gap:14px;padding:8px 20px 18px}.dsh-sdd-field{display:flex;flex-direction:column;gap:6px}.dsh-sdd-field>label{font-size:13px;font-weight:600}.dsh-sdd-field textarea{min-height:88px;resize:vertical}.dsh-sdd-field[hidden]{display:none}.dsh-sdd-checkbox{display:grid;grid-template-columns:auto 1fr;align-items:start;gap:9px;padding:10px;border:1px solid var(--dsw-alias-border-l1,#ddd);border-radius:9px}.dsh-sdd-checkbox input{margin-top:2px}.dsh-sdd-modal-footer{display:flex;justify-content:flex-end;gap:8px;padding:14px 20px;border-top:1px solid var(--dsw-alias-border-l1,#ddd);background:var(--dsw-alias-bg-layer-2,#fafafa)}
 .dsh-sdd-template-modal{width:min(900px,100%)}.dsh-sdd-template-preview{box-sizing:border-box;margin:0;padding:16px;max-height:60vh;overflow:auto;border:1px solid var(--dsw-alias-border-l1,#ddd);border-radius:9px;background:var(--dsw-alias-bg-layer-2,#fafafa);font:12px/1.65 ui-monospace,SFMono-Regular,Consolas,monospace;white-space:pre-wrap;word-break:break-word}
+.dsh-sdd-manual-items{display:flex;flex-direction:column;gap:10px}.dsh-sdd-manual-item{display:grid;grid-template-columns:minmax(120px,.35fr) minmax(180px,.65fr) auto;gap:8px;padding:10px;border:1px solid var(--dsw-alias-border-l1,#ddd);border-radius:9px;background:var(--dsw-alias-bg-layer-2,#fafafa)}.dsh-sdd-manual-item textarea{grid-column:1/-1;min-height:100px}.dsh-sdd-manual-item button{align-self:start}@media(max-width:650px){.dsh-sdd-manual-item{grid-template-columns:1fr}.dsh-sdd-manual-item textarea{grid-column:1}.dsh-sdd-manual-item button{justify-self:end}}
 `
 
 interface DialogOption { value: string; label: string }
 interface DialogField {
   name: string
   label: string
-  type: 'text' | 'textarea' | 'select' | 'checkbox'
+  type: 'text' | 'textarea' | 'select' | 'checkbox' | 'manual-items'
   value?: string | boolean
   placeholder?: string
   help?: string
@@ -106,7 +107,24 @@ class SddWorkbench {
   private async refresh(): Promise<void> {
     if (this.state.workspaceId === undefined) return this.render()
     this.state.loading = true; this.state.error = undefined; this.render()
-    try { const response = await call({ kind: 'snapshot', workspaceId: this.state.workspaceId }); if (!response.ok) throw new Error(response.error); if (!('snapshot' in response)) throw new Error('Host returned an unexpected response'); this.state.snapshot = response.snapshot; if (this.state.workItemUid === undefined || !response.snapshot.workItems.some(item => item.uid === this.state.workItemUid)) this.state.workItemUid = response.snapshot.workItems.find(item => item.status !== 'completed')?.uid }
+    try {
+      const response = await call({ kind: 'snapshot', workspaceId: this.state.workspaceId }); if (!response.ok) throw new Error(response.error); if (!('snapshot' in response)) throw new Error('Host returned an unexpected response')
+      this.state.snapshot = response.snapshot
+      if (this.state.workItemUid === undefined || !response.snapshot.workItems.some(item => item.uid === this.state.workItemUid)) {
+        const workItem = response.snapshot.workItems.find(item => item.status !== 'completed')
+        this.state.workItemUid = workItem?.uid
+        this.state.selected = new Set([workItem?.sourceUid, workItem?.bundleSourceUid].filter((uid): uid is string => uid !== undefined))
+        this.state.targetArtifactUid = undefined
+      }
+      if (this.state.menu !== 'dashboard') {
+        const selectable = response.snapshot.artifacts.filter(item => item.workItemUid === this.state.workItemUid && item.stage === this.state.menu && (item.status === 'draft' || item.status === 'in-review'))
+        if (!selectable.some(item => item.uid === this.state.targetArtifactUid)) {
+          const only = selectable.length === 1 ? selectable[0] : undefined
+          this.state.targetArtifactUid = only?.uid
+          if (only !== undefined) this.state.selected = new Set([...only.basedOn.map(item => item.uid), ...only.derivedFrom.map(item => item.uid)])
+        }
+      }
+    }
     catch (error) { this.state.error = error instanceof Error ? error.message : String(error) }
     finally { this.state.loading = false; this.render() }
   }
@@ -165,7 +183,12 @@ class SddWorkbench {
     const importAction = stage === 'requirements' ? '<button class="dsh-sdd-button" data-action="import-requirement">导入或同步需求包</button>' : stage === 'development' ? '<button class="dsh-sdd-button" data-action="import-defect">导入或同步缺陷/问题</button>' : ''
     const change = workItem?.change === undefined ? '' : `<div class="dsh-sdd-error"><strong>${workItem.status === 'removed-pending' ? '外部需求已被移除' : '检测到需求变更'}</strong><br>${escapeHtml(workItem.change.changedPaths.join('、') || '外部状态变化')}<br>需要重新评审：${escapeHtml(workItem.change.reviewRequiredStages.map(id => STAGES.find(stageItem => stageItem.id === id)?.label ?? id).join('、') || '无')}${workItem.status === 'removed-pending' ? '<div class="dsh-sdd-actions"><button class="dsh-sdd-button" data-resolve-removal>处理外部移除</button></div>' : ''}</div>`
     const noWorkItem = snapshot.workItems.length > 0 && workItem === undefined ? '<div class="dsh-sdd-error">请先选择一个需求工作单元。</div>' : ''
-    return `${change}${noWorkItem}${this.stageSettingsHtml(snapshot, stage)}<div class="dsh-sdd-grid"><section class="dsh-sdd-card"><h2>选择本次输入</h2><p class="dsh-sdd-muted">只允许当前工作单元的来源和已接受上游交付件。</p><div class="dsh-sdd-list">${accepted.length === 0 && sources.length === 0 ? '<div class="dsh-sdd-empty">暂无可用输入</div>' : accepted.map(item => this.inputRow(item)).join('') + sources.map(item => this.sourceRow(item)).join('')}</div><div class="dsh-sdd-actions">${importAction}<button class="dsh-sdd-button primary" data-action="conversation">开始阶段对话</button></div></section><section class="dsh-sdd-card"><h2>本阶段交付件</h2><p class="dsh-sdd-muted">页面所示模板同时用于草稿初始化和 AI 输出约束，结论会同步到绑定交付件。</p><div class="dsh-sdd-list">${current.length === 0 ? '<div class="dsh-sdd-empty">尚未创建交付件</div>' : current.map(item => this.outputRow(item, snapshot)).join('')}</div><div class="dsh-sdd-actions"><button class="dsh-sdd-button" data-action="view-template">查看交付件模板</button><button class="dsh-sdd-button" data-action="draft"${snapshot.workItems.length > 0 && workItem === undefined ? ' disabled' : ''}>创建草稿</button></div></section>${stage === 'development' ? this.developmentHtml(snapshot) : ''}</div>`
+    const deliverableName = STAGE_ARTIFACT_TEMPLATES[stage].documentName
+    const target = current.find(item => item.uid === this.state.targetArtifactUid && (item.status === 'draft' || item.status === 'in-review'))
+    const nextStep = current.every(item => item.status !== 'draft' && item.status !== 'in-review')
+      ? `下一步：创建“${deliverableName}”草稿，作为 AI 本阶段输出的固定文件。`
+      : target === undefined ? `下一步：选择一个 ${deliverableName} 草稿。` : `已选择 ${target.key}，可以开始阶段对话。`
+    return `${change}${noWorkItem}${this.stageSettingsHtml(snapshot, stage)}<div class="dsh-sdd-grid"><section class="dsh-sdd-card"><h2>本阶段输入材料</h2><p class="dsh-sdd-muted">这些内容只作为 AI 的输入，不是当前阶段的正式输出。只允许选择当前工作单元的来源和已接受上游交付件。</p><div class="dsh-sdd-list">${accepted.length === 0 && sources.length === 0 ? '<div class="dsh-sdd-empty">暂无可用输入</div>' : accepted.map(item => this.inputRow(item)).join('') + sources.map(item => this.sourceRow(item)).join('')}</div>${importAction ? `<div class="dsh-sdd-actions">${importAction}</div>` : ''}</section><section class="dsh-sdd-card"><h2>${escapeHtml(deliverableName)}</h2><p class="dsh-sdd-muted">这是 AI 在当前阶段持续维护并最终验收的正式交付件。页面模板、草稿正文和 AI 输出约束保持一致。</p><div class="dsh-sdd-list">${current.length === 0 ? `<div class="dsh-sdd-empty">尚未创建${escapeHtml(deliverableName)}</div>` : current.map(item => this.outputRow(item, snapshot)).join('')}</div><div class="dsh-sdd-muted" style="margin-top:12px">${escapeHtml(nextStep)}</div><div class="dsh-sdd-actions"><button class="dsh-sdd-button" data-action="view-template">查看${escapeHtml(deliverableName)}模板</button><button class="dsh-sdd-button${target === undefined ? ' primary' : ''}" data-action="draft"${snapshot.workItems.length > 0 && workItem === undefined ? ' disabled' : ''}>创建${escapeHtml(deliverableName)}草稿</button><button class="dsh-sdd-button primary" data-action="conversation"${target === undefined ? ' disabled title="请先创建或选择本阶段交付件草稿"' : ''}>开始阶段对话</button></div></section>${stage === 'development' ? this.developmentHtml(snapshot) : ''}</div>`
   }
 
   private stageSettingsHtml(snapshot: ProjectSnapshot, stage: StageId): string {
@@ -309,6 +332,7 @@ class SddWorkbench {
         const required = field.required ? ' required' : ''
         const show = field.showWhen === undefined ? '' : ` data-show-field="${escapeHtml(field.showWhen.field)}" data-show-value="${escapeHtml(field.showWhen.value)}"`
         const help = field.help === undefined ? '' : `<span class="dsh-sdd-muted">${escapeHtml(field.help)}</span>`
+        if (field.type === 'manual-items') return `<div class="dsh-sdd-field"${show}><label>${escapeHtml(field.label)}</label>${help}<div class="dsh-sdd-manual-items" data-manual-items="${escapeHtml(field.name)}"></div><button class="dsh-sdd-button" type="button" data-add-manual-item="${escapeHtml(field.name)}">＋ 添加子需求</button></div>`
         if (field.type === 'checkbox') return `<div class="dsh-sdd-field"${show}><label class="dsh-sdd-checkbox"><input type="checkbox" name="${escapeHtml(field.name)}"${field.value === true ? ' checked' : ''}${required}><span>${escapeHtml(field.label)}${help}</span></label></div>`
         const control = field.type === 'select'
           ? `<select class="dsh-sdd-select" name="${escapeHtml(field.name)}"${required}>${(field.options ?? []).map(option => `<option value="${escapeHtml(option.value)}"${option.value === field.value ? ' selected' : ''}>${escapeHtml(option.label)}</option>`).join('')}</select>`
@@ -321,6 +345,22 @@ class SddWorkbench {
       this.container!.appendChild(backdrop)
       const form = backdrop.querySelector<HTMLFormElement>('form')!
       const close = (value: DialogValues | undefined) => { backdrop.remove(); resolve(value) }
+      const rowError = (group: HTMLElement | null | undefined, message: string) => {
+        if (group === null || group === undefined) return
+        group.querySelector('[data-manual-error]')?.remove()
+        const error = document.createElement('div'); error.className = 'dsh-sdd-error'; error.dataset.manualError = ''; error.textContent = message; group.appendChild(error)
+      }
+      const addManualItem = (name: string) => {
+        const list = backdrop.querySelector<HTMLElement>(`[data-manual-items="${name}"]`)
+        if (list === null) return
+        const row = document.createElement('div')
+        row.className = 'dsh-sdd-manual-item'
+        row.innerHTML = `<input class="dsh-sdd-input" data-manual-key placeholder="子需求编号（可留空）"><input class="dsh-sdd-input" data-manual-title placeholder="子需求标题"><button class="dsh-sdd-button" type="button" data-remove-manual-item>删除</button><textarea class="dsh-sdd-input" data-manual-description placeholder="详细描述业务背景、场景、规则、边界、异常、验收想法等；可以输入多行长文本。"></textarea>`
+        list.appendChild(row)
+        row.querySelector<HTMLElement>('[data-remove-manual-item]')!.addEventListener('click', () => row.remove())
+        row.querySelector<HTMLInputElement>('[data-manual-title]')!.focus()
+        updateVisibility()
+      }
       const updateVisibility = () => {
         backdrop.querySelectorAll<HTMLElement>('[data-show-field]').forEach(group => {
           const source = form.elements.namedItem(group.dataset.showField!) as HTMLInputElement | HTMLSelectElement | null
@@ -330,11 +370,25 @@ class SddWorkbench {
         })
       }
       form.addEventListener('change', updateVisibility)
+      backdrop.querySelectorAll<HTMLButtonElement>('[data-add-manual-item]').forEach(button => button.addEventListener('click', () => addManualItem(button.dataset.addManualItem!)))
       form.addEventListener('submit', event => {
         event.preventDefault()
         if (!form.reportValidity()) return
         const values: DialogValues = {}
         for (const field of config.fields) {
+          if (field.type === 'manual-items') {
+            const group = backdrop.querySelector<HTMLElement>(`[data-manual-items="${field.name}"]`)?.closest<HTMLElement>('.dsh-sdd-field')
+            if (group?.hidden === true) continue
+            group?.querySelector('[data-manual-error]')?.remove()
+            const items = [...(group?.querySelectorAll<HTMLElement>('.dsh-sdd-manual-item') ?? [])].map(row => ({
+              key: row.querySelector<HTMLInputElement>('[data-manual-key]')!.value.trim() || undefined,
+              title: row.querySelector<HTMLInputElement>('[data-manual-title]')!.value.trim(),
+              description: row.querySelector<HTMLTextAreaElement>('[data-manual-description]')!.value.trim() || undefined,
+            })).filter(item => item.key !== undefined || item.title !== '' || item.description !== undefined)
+            if (items.some(item => item.title === '')) { rowError(group, '每个子需求都必须填写标题'); return }
+            values[field.name] = JSON.stringify(items)
+            continue
+          }
           const control = form.elements.namedItem(field.name) as HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement | null
           if (control === null || control.disabled) continue
           values[field.name] = field.type === 'checkbox' ? (control as HTMLInputElement).checked : control.value.trim()
@@ -362,16 +416,24 @@ class SddWorkbench {
   private async createDraft(): Promise<void> {
     if (this.state.menu === 'dashboard') return
     const stage = STAGES.find(item => item.id === this.state.menu)!
+    const deliverableName = STAGE_ARTIFACT_TEMPLATES[this.state.menu].documentName
+    const nextDefaultKey = `${stage.prefix}-${String((this.state.snapshot?.artifacts.reduce((largest, item) => { const match = new RegExp(`^${stage.prefix}-(\\d+)$`).exec(item.key); return match === null ? largest : Math.max(largest, Number(match[1])) }, 0) ?? 0) + 1).padStart(4, '0')}`
     const values = await this.openForm({
-      title: `创建${stage.label}交付件`, description: '当前勾选的上游交付件和外部来源会固定写入本版本的追踪关系。', submitLabel: '创建草稿',
+      title: `创建${deliverableName}草稿`, description: `插件将自动分配交付件编号 ${nextDefaultKey}。企业需求号、缺陷号等外部编号通过输入材料和追踪关系关联，不会替换该编号。当前勾选的输入材料会固定写入本版本，创建后将自动选中并可立即开始 AI 对话。`, submitLabel: `创建并选中${deliverableName}`,
       fields: [
         { name: 'title', label: '交付件标题', type: 'text', required: true, placeholder: '例如：订单部分退款需求' },
-        { name: 'key', label: '项目编号', type: 'text', placeholder: '留空则按项目编号规则自动生成', help: '编号只用于展示和外部沟通，内部身份使用不可变 UUID。' },
       ],
     })
     if (values === undefined) return
     const artifacts = this.state.snapshot?.artifacts ?? []; const sources = this.state.snapshot?.sources ?? []
-    await this.mutate({ kind: 'create-draft', workspaceId: this.state.workspaceId!, stage: this.state.menu, title: String(values.title), key: String(values.key || '') || undefined, basedOn: [...this.state.selected].filter(uid => artifacts.some(item => item.uid === uid)), sourceUids: [...this.state.selected].filter(uid => sources.some(item => item.uid === uid)), ...(this.state.workItemUid === undefined ? {} : { workItemUid: this.state.workItemUid }) })
+    const before = new Set(artifacts.map(item => item.uid))
+    await this.mutate({ kind: 'create-draft', workspaceId: this.state.workspaceId!, stage: this.state.menu, title: String(values.title), basedOn: [...this.state.selected].filter(uid => artifacts.some(item => item.uid === uid)), sourceUids: [...this.state.selected].filter(uid => sources.some(item => item.uid === uid)), ...(this.state.workItemUid === undefined ? {} : { workItemUid: this.state.workItemUid }) })
+    const created = this.state.snapshot?.artifacts.find(item => !before.has(item.uid) && item.stage === this.state.menu && item.workItemUid === this.state.workItemUid && item.status === 'draft')
+    if (created !== undefined) {
+      this.state.targetArtifactUid = created.uid
+      this.state.selected = new Set([...created.basedOn.map(item => item.uid), ...created.derivedFrom.map(item => item.uid)])
+      this.render()
+    }
   }
 
   private async importSource(forcedKind?: string): Promise<void> {
@@ -381,15 +443,19 @@ class SddWorkbench {
     const kinds = [...new Set([defaultKind, 'requirement', 'defect', ...Object.keys(snapshot?.project?.sources ?? {})])]
     const kindLabels: Record<string, string> = { requirement: '需求', defect: '缺陷', issue: '问题' }
     const configured = snapshot?.project?.sources[defaultKind]
-    const defaultProvider = configured !== undefined && providers.includes(configured.provider) ? configured.provider : providers[0]!
+    const defaultProvider = configured !== undefined && providers.includes(configured.provider) ? configured.provider : providers.includes('manual') ? 'manual' : providers[0]!
     const connectors = snapshot?.connectors ?? []
+    const manualKey = `MANUAL-${new Date().toISOString().replace(/[-:TZ.]/g, '').slice(0, 14)}`
     const values = await this.openForm({
       title: '导入外部业务内容', description: '插件会读取外部系统中的原始事实并保存快照，AI 随后把它整合进当前阶段交付件。', submitLabel: '导入',
       fields: [
         ...(forcedKind === undefined ? [{ name: 'kind', label: '导入内容', type: 'select' as const, required: true, value: defaultKind, options: kinds.map(value => ({ value, label: kindLabels[value] ?? value })), help: '用于区分需求、缺陷或企业自定义事项类型。' }] : []),
-        { name: 'provider', label: '获取方式', type: 'select', required: true, value: defaultProvider, options: providers.map(value => ({ value, label: value === 'command' ? '项目业务适配器（command）' : `已安装适配器：${value}` })), help: '获取方式负责从企业系统读取原始内容，不直接生成正式交付件。' },
+        { name: 'provider', label: '获取方式', type: 'select', required: true, value: defaultProvider, options: providers.map(value => ({ value, label: value === 'manual' ? '手工录入（无需适配器）' : value === 'command' ? '项目业务适配器（command）' : `已安装适配器：${value}` })), help: '手工录入开箱即用；企业适配器用于自动读取外部系统。两者都会生成相同的标准来源和工作单元。' },
         { name: 'connector', label: '业务系统连接', type: 'select', required: true, value: configured?.connector ?? connectors[0], options: connectors.length === 0 ? [{ value: '', label: '尚未配置业务连接' }] : connectors.map(value => ({ value, label: value })), help: '来自 .sdd/business/connectors/，由项目业务开发人员维护。', showWhen: { field: 'provider', value: 'command' } },
-        { name: 'key', label: '外部编号', type: 'text', required: true, placeholder: defaultKind === 'defect' ? '例如：BUG-1024' : '例如：PAY-381', help: '填写企业需求、缺陷或问题系统中的原始单号。' },
+        { name: 'key', label: '主编号', type: 'text', required: true, value: defaultProvider === 'manual' ? manualKey : '', placeholder: defaultKind === 'defect' ? '例如：BUG-1024' : '例如：PAY-381', help: '手工录入会预生成编号，也可以换成团队自己的编号。' },
+        { name: 'manualTitle', label: '标题', type: 'text', required: true, placeholder: '例如：订单部分退款', help: '只需填写当前已知的最小信息，后续由需求讨论阶段的 AI 继续追问。', showWhen: { field: 'provider', value: 'manual' } },
+        { name: 'manualDescription', label: '初始描述', type: 'textarea', placeholder: '例如：一笔订单需要支持分多次退款，具体次数和金额规则尚未确认。', showWhen: { field: 'provider', value: 'manual' } },
+        { name: 'manualItems', label: '子需求（可选）', type: 'manual-items', help: '每个子需求分别填写编号、标题和不限行数的详细内容。留空时主需求本身形成一个工作单元。', showWhen: { field: 'provider', value: 'manual' } },
       ],
     })
     if (values === undefined) return
@@ -397,7 +463,9 @@ class SddWorkbench {
     if (provider === 'command' && !connector) { this.state.error = '请先在 .sdd/business/connectors/ 配置业务系统连接'; return this.render() }
     this.state.loading = true; this.state.error = undefined; this.render()
     try {
-      const response = await call({ kind: 'preview-source-import', workspaceId: this.state.workspaceId!, provider, sourceKind: forcedKind ?? String(values.kind), key: String(values.key), ...(connector ? { connector } : {}) })
+      const manualItems = JSON.parse(String(values.manualItems ?? '[]')) as Array<{ key?: string; title: string; description?: string }>
+      const input = provider === 'manual' ? { title: String(values.manualTitle), description: String(values.manualDescription ?? ''), ...(manualItems.length === 0 ? {} : { items: manualItems }) } : undefined
+      const response = await call({ kind: 'preview-source-import', workspaceId: this.state.workspaceId!, provider, sourceKind: forcedKind ?? String(values.kind), key: String(values.key), ...(connector ? { connector } : {}), ...(input === undefined ? {} : { input }) })
       if (!response.ok) throw new Error(response.error)
       if (!('preview' in response)) throw new Error('业务适配器未返回导入预览')
       this.state.loading = false; this.render()
