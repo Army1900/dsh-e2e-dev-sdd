@@ -120,7 +120,15 @@ class SddWorkbench {
     })
   }
 
-  private open(menu: MenuId): void { this.state.menu = menu; this.state.selected.clear(); this.state.targetArtifactUid = undefined; document.documentElement.setAttribute(ACTIVE_ATTR, ''); this.syncMenus(); void this.refresh() }
+  private open(menu: MenuId): void {
+    this.state.menu = menu; this.state.selected.clear(); this.state.targetArtifactUid = undefined
+    document.documentElement.setAttribute(ACTIVE_ATTR, ''); this.syncMenus()
+    const snapshot = this.state.snapshot
+    if (snapshot !== undefined && snapshot.workspace.workspaceId === this.state.workspaceId) {
+      this.reconcileSelection(snapshot); this.render(); return
+    }
+    void this.refresh()
+  }
   private close(): void { document.documentElement.removeAttribute(ACTIVE_ATTR); this.menuButtons.forEach(button => delete button.dataset.active) }
   private syncMenus(): void { this.menuButtons.forEach((button, id) => { if (document.documentElement.hasAttribute(ACTIVE_ATTR) && id === this.state.menu) button.dataset.active = 'true'; else delete button.dataset.active }) }
 
@@ -130,23 +138,27 @@ class SddWorkbench {
     try {
       const response = await call({ kind: 'snapshot', workspaceId: this.state.workspaceId }); if (!response.ok) throw new Error(response.error); if (!('snapshot' in response)) throw new Error('Host returned an unexpected response')
       this.state.snapshot = response.snapshot
-      if (this.state.workItemUid === undefined || !response.snapshot.workItems.some(item => item.uid === this.state.workItemUid)) {
-        const workItem = response.snapshot.workItems.find(item => item.status !== 'completed')
+      this.reconcileSelection(response.snapshot)
+    }
+    catch (error) { this.state.error = error instanceof Error ? error.message : String(error) }
+    finally { this.state.loading = false; this.render() }
+  }
+
+  private reconcileSelection(snapshot: ProjectSnapshot): void {
+      if (this.state.workItemUid === undefined || !snapshot.workItems.some(item => item.uid === this.state.workItemUid)) {
+        const workItem = snapshot.workItems.find(item => item.status !== 'completed')
         this.state.workItemUid = workItem?.uid
         this.state.selected = new Set([workItem?.sourceUid, workItem?.bundleSourceUid].filter((uid): uid is string => uid !== undefined))
         this.state.targetArtifactUid = undefined
       }
       if (this.state.menu !== 'dashboard') {
-        const selectable = response.snapshot.artifacts.filter(item => item.workItemUid === this.state.workItemUid && item.stage === this.state.menu && (item.status === 'draft' || item.status === 'in-review'))
+        const selectable = snapshot.artifacts.filter(item => item.workItemUid === this.state.workItemUid && item.stage === this.state.menu && (item.status === 'draft' || item.status === 'in-review'))
         if (!selectable.some(item => item.uid === this.state.targetArtifactUid)) {
           const only = selectable.length === 1 ? selectable[0] : undefined
           this.state.targetArtifactUid = only?.uid
           if (only !== undefined) this.state.selected = new Set([...only.basedOn.map(item => item.uid), ...only.derivedFrom.map(item => item.uid)])
         }
       }
-    }
-    catch (error) { this.state.error = error instanceof Error ? error.message : String(error) }
-    finally { this.state.loading = false; this.render() }
   }
 
   private render(): void {

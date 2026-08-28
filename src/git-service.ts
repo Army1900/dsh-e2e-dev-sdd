@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
-import { access, mkdir, readFile, writeFile } from 'node:fs/promises'
+import { access, lstat, mkdir, readFile, readlink, writeFile } from 'node:fs/promises'
 import { isAbsolute, join, relative, resolve } from 'node:path'
 import { parse, stringify } from 'yaml'
 import type { ArtifactSummary, DevelopmentRepositoryConfig, DevelopmentRepositoryState, DevelopmentTestEvidence, DevelopmentWorkspace, ProjectConfig, RepositoryInspection } from './protocol.ts'
@@ -48,21 +48,84 @@ function developmentFile(projectPath: string, artifactUid: string): string {
 }
 
 async function repositoryState(state: DevelopmentRepositoryState): Promise<DevelopmentRepositoryState> {
-  const status = await run(['git', 'status', '--porcelain=v1'], state.path)
+  const status = await run(['git', 'status', '--porcelain=v1', '-z', '--untracked-files=all'], state.path)
   const head = (await run(['git', 'rev-parse', 'HEAD'], state.path)).stdout.trim()
   const counts = (await run(['git', 'rev-list', '--left-right', '--count', `${state.baseCommit}...HEAD`], state.path)).stdout.trim().split(/\s+/).map(Number)
-  const worktreeHash = await worktreeFingerprint(state.path)
-  return { ...state, headCommit: head, behind: counts[0] ?? 0, ahead: counts[1] ?? 0, changedFiles: status.stdout.split(/\r?\n/).filter(Boolean).length, tests: (state.tests ?? []).map(test => ({ ...test, stale: test.worktreeHash !== worktreeHash })) }
+  const changes = porcelainChanges(status.stdout)
+  const worktreeHash = await worktreeFingerprint(state.path, changes)
+  return { ...state, headCommit: head, behind: counts[0] ?? 0, ahead: counts[1] ?? 0, changedFiles: changes.length, tests: (state.tests ?? []).map(test => ({ ...test, stale: test.worktreeHash !== worktreeHash })) }
 }
 
-async function worktreeFingerprint(path: string): Promise<string> {
-  const files = [...new Set((await run(['git', 'ls-files', '-c', '-o', '--exclude-standard', '-z'], path)).stdout.split('\0').filter(Boolean))].sort()
-  const hashes: string[] = []
-  for (const file of files) {
-    const hashed = await run(['git', 'hash-object', '--', file], path, 120_000, true)
-    hashes.push(`${file}\0${hashed.exitCode === 0 ? hashed.stdout.trim() : 'MISSING'}`)
+interface WorktreeChange { status: string; path: string; sourcePath?: string }
+
+function porcelainChanges(output: string): WorktreeChange[] {
+  const records = output.split('\0')
+  const changes: WorktreeChange[] = []
+  for (let index = 0; index < records.length; index += 1) {
+    const record = records[index]
+    if (record === undefined || record === '') continue
+    const status = record.slice(0, 2)
+    const path = record.slice(3)
+    const renamed = status.includes('R') || status.includes('C')
+    const sourcePath = renamed ? records[++index] : undefined
+    changes.push({ status, path, ...(sourcePath === undefined || sourcePath === '' ? {} : { sourcePath }) })
   }
-  return `sha256:${createHash('sha256').update(hashes.join('\0')).digest('hex')}`
+  return changes.sort((left, right) => left.path.localeCompare(right.path))
+}
+
+interface IndexEntry { mode: string; object: string }
+
+function parseIndex(output: string): Map<string, IndexEntry> {
+  const entries = new Map<string, IndexEntry>()
+  for (const record of output.split('\0')) {
+    if (record === '') continue
+    const match = /^(\d+) ([0-9a-f]+) 0\t([\s\S]+)$/u.exec(record)
+    if (match?.[1] !== undefined && match[2] !== undefined && match[3] !== undefined) entries.set(match[3], { mode: match[1], object: match[2] })
+  }
+  return entries
+}
+
+function gitBlobHash(content: Buffer, algorithm: 'sha1' | 'sha256'): string {
+  return createHash(algorithm).update(Buffer.from(`blob ${content.length}\0`)).update(content).digest('hex')
+}
+
+async function changedPathEntry(repositoryPath: string, path: string, algorithm: 'sha1' | 'sha256', existing?: IndexEntry): Promise<IndexEntry | undefined> {
+  const absolute = resolve(repositoryPath, path)
+  try {
+    const info = await lstat(absolute)
+    if (info.isSymbolicLink()) {
+      const content = Buffer.from(await readlink(absolute))
+      return { mode: '120000', object: gitBlobHash(content, algorithm) }
+    }
+    if (info.isFile()) {
+      const content = await readFile(absolute)
+      const mode = process.platform === 'win32' && existing !== undefined ? existing.mode : (info.mode & 0o111) === 0 ? '100644' : '100755'
+      return { mode, object: gitBlobHash(content, algorithm) }
+    }
+    if (info.isDirectory()) {
+      const head = await run(['git', 'rev-parse', 'HEAD'], absolute, 30_000, true)
+      return head.exitCode === 0 ? { mode: '160000', object: head.stdout.trim() } : undefined
+    }
+    return undefined
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined
+    throw error
+  }
+}
+
+async function worktreeFingerprint(path: string, knownChanges?: WorktreeChange[]): Promise<string> {
+  const changes = knownChanges ?? porcelainChanges((await run(['git', 'status', '--porcelain=v1', '-z', '--untracked-files=all'], path)).stdout)
+  const entries = parseIndex((await run(['git', 'ls-files', '--stage', '-z'], path)).stdout)
+  const firstObject = entries.values().next().value?.object as string | undefined
+  const algorithm: 'sha1' | 'sha256' = firstObject?.length === 64 ? 'sha256' : 'sha1'
+  for (const change of changes) {
+    if (change.sourcePath !== undefined) entries.delete(change.sourcePath)
+    const entry = await changedPathEntry(path, change.path, algorithm, entries.get(change.path))
+    if (entry === undefined) entries.delete(change.path)
+    else entries.set(change.path, entry)
+  }
+  const tree = [...entries].sort(([left], [right]) => left.localeCompare(right)).map(([file, entry]) => `${entry.mode} ${entry.object}\t${file}`).join('\0')
+  return `sha256:${createHash('sha256').update(tree).digest('hex')}`
 }
 
 export async function readDevelopmentWorkspace(projectPath: string, artifactUid: string): Promise<DevelopmentWorkspace | undefined> {

@@ -323,7 +323,7 @@ export class SddProjectService {
   private async openSpecCli(cwd: string, refresh = false): Promise<{ installed: boolean; version?: string }> {
     if (!refresh && this.openSpecCliCache !== undefined && this.openSpecCliCache.expiresAt > Date.now()) return this.openSpecCliCache.value
     const value = await inspectOpenSpecCli(cwd)
-    this.openSpecCliCache = { expiresAt: Date.now() + 10_000, value }
+    this.openSpecCliCache = { expiresAt: Date.now() + (value.installed ? 5 * 60_000 : 10_000), value }
     return value
   }
 
