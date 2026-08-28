@@ -26,6 +26,12 @@
         }
       }
     },
+    "workflow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode"],
+      "properties": { "mode": { "enum": ["flexible", "strict"] } }
+    },
     "dependencies": { "type": "object" },
     "development": {
       "type": "object",

@@ -23,6 +23,7 @@ html[${ACTIVE_ATTR}] [data-dsh-sdd-view]{display:block}html[${ACTIVE_ATTR}] [dat
 .dsh-sdd-template-modal{width:min(900px,100%)}.dsh-sdd-template-preview{display:block;box-sizing:border-box;width:100%;margin:0;padding:16px;max-height:60vh;overflow:auto;border:1px solid var(--dsw-alias-border-l1,#ddd);border-radius:9px;background:var(--dsw-alias-bg-layer-2,#fafafa);color:inherit;font:12px/1.65 ui-monospace,SFMono-Regular,Consolas,"Liberation Mono",monospace;text-align:left;white-space:pre;word-break:normal;overflow-wrap:normal;tab-size:2;direction:ltr}
 .dsh-sdd-manual-items{display:flex;flex-direction:column;gap:10px}.dsh-sdd-manual-item{display:grid;grid-template-columns:minmax(120px,.35fr) minmax(180px,.65fr) auto;gap:8px;padding:10px;border:1px solid var(--dsw-alias-border-l1,#ddd);border-radius:9px;background:var(--dsw-alias-bg-layer-2,#fafafa)}.dsh-sdd-manual-item textarea{grid-column:1/-1;min-height:100px}.dsh-sdd-manual-item button{align-self:start}@media(max-width:650px){.dsh-sdd-manual-item{grid-template-columns:1fr}.dsh-sdd-manual-item textarea{grid-column:1}.dsh-sdd-manual-item button{justify-self:end}}
 .dsh-sdd-package-modal{width:min(1120px,100%)}.dsh-sdd-package{display:grid;grid-template-columns:minmax(230px,.32fr) minmax(0,1fr);gap:12px;min-height:480px}.dsh-sdd-file-tree{max-height:62vh;overflow:auto;border:1px solid var(--dsw-alias-border-l1,#ddd);border-radius:9px;padding:6px;background:var(--dsw-alias-bg-layer-2,#fafafa)}.dsh-sdd-file-row{display:flex;align-items:center;width:100%;gap:6px;padding:7px 8px;border:0;border-radius:6px;background:transparent;color:inherit;text-align:left;cursor:pointer;font:12px ui-monospace,SFMono-Regular,Consolas,monospace}.dsh-sdd-file-row:hover,.dsh-sdd-file-row[data-selected]{background:var(--dsw-alias-interactive-bg-hover,#e8e8e8)}.dsh-sdd-preview-pane{min-width:0}.dsh-sdd-preview-toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px}.dsh-sdd-preview-toolbar strong{margin-right:auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.dsh-sdd-markdown{box-sizing:border-box;max-height:56vh;overflow:auto;padding:18px;border:1px solid var(--dsw-alias-border-l1,#ddd);border-radius:9px;background:var(--dsw-alias-bg-base,#fff);line-height:1.65}.dsh-sdd-markdown h1,.dsh-sdd-markdown h2,.dsh-sdd-markdown h3{margin-top:1.3em}.dsh-sdd-markdown pre,.dsh-sdd-markdown code{font-family:ui-monospace,SFMono-Regular,Consolas,monospace}.dsh-sdd-markdown pre{overflow:auto;padding:12px;border-radius:7px;background:var(--dsw-alias-bg-layer-2,#f5f5f5)}.dsh-sdd-markdown table{border-collapse:collapse;max-width:100%;display:block;overflow:auto}.dsh-sdd-markdown th,.dsh-sdd-markdown td{border:1px solid var(--dsw-alias-border-l1,#ddd);padding:6px 9px}.dsh-sdd-image-preview{display:flex;align-items:center;justify-content:center;min-height:360px;border:1px solid var(--dsw-alias-border-l1,#ddd);border-radius:9px;background:var(--dsw-alias-bg-layer-2,#fafafa)}.dsh-sdd-image-preview img{max-width:100%;max-height:56vh}.dsh-sdd-file-note{padding:30px;text-align:center;border:1px dashed var(--dsw-alias-border-l1,#ddd);border-radius:9px;color:var(--dsw-alias-label-secondary,#666)}@media(max-width:760px){.dsh-sdd-package{grid-template-columns:1fr}.dsh-sdd-file-tree{max-height:220px}}
+.dsh-sdd-flow-segment[data-status="not-applicable"],.dsh-sdd-legend-swatch[data-status="not-applicable"]{background:repeating-linear-gradient(45deg,transparent 0 3px,var(--dsw-alias-border-l2,#bbb) 3px 4px)}.dsh-sdd-matrix-cell[data-status="not-applicable"]{color:var(--dsw-alias-label-secondary,#666);border-style:dashed;background:transparent}
 `
 
 interface DialogOption { value: string; label: string }
@@ -54,6 +55,7 @@ interface RuntimeState {
 async function call(action: SddAction): Promise<SddResponse> {
   const timeout = action.kind === 'development-install-openspec' ? 330_000
     : action.kind === 'development-initialize-openspec' ? 210_000
+      : action.kind === 'development-fork-openspec-schema' || action.kind === 'development-create-openspec-change' || action.kind === 'development-inspect-openspec-templates' ? 75_000
       : action.kind === 'add-project-repository' || action.kind === 'inspect-project-repository' || action.kind === 'initialize-project-repository' || action.kind === 'update-project-repository-branch' ? 75_000 : 20_000
   const response = await fetch(API_PATH, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(action), signal: AbortSignal.timeout(timeout) })
   return await response.json() as SddResponse
@@ -177,17 +179,19 @@ class SddWorkbench {
       ? stat('工作量', '未配置', '由业务数据适配器提供估算')
       : `<div class="dsh-sdd-stat"><span class="dsh-sdd-muted">工作量</span><div class="dsh-sdd-workload-list">${dashboard.workload.map(item => `<div class="dsh-sdd-workload-row" title="${escapeHtml(item.unit)} · 已完成 ${item.completed} / 总计 ${item.total}"><span>${escapeHtml(item.unit)}</span><strong>${item.completed} / ${item.total}</strong></div>`).join('')}</div></div>`
     const pendingChanges = snapshot.workItems.filter(item => item.status === 'change-pending' || item.status === 'removed-pending').length
-    return `<section class="dsh-sdd-card" style="margin-bottom:14px"><h2>需求与缺陷管理</h2><p class="dsh-sdd-muted">统一从业务系统导入或再次同步需求包、缺陷和问题；阶段页面只处理各自的交付流程。</p><div class="dsh-sdd-actions"><button class="dsh-sdd-button primary" data-action="import-source">导入或同步需求/缺陷</button></div></section><div class="dsh-sdd-stats">${stat('总体完成度', `${dashboard.overallCompletion}%`, '五阶段质量门禁平均值')}${stat('需求工作单元', String(snapshot.workItems.length), `待处理变更 ${pendingChanges}`)}${stat('需求', String(dashboard.requirements.total), `已追踪 ${dashboard.requirements.traced}`)}${stat('缺陷', String(dashboard.defects.total), `待处理 ${dashboard.defects.open} · 已解决 ${dashboard.defects.resolved}`)}${stat('交付件', String(dashboard.artifacts.total), `草稿 ${dashboard.artifacts.drafts} · 已接受 ${dashboard.artifacts.accepted}`)}${stat('代码空间', String(dashboard.development.workspaces), `变更文件 ${dashboard.development.changedFiles}`)}${stat('测试', String(dashboard.development.passingTests + dashboard.development.failingTests), `通过 ${dashboard.development.passingTests} · 失败 ${dashboard.development.failingTests}`)}${workload}</div>
+    const repositories = snapshot.project?.development.repositories ?? []
+    const repositoryRows = repositories.map(repository => `<div class="dsh-sdd-row"><span></span><span><strong>${escapeHtml(repository.id)}</strong><span class="dsh-sdd-muted">${escapeHtml(repository.source)} · 默认基线 ${escapeHtml(repository.baseBranch)}</span></span><span><button class="dsh-sdd-button" data-change-repository-branch="${escapeHtml(repository.id)}">切换基线</button> <button class="dsh-sdd-button" data-remove-repository="${escapeHtml(repository.id)}">移除</button></span></div>`).join('')
+    return `<div class="dsh-sdd-grid" style="margin-bottom:14px"><section class="dsh-sdd-card"><h2>需求与缺陷管理</h2><p class="dsh-sdd-muted">统一从业务系统导入或再次同步需求包、缺陷和问题；阶段页面只处理各自的交付流程。</p><div class="dsh-sdd-actions"><button class="dsh-sdd-button primary" data-action="import-source">导入或同步需求/缺陷</button></div></section><section class="dsh-sdd-card"><h2>项目代码仓库目录</h2><p class="dsh-sdd-muted">这里只登记项目可用仓库和默认基线；具体需求在任意阶段的“开发设置”中选择实际目标。</p><div class="dsh-sdd-list">${repositoryRows || '<div class="dsh-sdd-empty">尚未登记代码仓库</div>'}</div><div class="dsh-sdd-actions"><button class="dsh-sdd-button primary" data-action="add-repository">添加项目代码仓库</button></div></section></div><div class="dsh-sdd-stats">${stat('总体完成度', `${dashboard.overallCompletion}%`, '实际采用阶段的质量状态')}${stat('需求工作单元', String(snapshot.workItems.length), `待处理变更 ${pendingChanges}`)}${stat('需求', String(dashboard.requirements.total), `已追踪 ${dashboard.requirements.traced}`)}${stat('缺陷', String(dashboard.defects.total), `待处理 ${dashboard.defects.open} · 已解决 ${dashboard.defects.resolved}`)}${stat('交付件', String(dashboard.artifacts.total), `草稿 ${dashboard.artifacts.drafts} · 已接受 ${dashboard.artifacts.accepted}`)}${stat('代码空间', String(dashboard.development.workspaces), `变更文件 ${dashboard.development.changedFiles}`)}${stat('测试', String(dashboard.development.passingTests + dashboard.development.failingTests), `通过 ${dashboard.development.passingTests} · 失败 ${dashboard.development.failingTests}`)}${workload}</div>
       <div class="dsh-sdd-chart-grid">${this.stageFlowHtml(snapshot)}${this.burnupHtml(dashboard.burnup)}</div>
       ${this.deliveryMatrixHtml(snapshot)}
       <div class="dsh-sdd-grid dsh-sdd-dashboard-columns" style="margin-top:14px"><section class="dsh-sdd-card"><h2>质量与追踪</h2><p>来源追踪覆盖率：<strong>${dashboard.traceability}%</strong></p>${dashboard.blockers.length === 0 ? '<div class="dsh-sdd-empty">当前没有结构化阻塞项</div>' : `<ul class="dsh-sdd-checks">${dashboard.blockers.map(item => `<li data-fail>${escapeHtml(item)}</li>`).join('')}</ul>`}</section><section class="dsh-sdd-card"><h2>最近活动</h2>${dashboard.recentEvents.length === 0 ? '<div class="dsh-sdd-empty">暂无事件</div>' : `<div class="dsh-sdd-list dsh-sdd-scroll-list">${dashboard.recentEvents.slice(0, 10).map(event => `<div class="dsh-sdd-row"><span></span><span><strong>${escapeHtml(event.subject)}</strong><span class="dsh-sdd-muted">${escapeHtml(event.type)} · ${escapeHtml(event.time)}</span></span></div>`).join('')}</div>`}</section></div>${this.traceabilityHtml(snapshot)}`
   }
 
   private stageFlowHtml(snapshot: ProjectSnapshot): string {
-    const labels: Array<[DeliveryCellStatus, string]> = [['not-started', '未开始'], ['in-progress', '进行中'], ['ready-for-review', '待评审'], ['completed', '已验收'], ['blocked', '阻塞/需复审']]
+    const labels: Array<[DeliveryCellStatus, string]> = [['not-started', '未开始'], ['not-applicable', '不适用'], ['in-progress', '进行中'], ['ready-for-review', '待评审'], ['completed', '已验收'], ['blocked', '阻塞/需复审']]
     const rows = snapshot.dashboard.stageFlow.map(flow => {
       const stage = STAGES.find(item => item.id === flow.stage)!
-      const values: Record<DeliveryCellStatus, number> = { 'not-started': flow.notStarted, 'in-progress': flow.inProgress, 'ready-for-review': flow.readyForReview, completed: flow.completed, blocked: flow.blocked }
+      const values: Record<DeliveryCellStatus, number> = { 'not-started': flow.notStarted, 'not-applicable': flow.notApplicable, 'in-progress': flow.inProgress, 'ready-for-review': flow.readyForReview, completed: flow.completed, blocked: flow.blocked }
       const count = Object.values(values).reduce((sum, value) => sum + value, 0); const scale = Math.max(1, count)
       const segments = labels.map(([status, label]) => values[status] === 0 ? '' : `<span class="dsh-sdd-flow-segment" data-status="${status}" style="width:${values[status] / scale * 100}%" title="${escapeHtml(label)} ${values[status]}"></span>`).join('')
       return `<div class="dsh-sdd-flow-row"><strong>${escapeHtml(stage.label)}</strong><div class="dsh-sdd-flow-bar">${segments}</div><span>${count}</span></div>`
@@ -208,7 +212,7 @@ class SddWorkbench {
   }
 
   private deliveryMatrixHtml(snapshot: ProjectSnapshot): string {
-    const labels: Record<DeliveryCellStatus, string> = { 'not-started': '未开始', 'in-progress': '进行中', 'ready-for-review': '待评审', completed: '已验收', blocked: '阻塞/需复审' }
+    const labels: Record<DeliveryCellStatus, string> = { 'not-started': '未开始', 'not-applicable': '不适用', 'in-progress': '进行中', 'ready-for-review': '待评审', completed: '已验收', blocked: '阻塞/需复审' }
     const rows = snapshot.dashboard.deliveryMatrix.slice(0, 200).map(row => `<tr><td><strong class="dsh-sdd-matrix-work" title="${escapeHtml(`${row.key} · ${row.title}`)}">${escapeHtml(row.key)} · ${escapeHtml(row.title)}</strong></td>${row.cells.map(cell => `<td><button class="dsh-sdd-matrix-cell" data-status="${cell.status}" data-matrix-work-item="${escapeHtml(row.workItemUid)}" data-matrix-stage="${cell.stage}"${cell.artifactUid === undefined ? '' : ` data-matrix-artifact="${escapeHtml(cell.artifactUid)}"`} title="${escapeHtml(`${labels[cell.status]}${cell.artifactKey === undefined ? '' : ` · ${cell.artifactKey} v${cell.version}`}`)}">${escapeHtml(labels[cell.status])}</button></td>`).join('')}</tr>`).join('')
     return `<section class="dsh-sdd-card" style="margin-top:14px"><h2>需求交付热力图</h2><p class="dsh-sdd-muted">每行是一条需求，每列是一个 SDD 阶段；点击单元格进入对应工作台。</p>${rows === '' ? '<div class="dsh-sdd-empty">暂无需求工作单元</div>' : `<div class="dsh-sdd-matrix-scroll"><table class="dsh-sdd-matrix"><thead><tr><th>需求工作单元</th>${STAGES.map(stage => `<th>${escapeHtml(stage.label)}</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table></div>${snapshot.dashboard.deliveryMatrix.length > 200 ? '<p class="dsh-sdd-muted">当前展示前 200 条，请按工作单元继续查看详细追踪。</p>' : ''}`}</section>`
   }
@@ -219,10 +223,10 @@ class SddWorkbench {
     const artifacts = snapshot.artifacts.filter(item => item.workItemUid === workItem.uid && item.status !== 'superseded')
     const rows = STAGES.map(stage => {
       const items = artifacts.filter(item => item.stage === stage.id)
-      const detail = items.length === 0 ? '—' : items.map(item => `${item.key} v${item.version} (${item.status}) ← ${item.basedOn.map(ref => artifacts.find(value => value.uid === ref.uid)?.key ?? ref.uid).join('、') || workItem.key}`).join('；')
+      const detail = items.length === 0 ? workItem.stageApplicability?.[stage.id]?.status === 'not-applicable' ? `不适用${workItem.stageApplicability[stage.id]?.reason ? `：${workItem.stageApplicability[stage.id]!.reason}` : ''}` : '—' : items.map(item => `${item.key} v${item.version} (${item.status}) ← ${item.basedOn.map(ref => artifacts.find(value => value.uid === ref.uid)?.key ?? ref.uid).join('、') || workItem.key}`).join('；')
       return `<div class="dsh-sdd-row"><span></span><span><strong>${escapeHtml(stage.label)}</strong><span class="dsh-sdd-muted">${escapeHtml(detail)}</span></span></div>`
     }).join('')
-    return `<section class="dsh-sdd-card" style="margin-top:14px"><h2>交付追踪矩阵 · ${escapeHtml(workItem.key)}</h2><p class="dsh-sdd-muted">外部需求、五阶段交付件及其固定上游版本。</p><div class="dsh-sdd-list dsh-sdd-trace-list">${rows}</div></section>`
+    return `<section class="dsh-sdd-card" style="margin-top:14px"><h2>交付追踪矩阵 · ${escapeHtml(workItem.key)}</h2><p class="dsh-sdd-muted">外部来源、实际采用的阶段交付件、固定输入版本及不适用阶段。</p><div class="dsh-sdd-list dsh-sdd-trace-list">${rows}</div></section>`
   }
 
   private workbenchHtml(snapshot: ProjectSnapshot, stage: StageId): string {
@@ -239,31 +243,37 @@ class SddWorkbench {
     const nextStep = current.every(item => item.status !== 'draft' && item.status !== 'in-review')
       ? `下一步：创建“${deliverableName}”草稿，作为 AI 本阶段输出的固定文件。`
       : target === undefined ? `下一步：选择一个 ${deliverableName} 草稿。` : `已选择 ${target.key}，可以开始阶段对话。`
-    return `${change}${noWorkItem}${this.stageSettingsHtml(snapshot, stage)}<div class="dsh-sdd-grid"><section class="dsh-sdd-card"><h2>本阶段输入材料</h2><p class="dsh-sdd-muted">这些内容只作为 AI 的输入，不是当前阶段的正式输出。只允许选择当前工作单元的来源和已接受上游交付件。</p><div class="dsh-sdd-list">${accepted.length === 0 && sources.length === 0 ? '<div class="dsh-sdd-empty">暂无可用输入</div>' : accepted.map(item => this.inputRow(item)).join('') + sources.map(item => this.sourceRow(item)).join('')}</div>${importAction ? `<div class="dsh-sdd-actions">${importAction}</div>` : ''}</section><section class="dsh-sdd-card"><h2>${escapeHtml(deliverableName)}</h2><p class="dsh-sdd-muted">这是 AI 在当前阶段持续维护并最终验收的正式交付件。页面模板、草稿正文和 AI 输出约束保持一致。</p><div class="dsh-sdd-list">${current.length === 0 ? `<div class="dsh-sdd-empty">尚未创建${escapeHtml(deliverableName)}</div>` : current.map(item => this.outputRow(item, snapshot)).join('')}</div><div class="dsh-sdd-muted" style="margin-top:12px">${escapeHtml(nextStep)}</div><div class="dsh-sdd-actions"><button class="dsh-sdd-button" data-action="view-template">查看${escapeHtml(deliverableName)}模板</button><button class="dsh-sdd-button${target === undefined ? ' primary' : ''}" data-action="draft"${snapshot.workItems.length > 0 && workItem === undefined ? ' disabled' : ''}>创建${escapeHtml(deliverableName)}草稿</button><button class="dsh-sdd-button primary" data-action="conversation"${target === undefined ? ' disabled title="请先创建或选择本阶段交付件草稿"' : ''}>开始阶段对话</button></div></section>${stage === 'development' ? this.developmentHtml(snapshot) : ''}</div>`
+    const applicability = workItem?.stageApplicability?.[stage]
+    const applicabilityHtml = workItem === undefined || stage === 'requirements' ? '' : applicability?.status === 'not-applicable'
+      ? `<div class="dsh-sdd-card" style="margin-bottom:14px"><strong>本需求已将${escapeHtml(STAGES.find(item => item.id === stage)!.label)}标记为不适用</strong><p class="dsh-sdd-muted">${escapeHtml(applicability.reason || '未填写说明')}</p><button class="dsh-sdd-button" data-action="restore-stage">恢复为可用阶段</button></div>`
+      : current.length === 0 ? `<div class="dsh-sdd-actions" style="margin-bottom:14px"><button class="dsh-sdd-button" data-action="skip-stage">本需求不需要${escapeHtml(STAGES.find(item => item.id === stage)!.label)}</button></div>` : ''
+    return `${change}${noWorkItem}${applicabilityHtml}${this.stageSettingsHtml(snapshot, stage)}<div class="dsh-sdd-grid"><section class="dsh-sdd-card"><h2>本阶段输入材料</h2><p class="dsh-sdd-muted">可自由选择当前工作单元的原始来源和任意阶段已接受交付件；选中的版本会固定写入当前交付件。</p><div class="dsh-sdd-list">${accepted.length === 0 && sources.length === 0 ? '<div class="dsh-sdd-empty">暂无可用输入</div>' : accepted.map(item => this.inputRow(item)).join('') + sources.map(item => this.sourceRow(item)).join('')}</div>${importAction ? `<div class="dsh-sdd-actions">${importAction}</div>` : ''}</section><section class="dsh-sdd-card"><h2>${escapeHtml(deliverableName)}</h2><p class="dsh-sdd-muted">这是 AI 在当前阶段持续维护并最终验收的正式交付件。页面模板、草稿正文和 AI 输出约束保持一致。</p><div class="dsh-sdd-list">${current.length === 0 ? `<div class="dsh-sdd-empty">尚未创建${escapeHtml(deliverableName)}</div>` : current.map(item => this.outputRow(item, snapshot)).join('')}</div><div class="dsh-sdd-muted" style="margin-top:12px">${escapeHtml(nextStep)}</div><div class="dsh-sdd-actions"><button class="dsh-sdd-button" data-action="view-template">查看${escapeHtml(deliverableName)}模板</button><button class="dsh-sdd-button${target === undefined ? ' primary' : ''}" data-action="draft"${snapshot.workItems.length > 0 && (workItem === undefined || applicability?.status === 'not-applicable') ? ' disabled' : ''}>创建${escapeHtml(deliverableName)}草稿</button><button class="dsh-sdd-button primary" data-action="conversation"${target === undefined ? ' disabled title="请先创建或选择本阶段交付件草稿"' : ''}>开始阶段对话</button></div></section>${stage === 'development' ? this.developmentHtml(snapshot) : ''}</div>`
   }
 
   private stageSettingsHtml(snapshot: ProjectSnapshot, stage: StageId): string {
     const workItem = snapshot.workItems.find(item => item.uid === this.state.workItemUid)
-    if (workItem === undefined || (stage !== 'architecture' && stage !== 'specification' && stage !== 'development')) return ''
+    if (workItem === undefined) return ''
     const scope = workItem.repositoryScope?.join('、') || '未确认'
     const targets = workItem.developmentTargets?.join('、') || '未确认'
     const openSpecValidation = snapshot.openSpecValidation[workItem.uid]
-    const openSpecState = openSpecValidation?.status === 'valid' ? '已验证'
+    const openSpecState = openSpecValidation?.status === 'valid' ? openSpecValidation.message
       : openSpecValidation?.status === 'invalid' ? `验证失败：${openSpecValidation.message}`
         : openSpecValidation?.status === 'pending' ? '已配置，待开发空间验证' : '已配置，待验证'
     const openSpec = workItem.openSpec?.enabled === true ? `${workItem.openSpec.repositoryId}:${workItem.openSpec.path} · ${openSpecState}` : '本需求未配置'
-    if (stage === 'architecture') {
-      const repositories = snapshot.project?.development.repositories ?? []
-      const rows = repositories.map(repository => `<div class="dsh-sdd-row"><input type="checkbox" data-repository-scope="${escapeHtml(repository.id)}"${workItem.repositoryScope?.includes(repository.id) === true ? ' checked' : ''}><span><strong>${escapeHtml(repository.id)}</strong><span class="dsh-sdd-muted">${escapeHtml(repository.source)} · 基线 ${escapeHtml(repository.baseBranch)}；开发时自动创建独立特性分支</span></span><span><button class="dsh-sdd-button" data-change-repository-branch="${escapeHtml(repository.id)}">切换基线</button> <button class="dsh-sdd-button" data-remove-repository="${escapeHtml(repository.id)}">移除</button></span></div>`).join('')
-      return `<section class="dsh-sdd-card" style="margin-bottom:14px"><h2>本需求代码仓库范围</h2><p class="dsh-sdd-muted">添加后仓库会立即显示。勾选本需求可能影响的仓库，再在当前页面确认范围。本地路径添加时只校验 Git 仓库和分支，开发阶段创建 Worktree；远程地址添加时只校验分支可访问，开发阶段才 Clone 到需求隔离空间。</p><div class="dsh-sdd-list">${rows || '<div class="dsh-sdd-empty">尚未添加项目代码仓库</div>'}</div><div class="dsh-sdd-actions"><button class="dsh-sdd-button" data-action="add-repository">添加项目代码仓库</button><button class="dsh-sdd-button primary" data-action="configure-scope"${repositories.length === 0 ? ' disabled' : ''}>确认当前勾选范围</button></div><p class="dsh-sdd-muted">已确认范围：${escapeHtml(scope)}　开发目标：${escapeHtml(targets)}　OpenSpec：${escapeHtml(openSpec)}</p></section>`
-    }
+    const repositories = snapshot.project?.development.repositories ?? []
+    const rows = repositories.map(repository => `<div class="dsh-sdd-row"><input type="checkbox" data-repository-scope="${escapeHtml(repository.id)}"${workItem.repositoryScope?.includes(repository.id) === true ? ' checked' : ''}><span><strong>${escapeHtml(repository.id)}</strong><span class="dsh-sdd-muted">${escapeHtml(repository.source)} · 基线 ${escapeHtml(repository.baseBranch)}${workItem.developmentTargetDetails?.[repository.id] ? `<br>目标：${escapeHtml(workItem.developmentTargetDetails[repository.id]!)}` : ''}</span></span><span><button class="dsh-sdd-button" data-change-repository-branch="${escapeHtml(repository.id)}">切换基线</button> <button class="dsh-sdd-button" data-remove-repository="${escapeHtml(repository.id)}">移除</button></span></div>`).join('')
     const openSpecActions = stage === 'development' && workItem.openSpec?.enabled === true ? [
       openSpecValidation?.canInstall === true ? '<button class="dsh-sdd-button" data-action="install-openspec">安装 OpenSpec CLI</button>' : '',
       openSpecValidation?.canInitialize === true ? '<button class="dsh-sdd-button" data-action="initialize-openspec">使用 OpenSpec CLI 初始化</button>' : '',
       '<button class="dsh-sdd-button" data-action="disable-openspec">不使用 OpenSpec</button>',
     ].filter(Boolean).join('') : ''
-    const action = stage === 'specification' ? '<button class="dsh-sdd-button" data-action="configure-targets">确认开发目标与 OpenSpec</button>' : openSpecActions
-    return `<section class="dsh-sdd-card" style="margin-bottom:14px"><h2>本需求开发边界</h2><p class="dsh-sdd-muted">系统设计确认仓库范围，规格设计从该范围中确认具体开发目标。OpenSpec 是可选增强：可以安装、初始化，也可以不使用，不会阻止开发流程。</p><div>仓库范围：<strong>${escapeHtml(scope)}</strong>　开发目标：<strong>${escapeHtml(targets)}</strong>　OpenSpec：<strong>${escapeHtml(openSpec)}</strong></div>${action ? `<div class="dsh-sdd-actions">${action}</div>` : ''}</section>`
+    const openSpecReadyActions = stage === 'development' && openSpecValidation?.status === 'valid' ? [
+      '<button class="dsh-sdd-button" data-action="view-openspec-templates">查看模板位置</button>',
+      openSpecValidation.schema !== undefined && openSpecValidation.schema !== 'spec-driven' ? '<button class="dsh-sdd-button" data-action="open-openspec-schema">打开 Schema 目录</button>' : '',
+      openSpecValidation.changeExists === true ? '' : '<button class="dsh-sdd-button" data-action="fork-openspec-schema">复制官方 Schema 定制</button>',
+      openSpecValidation.changeExists === true ? '' : '<button class="dsh-sdd-button primary" data-action="create-openspec-change">创建当前需求 Change</button>',
+    ].filter(Boolean).join('') : ''
+    return `<section class="dsh-sdd-card" style="margin-bottom:14px"><h2>本需求开发设置</h2><p class="dsh-sdd-muted">代码仓库目录属于项目；当前需求可在任意阶段选择仓库并填写具体开发目标。系统设计和规格设计可以补充结论，但不是配置入口的前置条件。</p><div class="dsh-sdd-list">${rows || '<div class="dsh-sdd-empty">尚未添加项目代码仓库</div>'}</div><div class="dsh-sdd-actions"><button class="dsh-sdd-button" data-action="add-repository">添加项目代码仓库</button><button class="dsh-sdd-button" data-action="configure-scope"${repositories.length === 0 ? ' disabled' : ''}>保存勾选仓库范围</button><button class="dsh-sdd-button primary" data-action="configure-targets"${repositories.length === 0 ? ' disabled' : ''}>配置开发目标与 OpenSpec</button>${openSpecActions}${openSpecReadyActions}</div><p class="dsh-sdd-muted">仓库范围：${escapeHtml(scope)}　开发目标：${escapeHtml(targets)}　OpenSpec：${escapeHtml(openSpec)}</p></section>`
   }
 
   private inputRow(item: ArtifactSummary): string { return `<label class="dsh-sdd-row"><input type="checkbox" data-input="${escapeHtml(item.uid)}" ${this.state.selected.has(item.uid) ? 'checked' : ''}><span><strong>${escapeHtml(item.key)} · ${escapeHtml(item.title)}</strong><span class="dsh-sdd-muted">${escapeHtml(item.stage)} · v${escapeHtml(item.version)} · ${escapeHtml(item.relativeDirectory)}</span></span><span class="dsh-sdd-badge">accepted</span></label>` }
@@ -307,8 +317,14 @@ class SddWorkbench {
     root.querySelectorAll<HTMLButtonElement>('[data-remove-repository]').forEach(button => button.addEventListener('click', () => { void this.removeProjectRepository(button.dataset.removeRepository!) }))
     root.querySelectorAll<HTMLButtonElement>('[data-change-repository-branch]').forEach(button => button.addEventListener('click', () => { void this.changeProjectRepositoryBranch(button.dataset.changeRepositoryBranch!) }))
     root.querySelector<HTMLElement>('[data-action="configure-targets"]')?.addEventListener('click', () => { void this.configureDevelopmentTargets() })
+    root.querySelector<HTMLElement>('[data-action="skip-stage"]')?.addEventListener('click', () => { void this.setStageApplicability('not-applicable') })
+    root.querySelector<HTMLElement>('[data-action="restore-stage"]')?.addEventListener('click', () => { void this.setStageApplicability('applicable') })
     root.querySelector<HTMLElement>('[data-action="install-openspec"]')?.addEventListener('click', () => { void this.installOpenSpec() })
     root.querySelector<HTMLElement>('[data-action="initialize-openspec"]')?.addEventListener('click', () => { void this.initializeOpenSpec() })
+    root.querySelector<HTMLElement>('[data-action="view-openspec-templates"]')?.addEventListener('click', () => { void this.viewOpenSpecTemplates() })
+    root.querySelector<HTMLElement>('[data-action="open-openspec-schema"]')?.addEventListener('click', () => { void this.openOpenSpecSchema() })
+    root.querySelector<HTMLElement>('[data-action="fork-openspec-schema"]')?.addEventListener('click', () => { void this.forkOpenSpecSchema() })
+    root.querySelector<HTMLElement>('[data-action="create-openspec-change"]')?.addEventListener('click', () => { void this.createOpenSpecChange() })
     root.querySelector<HTMLElement>('[data-action="disable-openspec"]')?.addEventListener('click', () => { void this.disableOpenSpec() })
     root.querySelector<HTMLElement>('[data-action="reinitialize"]')?.addEventListener('click', () => { void this.reinitialize() })
     root.querySelectorAll<HTMLInputElement>('[data-input]').forEach(input => input.addEventListener('change', () => { const uid = input.dataset.input!; if (input.checked) this.state.selected.add(uid); else this.state.selected.delete(uid) }))
@@ -408,7 +424,8 @@ class SddWorkbench {
     if (repositories.length === 0) { this.state.error = '请先添加项目代码仓库'; return this.render() }
     const repositoryScope = [...(this.container?.querySelectorAll<HTMLInputElement>('[data-repository-scope]:checked') ?? [])].map(input => input.dataset.repositoryScope!)
     const developmentTargets = (workItem.developmentTargets ?? []).filter(id => repositoryScope.includes(id))
-    await this.mutate({ kind: 'update-work-item-settings', workspaceId: this.state.workspaceId!, workItemUid: workItem.uid, repositoryScope, developmentTargets, openSpec: developmentTargets.includes(workItem.openSpec?.repositoryId ?? '') ? workItem.openSpec : { enabled: false } })
+    const developmentTargetDetails = Object.fromEntries(Object.entries(workItem.developmentTargetDetails ?? {}).filter(([id]) => developmentTargets.includes(id)))
+    await this.mutate({ kind: 'update-work-item-settings', workspaceId: this.state.workspaceId!, workItemUid: workItem.uid, repositoryScope, developmentTargets, developmentTargetDetails, openSpec: developmentTargets.includes(workItem.openSpec?.repositoryId ?? '') ? workItem.openSpec : { enabled: false } })
   }
 
   private async addProjectRepository(): Promise<void> {
@@ -494,19 +511,102 @@ class SddWorkbench {
     const snapshot = this.state.snapshot; const workItem = snapshot?.workItems.find(item => item.uid === this.state.workItemUid)
     if (snapshot?.project === undefined || workItem === undefined) return
     const scope = snapshot.project.development.repositories.filter(repository => workItem.repositoryScope?.includes(repository.id))
-    if (scope.length === 0) { this.state.error = '请先在系统设计阶段确认代码仓库范围'; return this.render() }
+    if (scope.length === 0) { this.state.error = '请先在本需求开发设置中勾选并保存代码仓库范围'; return this.render() }
     const values = await this.openForm({
-      title: `确认开发目标 · ${workItem.key}`, description: '选择本需求实际修改的仓库。OpenSpec 可选，路径相对于所选代码仓库。', submitLabel: '保存开发目标',
+      title: `配置开发目标 · ${workItem.key}`, description: '选择本需求实际修改的仓库，并为每个选中的仓库填写具体改动目标。OpenSpec 可选，路径相对于所选代码仓库。', submitLabel: '保存开发设置',
       fields: [
-        ...scope.map(repository => ({ name: `target-${repository.id}`, label: `${repository.id} · ${repository.source}`, type: 'checkbox' as const, value: workItem.developmentTargets?.includes(repository.id) === true })),
+        ...scope.flatMap(repository => [
+          { name: `target-${repository.id}`, label: `${repository.id} · ${repository.source}`, type: 'checkbox' as const, value: workItem.developmentTargets?.includes(repository.id) === true },
+          { name: `detail-${repository.id}`, label: `${repository.id} 的具体开发目标`, type: 'textarea' as const, value: workItem.developmentTargetDetails?.[repository.id] ?? '', placeholder: '例如：修改订单退款接口、状态机和对应自动化测试。' },
+        ]),
         { name: 'openSpecEnabled', label: '在目标代码仓库中使用 OpenSpec', type: 'checkbox', value: workItem.openSpec?.enabled === true },
         { name: 'openSpecRepository', label: 'OpenSpec 所在仓库', type: 'select', value: workItem.openSpec?.repositoryId ?? scope[0]!.id, options: scope.map(repository => ({ value: repository.id, label: repository.id })) },
         { name: 'openSpecPath', label: 'OpenSpec 相对路径', type: 'text', value: workItem.openSpec?.path ?? 'openspec', placeholder: '例如：openspec' },
+        { name: 'openSpecSchema', label: 'OpenSpec Schema', type: 'text', value: workItem.openSpec?.schema ?? 'spec-driven', placeholder: '例如：spec-driven 或 company-sdd' },
       ],
     })
     if (values === undefined) return
     const developmentTargets = scope.filter(repository => values[`target-${repository.id}`] === true).map(repository => repository.id)
-    await this.mutate({ kind: 'update-work-item-settings', workspaceId: this.state.workspaceId!, workItemUid: workItem.uid, repositoryScope: workItem.repositoryScope ?? [], developmentTargets, openSpec: values.openSpecEnabled === true ? { enabled: true, repositoryId: String(values.openSpecRepository), path: String(values.openSpecPath) } : { enabled: false } })
+    const developmentTargetDetails = Object.fromEntries(developmentTargets.map(id => [id, String(values[`detail-${id}`] ?? '')]))
+    if (developmentTargets.some(id => developmentTargetDetails[id]!.trim() === '')) { this.state.error = '每个选中的代码仓库都必须填写具体开发目标'; return this.render() }
+    await this.mutate({ kind: 'update-work-item-settings', workspaceId: this.state.workspaceId!, workItemUid: workItem.uid, repositoryScope: workItem.repositoryScope ?? [], developmentTargets, developmentTargetDetails, openSpec: values.openSpecEnabled === true ? { enabled: true, repositoryId: String(values.openSpecRepository), path: String(values.openSpecPath), schema: String(values.openSpecSchema), ...(workItem.openSpec?.changeId === undefined ? {} : { changeId: workItem.openSpec.changeId }) } : { enabled: false } })
+  }
+
+  private async setStageApplicability(status: 'applicable' | 'not-applicable'): Promise<void> {
+    if (this.state.menu === 'dashboard' || this.state.workItemUid === undefined) return
+    if (status === 'applicable') {
+      await this.mutate({ kind: 'update-stage-applicability', workspaceId: this.state.workspaceId!, workItemUid: this.state.workItemUid, stage: this.state.menu, status })
+      return
+    }
+    const stage = STAGES.find(item => item.id === this.state.menu)!
+    const values = await this.openForm({
+      title: `标记为不适用 · ${stage.label}`,
+      description: '该阶段不会创建空交付件，看板会显示“不适用”。以后仍可恢复并正常创建交付件。',
+      submitLabel: '确认不适用',
+      fields: [{ name: 'reason', label: '说明（可选）', type: 'textarea', placeholder: '例如：纯后端缺陷，不涉及页面和交互变化。' }],
+    })
+    if (values === undefined) return
+    await this.mutate({ kind: 'update-stage-applicability', workspaceId: this.state.workspaceId!, workItemUid: this.state.workItemUid, stage: this.state.menu, status, reason: String(values.reason ?? '') })
+  }
+
+  private async viewOpenSpecTemplates(): Promise<void> {
+    if (this.state.targetArtifactUid === undefined) return
+    const workItem = this.state.snapshot?.workItems.find(item => item.uid === this.state.workItemUid)
+    const validation = workItem === undefined ? undefined : this.state.snapshot?.openSpecValidation[workItem.uid]
+    if (workItem === undefined || validation === undefined) return
+    const response = await call({ kind: 'development-inspect-openspec-templates', workspaceId: this.state.workspaceId!, artifactUid: this.state.targetArtifactUid, schema: validation.schema ?? 'spec-driven' })
+    if (!response.ok) { this.state.error = response.error; return this.render() }
+    if (!('openSpecTemplates' in response)) { this.state.error = 'Host returned an unexpected OpenSpec template response'; return this.render() }
+    const paths = response.openSpecTemplates.paths.length ? response.openSpecTemplates.paths.join('\n') : '当前 Schema 没有返回 Markdown 模板路径。'
+    await this.openForm({
+      title: `OpenSpec Schema · ${validation.schema ?? 'spec-driven'}`,
+      description: `可用 Schema：${validation.availableSchemas?.join('、') || validation.schema || 'spec-driven'}。官方模板在 OpenSpec 安装包中运行时解析，项目自定义模板位于 openspec/schemas/<schema>/templates/。`,
+      submitLabel: '关闭',
+      fields: [{ name: 'paths', label: '当前解析到的模板路径', type: 'textarea', value: paths }],
+    })
+  }
+
+  private async forkOpenSpecSchema(): Promise<void> {
+    if (this.state.targetArtifactUid === undefined) return
+    const values = await this.openForm({
+      title: '复制官方 OpenSpec Schema',
+      description: '将通过官方 CLI 把 spec-driven 复制到当前隔离代码分支的 openspec/schemas/ 下，随后执行 Schema 校验。生成的模板可以在代码仓中编辑和提交。',
+      submitLabel: '复制并使用',
+      fields: [{ name: 'schema', label: '自定义 Schema 名称', type: 'text', required: true, value: 'dsh-sdd', placeholder: '例如：company-sdd' }],
+    })
+    if (values === undefined) return
+    await this.mutate({ kind: 'development-fork-openspec-schema', workspaceId: this.state.workspaceId!, artifactUid: this.state.targetArtifactUid, schema: String(values.schema) })
+  }
+
+  private async openOpenSpecSchema(): Promise<void> {
+    if (this.state.targetArtifactUid === undefined) return
+    const workItem = this.state.snapshot?.workItems.find(item => item.uid === this.state.workItemUid)
+    const schema = workItem === undefined ? undefined : this.state.snapshot?.openSpecValidation[workItem.uid]?.schema
+    if (schema === undefined || schema === 'spec-driven') return
+    const response = await call({ kind: 'development-open-openspec-schema', workspaceId: this.state.workspaceId!, artifactUid: this.state.targetArtifactUid, schema })
+    if (!response.ok) { this.state.error = response.error; this.render() }
+  }
+
+  private async createOpenSpecChange(): Promise<void> {
+    if (this.state.targetArtifactUid === undefined) return
+    const snapshot = this.state.snapshot
+    const artifact = snapshot?.artifacts.find(item => item.uid === this.state.targetArtifactUid)
+    const workItem = snapshot?.workItems.find(item => item.uid === artifact?.workItemUid)
+    const validation = workItem === undefined ? undefined : snapshot?.openSpecValidation[workItem.uid]
+    if (workItem === undefined || validation === undefined) return
+    const defaultChangeId = workItem.key.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || `change-${workItem.uid.slice(0, 8)}`
+    const schemas = validation.availableSchemas?.length ? validation.availableSchemas : [validation.schema ?? 'spec-driven']
+    const values = await this.openForm({
+      title: `创建 OpenSpec Change · ${workItem.key}`,
+      description: '这一步只创建当前需求的 Change 脚手架。proposal、specs、design 和 tasks 将由开发会话结合已选择的 SDD 输入生成，不会在这里伪造内容。',
+      submitLabel: '创建 Change',
+      fields: [
+        { name: 'changeId', label: 'Change ID', type: 'text', required: true, value: workItem.openSpec?.changeId ?? defaultChangeId, placeholder: '例如：req-1024-refund' },
+        { name: 'schema', label: 'Schema', type: 'select', required: true, value: workItem.openSpec?.schema ?? validation.schema ?? schemas[0]!, options: schemas.map(value => ({ value, label: value })) },
+      ],
+    })
+    if (values === undefined) return
+    await this.mutate({ kind: 'development-create-openspec-change', workspaceId: this.state.workspaceId!, artifactUid: this.state.targetArtifactUid, changeId: String(values.changeId), schema: String(values.schema) })
   }
 
   private openForm(config: DialogConfig): Promise<DialogValues | undefined> {
@@ -783,9 +883,12 @@ class SddWorkbench {
   private async createDevelopment(): Promise<void> {
     if (!this.state.targetArtifactUid) return
     const snapshot = this.state.snapshot; const workspace = snapshot?.developmentWorkspaces.find(item => item.artifactUid === this.state.targetArtifactUid)
+    const artifact = snapshot?.artifacts.find(item => item.uid === this.state.targetArtifactUid)
+    const workItem = snapshot?.workItems.find(item => item.uid === artifact?.workItemUid)
     const existing = new Set(workspace?.repositories.map(item => item.id) ?? [])
-    const repositories = (snapshot?.project?.development.repositories ?? []).filter(item => !existing.has(item.id))
-    if (repositories.length === 0) { this.state.error = existing.size > 0 ? '已添加全部已配置代码仓库' : '请先在 .sdd/project.yaml 中配置代码仓库'; return this.render() }
+    const targets = new Set(workItem?.developmentTargets ?? [])
+    const repositories = (snapshot?.project?.development.repositories ?? []).filter(item => targets.has(item.id) && !existing.has(item.id))
+    if (repositories.length === 0) { this.state.error = existing.size > 0 ? '已添加全部目标代码仓库' : '请先在本需求开发设置中选择代码仓库并填写具体开发目标'; return this.render() }
     const values = await this.openForm({
       title: '添加代码仓库', description: '代码会下载到独立开发空间，并基于所选基线分支创建当前需求的工作分支。', submitLabel: '创建开发空间',
       fields: [{ name: 'repositoryId', label: '代码仓库', type: 'select', required: true, value: repositories[0]!.id, options: repositories.map(item => ({ value: item.id, label: `${item.id} · 基线 ${item.baseBranch} · ${item.source}` })) }],
@@ -843,7 +946,7 @@ class SddWorkbench {
       fields: [{ name: 'confirmed', label: '我确认当前需求不使用 OpenSpec', type: 'checkbox', required: true }],
     })
     if (values?.confirmed !== true) return
-    await this.mutate({ kind: 'update-work-item-settings', workspaceId: this.state.workspaceId!, workItemUid: workItem.uid, repositoryScope: workItem.repositoryScope ?? [], developmentTargets: workItem.developmentTargets ?? [], openSpec: { enabled: false } })
+    await this.mutate({ kind: 'update-work-item-settings', workspaceId: this.state.workspaceId!, workItemUid: workItem.uid, repositoryScope: workItem.repositoryScope ?? [], developmentTargets: workItem.developmentTargets ?? [], developmentTargetDetails: workItem.developmentTargetDetails, openSpec: { enabled: false } })
   }
 
   private async runTest(repositoryId: string): Promise<void> {
@@ -856,7 +959,7 @@ class SddWorkbench {
     if (run?.sessionId === undefined) { this.state.error = '请先开始开发阶段对话，再让 AI 执行测试验证'; return this.render() }
     const binding = this.sessions.binding(run.sessionId as never)
     if (binding === undefined) { this.state.error = '绑定的开发会话当前不可用，请先恢复对话'; return this.render() }
-    const prompt = `请对代码仓库 ${repositoryId} 完成当前变更的测试验证。仓库路径：${repository.path}。先读取已接受规格、仓库构建配置和 CI 流程，自主判断需要运行的测试；可以修复失败后重跑。每个要作为正式测试证据的命令必须使用前台 bash/pwsh，workdir 必须位于该仓库，并把 description 严格写成“SDD测试：<测试名称>”。不要伪造结果；将实际命令、退出码、覆盖范围、跳过项和最终结论同步到绑定开发交付件。完成前确认代码最后一次变化之后仍有通过的测试证据。`
+    const prompt = `请对代码仓库 ${repositoryId} 完成当前变更的测试验证。仓库路径：${repository.path}。先读取本需求实际选择的来源和交付件、明确的开发目标、仓库构建配置和 CI 流程，自主判断需要运行的测试；可以修复失败后重跑。每个要作为正式测试证据的命令必须使用前台 bash/pwsh，workdir 必须位于该仓库，并把 description 严格写成“SDD测试：<测试名称>”。不要伪造结果；将实际命令、退出码、覆盖范围、跳过项和最终结论同步到绑定开发交付件。完成前确认代码最后一次变化之后仍有通过的测试证据。`
     try {
       const accepted = await binding.session.prompt([{ type: 'text', text: prompt }], 'queue')
       if (!accepted.ok) { this.state.error = `${accepted.error.code}: ${accepted.error.message}`; return this.render() }

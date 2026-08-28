@@ -23,6 +23,7 @@ describe('parseAction', () => {
     expect(parseAction({ kind: 'read-stage-template', workspaceId: 'w1', stage: 'requirements' })).toMatchObject({ kind: 'read-stage-template' })
     expect(parseAction({ kind: 'open-stage-template', workspaceId: 'w1', stage: 'requirements', target: 'directory' })).toMatchObject({ target: 'directory' })
     expect(parseAction({ kind: 'update-work-item-settings', workspaceId: 'w1', workItemUid: 'i1', repositoryScope: ['web'], developmentTargets: ['web'], openSpec: { enabled: true, repositoryId: 'web', path: 'openspec' } })).toMatchObject({ kind: 'update-work-item-settings' })
+    expect(parseAction({ kind: 'update-stage-applicability', workspaceId: 'w1', workItemUid: 'i1', stage: 'prototype', status: 'not-applicable', reason: '无界面' })).toMatchObject({ status: 'not-applicable' })
     expect(parseAction({ kind: 'add-project-repository', workspaceId: 'w1', id: 'web', source: '../web', baseBranch: 'main' })).toMatchObject({ kind: 'add-project-repository' })
     expect(parseAction({ kind: 'inspect-project-repository', workspaceId: 'w1', source: '../web' })).toMatchObject({ kind: 'inspect-project-repository' })
     expect(parseAction({ kind: 'initialize-project-repository', workspaceId: 'w1', source: '../web', branch: 'main' })).toMatchObject({ kind: 'initialize-project-repository' })
@@ -48,6 +49,14 @@ describe('parseAction', () => {
       .toMatchObject({ kind: 'development-install-openspec', workItemUid: 'w1' })
     expect(parseAction({ kind: 'development-initialize-openspec', workspaceId: 'w1', artifactUid: 'a1', tools: 'agents' }))
       .toMatchObject({ kind: 'development-initialize-openspec', artifactUid: 'a1', tools: 'agents' })
+    expect(parseAction({ kind: 'development-fork-openspec-schema', workspaceId: 'w1', artifactUid: 'a1', schema: 'company-sdd' }))
+      .toMatchObject({ schema: 'company-sdd' })
+    expect(parseAction({ kind: 'development-open-openspec-schema', workspaceId: 'w1', artifactUid: 'a1', schema: 'company-sdd' }))
+      .toMatchObject({ kind: 'development-open-openspec-schema' })
+    expect(parseAction({ kind: 'development-inspect-openspec-templates', workspaceId: 'w1', artifactUid: 'a1', schema: 'spec-driven' }))
+      .toMatchObject({ kind: 'development-inspect-openspec-templates' })
+    expect(parseAction({ kind: 'development-create-openspec-change', workspaceId: 'w1', artifactUid: 'a1', changeId: 'req-1', schema: 'company-sdd' }))
+      .toMatchObject({ changeId: 'req-1' })
   })
 
   it('accepts requirement bundle preview and apply actions', () => {

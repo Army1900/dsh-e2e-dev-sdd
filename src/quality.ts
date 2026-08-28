@@ -51,8 +51,9 @@ export function evaluateQuality(
       checks.push(check(`placeholder:${section}`, `占位内容：${section}`, !PLACEHOLDERS.some(value => body.includes(value)), '章节仍包含待补充或待确认占位内容'))
     }
   }
-  const requiredStages = Object.entries(project.dependencies[artifact.stage] ?? {})
+  const requiredStages = project.workflow?.mode === 'strict' ? Object.entries(project.dependencies[artifact.stage] ?? {})
     .filter(([, mode]) => mode === 'required').map(([stage]) => stage)
+    : []
   for (const stage of requiredStages) {
     const traced = artifact.basedOn.some(reference => snapshot.artifacts.some(input => input.uid === reference.uid && input.stage === stage && input.status === 'accepted'))
     checks.push(check(`input:${stage}`, `必需输入：${stage}`, traced, `必须关联一个已接受的 ${stage} 交付件`))

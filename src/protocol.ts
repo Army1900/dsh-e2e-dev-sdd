@@ -99,6 +99,7 @@ export function artifactTemplate(stage: StageId, key = '{交付件编号}', titl
 
 export type ArtifactStatus = 'draft' | 'in-review' | 'accepted' | 'superseded'
 export type DependencyMode = 'required' | 'optional' | 'manual'
+export type StageApplicability = 'applicable' | 'not-applicable'
 export type CheckStatus = 'passed' | 'failed' | 'warning'
 export type StageRunStatus = 'active' | 'syncing' | 'ready-for-review' | 'completed'
 
@@ -209,7 +210,9 @@ export interface WorkItem {
   change?: WorkItemChange
   repositoryScope?: string[]
   developmentTargets?: string[]
-  openSpec?: { enabled: boolean; repositoryId?: string; path?: string }
+  developmentTargetDetails?: Record<string, string>
+  stageApplicability?: Partial<Record<StageId, { status: StageApplicability; reason?: string; updatedAt: string }>>
+  openSpec?: { enabled: boolean; repositoryId?: string; path?: string; schema?: string; changeId?: string }
 }
 
 export interface SourceReference {
@@ -400,6 +403,7 @@ export interface ProjectConfig {
     namespaces: Record<StageId, IdentifierPolicy>
   }
   sources: Record<string, { provider: string; connector?: string }>
+  workflow?: { mode: 'flexible' | 'strict' }
   dependencies: Record<StageId, Partial<Record<StageId, DependencyMode>>>
   development: {
     workspaceRoot: string
@@ -455,18 +459,27 @@ export interface OpenSpecValidation {
   cliVersion?: string
   canInstall?: boolean
   canInitialize?: boolean
+  schema?: string
+  availableSchemas?: string[]
+  changeId?: string
+  changeExists?: boolean
+}
+
+export interface OpenSpecTemplatesPreview {
+  schema: string
+  paths: string[]
 }
 
 export interface StageProgress {
   stage: StageId
-  status: 'not-started' | 'in-progress' | 'ready-for-review' | 'completed' | 'blocked'
+  status: 'not-started' | 'in-progress' | 'ready-for-review' | 'completed' | 'blocked' | 'not-applicable'
   completion: number
   drafts: number
   accepted: number
   failedChecks: number
 }
 
-export type DeliveryCellStatus = 'not-started' | 'in-progress' | 'ready-for-review' | 'completed' | 'blocked'
+export type DeliveryCellStatus = 'not-started' | 'in-progress' | 'ready-for-review' | 'completed' | 'blocked' | 'not-applicable'
 
 export interface StageFlow {
   stage: StageId
@@ -475,6 +488,7 @@ export interface StageFlow {
   readyForReview: number
   completed: number
   blocked: number
+  notApplicable: number
 }
 
 export interface DeliveryMatrixCell {
@@ -539,7 +553,8 @@ export type SddAction =
   | { kind: 'open-artifact-path'; workspaceId: string; artifactUid: string; path: string }
   | { kind: 'read-stage-template'; workspaceId: string; stage: StageId }
   | { kind: 'open-stage-template'; workspaceId: string; stage: StageId; target: 'directory' | 'config' | 'content' }
-  | { kind: 'update-work-item-settings'; workspaceId: string; workItemUid: string; repositoryScope: string[]; developmentTargets: string[]; openSpec?: { enabled: boolean; repositoryId?: string; path?: string } }
+  | { kind: 'update-work-item-settings'; workspaceId: string; workItemUid: string; repositoryScope: string[]; developmentTargets: string[]; developmentTargetDetails?: Record<string, string>; openSpec?: { enabled: boolean; repositoryId?: string; path?: string; schema?: string; changeId?: string } }
+  | { kind: 'update-stage-applicability'; workspaceId: string; workItemUid: string; stage: StageId; status: StageApplicability; reason?: string }
   | { kind: 'add-project-repository'; workspaceId: string; id: string; source: string; baseBranch: string }
   | { kind: 'inspect-project-repository'; workspaceId: string; source: string }
   | { kind: 'initialize-project-repository'; workspaceId: string; source: string; branch: string }
@@ -553,6 +568,10 @@ export type SddAction =
   | { kind: 'development-create'; workspaceId: string; artifactUid: string; repositoryId: string }
   | { kind: 'development-install-openspec'; workspaceId: string; workItemUid: string }
   | { kind: 'development-initialize-openspec'; workspaceId: string; artifactUid: string; tools: string }
+  | { kind: 'development-fork-openspec-schema'; workspaceId: string; artifactUid: string; schema: string }
+  | { kind: 'development-open-openspec-schema'; workspaceId: string; artifactUid: string; schema: string }
+  | { kind: 'development-inspect-openspec-templates'; workspaceId: string; artifactUid: string; schema: string }
+  | { kind: 'development-create-openspec-change'; workspaceId: string; artifactUid: string; changeId: string; schema: string }
   | { kind: 'development-status'; workspaceId: string; artifactUid: string }
   | { kind: 'development-skip-test'; workspaceId: string; artifactUid: string; repositoryId: string; reason: string }
   | { kind: 'development-commit'; workspaceId: string; artifactUid: string; repositoryId: string; message: string }
@@ -569,6 +588,7 @@ export type SddResponse =
   | { ok: true; template: StageTemplatePreview }
   | { ok: true; repositoryInspection: RepositoryInspection }
   | { ok: true; revisionPreview: RevisionPreview }
+  | { ok: true; openSpecTemplates: OpenSpecTemplatesPreview }
   | { ok: true; opened: true }
   | { ok: false; error: string }
 
@@ -595,7 +615,10 @@ export function parseAction(value: unknown): SddAction | undefined {
   if (action.kind === 'read-stage-template' && isStageId(action.stage)) return action as unknown as SddAction
   if (action.kind === 'open-stage-template' && isStageId(action.stage) && ['directory', 'config', 'content'].includes(String(action.target))) return action as unknown as SddAction
   if (action.kind === 'update-work-item-settings' && typeof action.workItemUid === 'string' && stringArray(action.repositoryScope)
-    && stringArray(action.developmentTargets) && (action.openSpec === undefined || (typeof action.openSpec === 'object' && action.openSpec !== null))) return action as unknown as SddAction
+    && stringArray(action.developmentTargets) && (action.developmentTargetDetails === undefined || stringRecord(action.developmentTargetDetails))
+    && (action.openSpec === undefined || (typeof action.openSpec === 'object' && action.openSpec !== null))) return action as unknown as SddAction
+  if (action.kind === 'update-stage-applicability' && typeof action.workItemUid === 'string' && isStageId(action.stage)
+    && (action.status === 'applicable' || action.status === 'not-applicable') && (action.reason === undefined || typeof action.reason === 'string')) return action as unknown as SddAction
   if (action.kind === 'add-project-repository' && typeof action.id === 'string' && typeof action.source === 'string' && typeof action.baseBranch === 'string') return action as unknown as SddAction
   if (action.kind === 'inspect-project-repository' && typeof action.source === 'string') return action as unknown as SddAction
   if (action.kind === 'initialize-project-repository' && typeof action.source === 'string' && typeof action.branch === 'string') return action as unknown as SddAction
@@ -612,6 +635,10 @@ export function parseAction(value: unknown): SddAction | undefined {
     && (action.kind === 'development-status' || typeof action.repositoryId === 'string')) return action as unknown as SddAction
   if (action.kind === 'development-install-openspec' && typeof action.workItemUid === 'string') return action as unknown as SddAction
   if (action.kind === 'development-initialize-openspec' && typeof action.artifactUid === 'string' && typeof action.tools === 'string') return action as unknown as SddAction
+  if (action.kind === 'development-fork-openspec-schema' && typeof action.artifactUid === 'string' && typeof action.schema === 'string') return action as unknown as SddAction
+  if (action.kind === 'development-open-openspec-schema' && typeof action.artifactUid === 'string' && typeof action.schema === 'string') return action as unknown as SddAction
+  if (action.kind === 'development-inspect-openspec-templates' && typeof action.artifactUid === 'string' && typeof action.schema === 'string') return action as unknown as SddAction
+  if (action.kind === 'development-create-openspec-change' && typeof action.artifactUid === 'string' && typeof action.changeId === 'string' && typeof action.schema === 'string') return action as unknown as SddAction
   if (action.kind === 'development-skip-test' && typeof action.artifactUid === 'string' && typeof action.repositoryId === 'string'
     && typeof action.reason === 'string' && action.reason.trim() !== '') return action as unknown as SddAction
   if (action.kind === 'development-commit' && typeof action.artifactUid === 'string' && typeof action.repositoryId === 'string'
@@ -633,4 +660,8 @@ export function parseAction(value: unknown): SddAction | undefined {
 
 function stringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every(item => typeof item === 'string')
+}
+
+function stringRecord(value: unknown): value is Record<string, string> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value) && Object.values(value).every(item => typeof item === 'string')
 }

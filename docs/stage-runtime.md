@@ -16,7 +16,7 @@
 
 ## 输入门禁
 
-开始对话前检查目标交付件阶段和状态、所选上游交付件是否 accepted、哈希是否有效，以及 `project.yaml` 中声明的 required 阶段是否已选择。任何必需输入缺失都会阻止创建或恢复运行。
+开始对话前检查目标交付件阶段和状态、所选交付件是否 accepted、哈希是否有效，并要求工作单元至少选择一个当前来源或 accepted 交付件。默认 `workflow.mode: flexible` 不要求相邻阶段；用户可以把不需要的阶段标记为不适用。只有明确设置 `workflow.mode: strict` 时，才执行 `project.yaml` 中声明的 required 阶段门禁。
 
 交付件属于需求工作单元时，输入还必须属于同一工作单元。需求再次同步发生变化后：需求讨论阶段必须引用最新子需求和需求包来源；后续阶段必须引用变更发生后重新接受的上游交付件。旧来源和旧 accepted 版本保留用于审计，但不能作为解除变更门禁的证据。外部已移除的工作单元在人工处理前禁止继续对话和验收。
 
@@ -26,13 +26,13 @@
 
 ## 隔离开发空间
 
-系统设计负责人可以先在页面把本地路径或 Git 地址登记到项目代码仓库目录。页面会先检查仓库：本地来源读取现有本地分支及 `origin` 远程跟踪分支，远程来源通过 `git ls-remote --symref` 读取远程分支和默认分支，再用下拉框选择基线，不要求用户猜测 `main` 或 `master`。此时不复制或下载代码，仓库会立即显示在当前页面，负责人直接勾选并确认当前工作单元的 `repositoryScope`。隔离开发空间创建前可以切换基线或移除仓库；移除只修改 SDD 配置，不删除源代码，并清理所有工作单元对它的范围、开发目标和 OpenSpec 关联。
+项目代码仓库目录与阶段解耦，可在任意阶段的“本需求开发设置”维护。本地来源读取现有本地分支及 `origin` 远程跟踪分支，远程来源通过 `git ls-remote --symref` 读取远程分支和默认分支，再用下拉框选择基线。工作单元用 `repositoryScope` 记录可能涉及的仓库，用 `developmentTargets` 和 `developmentTargetDetails` 记录实际修改仓库及每仓具体目标。隔离开发空间创建前可以切换基线或移除仓库；移除只修改 SDD 配置，不删除源代码。
 
 本地仓库只有 `git init`、尚无任何提交时，页面可以在用户明确确认后自动创建 `chore: initialize repository` 空提交和初始分支。自动提交使用临时提交身份，不修改用户 Git 配置，也不会添加未跟踪文件；如果索引中已经存在暂存文件则拒绝执行，避免把用户文件意外纳入提交。空远程仓库涉及远程写入和认证，插件不自动 push，用户需要先显式初始化远程。
 
 开发测试阶段不会直接在基线分支写代码。本地来源从所选基线提交创建 Git Worktree 和 `branchPattern` 定义的特性分支；远程来源在隔离目录克隆基线后创建同名特性分支。测试与提交都发生在特性分支，推送、创建合并请求以及合入基线是负责人显式执行的交付动作。
 
-规格设计负责人从仓库范围中确认 `developmentTargets`，并可选择是否为当前需求使用 OpenSpec。OpenSpec 是可选增强，不是开发硬门禁：插件分别检查宿主机上的 `openspec` CLI 和隔离 Worktree 中的配置目录；缺失时用户可以安装 CLI、使用官方 `openspec init --tools ...` 初始化，或关闭当前需求的 OpenSpec 关联后继续开发。安装会在用户明确确认后执行官方 npm 全局安装命令；初始化默认选择 `agents`，由 OpenSpec 在代码仓生成 DSH 可发现的 `.agents/skills`，也可附加 Claude/Cursor 等工具，让 OpenSpec 按工具能力生成 skills 和 commands。插件不再自行伪造 OpenSpec 目录，也不会自动提交或推送生成文件。OpenSpec 仍由代码仓独立维护，插件只把该位置作为规格和开发会话的上下文，不会改变五阶段交付结构。仓库范围或开发目标缺失时，相关阶段仍不能开始对话或验收。
+OpenSpec 是需求级可选增强，不是开发硬门禁。插件分别检查宿主机 CLI 和隔离 Worktree 中的配置目录；缺失时用户可以安装 CLI、执行官方 `openspec init --tools ...`，或关闭关联继续开发。初始化只准备 `openspec/config.yaml`、目录以及所选 AI 工具的 skills/commands，默认模板仍由 OpenSpec 安装包中的 `spec-driven` Schema 运行时解析，因此空的 `specs/` 与 `changes/` 是正常状态。初始化后插件展示 `openspec templates --json` 的解析位置；用户可执行 `openspec schema fork spec-driven <name>` 创建代码仓内可编辑、可提交的 Schema，并由插件执行校验。每个需求还需显式执行 `openspec new change <id> --schema <schema>` 创建 Change，之后 AI 才能维护 proposal/specs/design/tasks。插件不会自动提交或推送这些文件。
 
 代码仓库在 `.sdd/project.yaml` 中配置：
 

@@ -27,12 +27,29 @@
     },
     "repositoryScope": { "type": "array", "uniqueItems": true, "items": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$" } },
     "developmentTargets": { "type": "array", "uniqueItems": true, "items": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$" } },
+    "developmentTargetDetails": {
+      "type": "object",
+      "additionalProperties": { "type": "string" }
+    },
+    "stageApplicability": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "requirements": { "$ref": "#/$defs/stageApplicability" },
+        "prototype": { "$ref": "#/$defs/stageApplicability" },
+        "architecture": { "$ref": "#/$defs/stageApplicability" },
+        "specification": { "$ref": "#/$defs/stageApplicability" },
+        "development": { "$ref": "#/$defs/stageApplicability" }
+      }
+    },
     "openSpec": {
       "type": "object", "additionalProperties": false, "required": ["enabled"],
       "properties": {
         "enabled": { "type": "boolean" },
         "repositoryId": { "type": "string" },
-        "path": { "type": "string" }
+        "path": { "type": "string" },
+        "schema": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$" },
+        "changeId": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$" }
       }
     },
     "change": {
@@ -44,6 +61,18 @@
         "changedPaths": { "type": "array", "items": { "type": "string" } },
         "previousSourceUid": { "type": "string" },
         "reviewRequiredStages": { "type": "array", "items": { "enum": ["requirements", "prototype", "architecture", "specification", "development"] } }
+      }
+    }
+  },
+  "$defs": {
+    "stageApplicability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "updatedAt"],
+      "properties": {
+        "status": { "enum": ["applicable", "not-applicable"] },
+        "reason": { "type": "string" },
+        "updatedAt": { "type": "string", "format": "date-time" }
       }
     }
   }

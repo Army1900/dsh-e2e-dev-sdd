@@ -1,5 +1,5 @@
 import type { ApiProxy } from '@deepseek-ai/dsh-host-apiproxy';
-import { type ArtifactFileSummary, type ImportPreview, type ProjectSnapshot, type RepositoryInspection, type RevisionPreview, type SddAction, type StageRun, type StageTemplatePreview } from './protocol.ts';
+import { type ArtifactFileSummary, type ImportPreview, type OpenSpecTemplatesPreview, type ProjectSnapshot, type RepositoryInspection, type RevisionPreview, type SddAction, type StageRun, type StageTemplatePreview } from './protocol.ts';
 import { type SddSourceRegistry } from './extensions.ts';
 import { GitDevelopmentService } from './git-service.ts';
 import type { StageSessionController } from './session-controller.ts';
@@ -13,6 +13,8 @@ export declare class SddProjectService {
     private openSpecCli;
     private workspace;
     execute(action: SddAction): Promise<ProjectSnapshot | ImportPreview | StageTemplatePreview | RepositoryInspection | {
+        openSpecTemplates: OpenSpecTemplatesPreview;
+    } | {
         revisionPreview: RevisionPreview;
     } | {
         prompt: string;
@@ -45,7 +47,12 @@ export declare class SddProjectService {
     private openStageTemplate;
     private installOpenSpec;
     private initializeOpenSpec;
+    private forkOpenSpecSchema;
+    private createOpenSpecChange;
+    private openOpenSpecSchema;
+    private inspectOpenSpecTemplates;
     private updateWorkItemSettings;
+    private updateStageApplicability;
     private addProjectRepository;
     private updateProjectRepositoryBranch;
     private removeProjectRepository;

@@ -46,6 +46,7 @@ export declare const STAGE_ARTIFACT_TEMPLATES: Readonly<Record<StageId, StageArt
 export declare function artifactTemplate(stage: StageId, key?: string, title?: string): string;
 export type ArtifactStatus = 'draft' | 'in-review' | 'accepted' | 'superseded';
 export type DependencyMode = 'required' | 'optional' | 'manual';
+export type StageApplicability = 'applicable' | 'not-applicable';
 export type CheckStatus = 'passed' | 'failed' | 'warning';
 export type StageRunStatus = 'active' | 'syncing' | 'ready-for-review' | 'completed';
 export interface ExternalReference {
@@ -149,10 +150,18 @@ export interface WorkItem {
     change?: WorkItemChange;
     repositoryScope?: string[];
     developmentTargets?: string[];
+    developmentTargetDetails?: Record<string, string>;
+    stageApplicability?: Partial<Record<StageId, {
+        status: StageApplicability;
+        reason?: string;
+        updatedAt: string;
+    }>>;
     openSpec?: {
         enabled: boolean;
         repositoryId?: string;
         path?: string;
+        schema?: string;
+        changeId?: string;
     };
 }
 export interface SourceReference {
@@ -349,6 +358,9 @@ export interface ProjectConfig {
         provider: string;
         connector?: string;
     }>;
+    workflow?: {
+        mode: 'flexible' | 'strict';
+    };
     dependencies: Record<StageId, Partial<Record<StageId, DependencyMode>>>;
     development: {
         workspaceRoot: string;
@@ -399,16 +411,24 @@ export interface OpenSpecValidation {
     cliVersion?: string;
     canInstall?: boolean;
     canInitialize?: boolean;
+    schema?: string;
+    availableSchemas?: string[];
+    changeId?: string;
+    changeExists?: boolean;
+}
+export interface OpenSpecTemplatesPreview {
+    schema: string;
+    paths: string[];
 }
 export interface StageProgress {
     stage: StageId;
-    status: 'not-started' | 'in-progress' | 'ready-for-review' | 'completed' | 'blocked';
+    status: 'not-started' | 'in-progress' | 'ready-for-review' | 'completed' | 'blocked' | 'not-applicable';
     completion: number;
     drafts: number;
     accepted: number;
     failedChecks: number;
 }
-export type DeliveryCellStatus = 'not-started' | 'in-progress' | 'ready-for-review' | 'completed' | 'blocked';
+export type DeliveryCellStatus = 'not-started' | 'in-progress' | 'ready-for-review' | 'completed' | 'blocked' | 'not-applicable';
 export interface StageFlow {
     stage: StageId;
     notStarted: number;
@@ -416,6 +436,7 @@ export interface StageFlow {
     readyForReview: number;
     completed: number;
     blocked: number;
+    notApplicable: number;
 }
 export interface DeliveryMatrixCell {
     stage: StageId;
@@ -552,11 +573,21 @@ export type SddAction = {
     workItemUid: string;
     repositoryScope: string[];
     developmentTargets: string[];
+    developmentTargetDetails?: Record<string, string>;
     openSpec?: {
         enabled: boolean;
         repositoryId?: string;
         path?: string;
+        schema?: string;
+        changeId?: string;
     };
+} | {
+    kind: 'update-stage-applicability';
+    workspaceId: string;
+    workItemUid: string;
+    stage: StageId;
+    status: StageApplicability;
+    reason?: string;
 } | {
     kind: 'add-project-repository';
     workspaceId: string;
@@ -623,6 +654,27 @@ export type SddAction = {
     workspaceId: string;
     artifactUid: string;
     tools: string;
+} | {
+    kind: 'development-fork-openspec-schema';
+    workspaceId: string;
+    artifactUid: string;
+    schema: string;
+} | {
+    kind: 'development-open-openspec-schema';
+    workspaceId: string;
+    artifactUid: string;
+    schema: string;
+} | {
+    kind: 'development-inspect-openspec-templates';
+    workspaceId: string;
+    artifactUid: string;
+    schema: string;
+} | {
+    kind: 'development-create-openspec-change';
+    workspaceId: string;
+    artifactUid: string;
+    changeId: string;
+    schema: string;
 } | {
     kind: 'development-status';
     workspaceId: string;
@@ -694,6 +746,9 @@ export type SddResponse = {
 } | {
     ok: true;
     revisionPreview: RevisionPreview;
+} | {
+    ok: true;
+    openSpecTemplates: OpenSpecTemplatesPreview;
 } | {
     ok: true;
     opened: true;

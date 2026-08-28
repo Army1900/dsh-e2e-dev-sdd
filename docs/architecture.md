@@ -74,7 +74,7 @@ Connector 只提供来源，不直接创建 accepted 交付件。命令型 Conne
 
 ## 阶段对话
 
-Client 根据用户选择的 accepted 交付件向 Host 请求阶段输入。Host 读取固定版本内容并生成阶段提示；Client 通过 `ctx.workspaces.connectWorkspace()` 连接原生 Session，再调用 Session 的 `prompt()`。`StageRun` 固定绑定 Session 和目标交付件，Agent scope 安装阶段 System Prompt 和工具 Guard；每轮完成重新计算质量。对话历史用于协作，仓库交付件才是正式结果。
+Client 根据用户为当前工作单元自由选择的来源和 accepted 交付件向 Host 请求阶段输入。默认灵活模式把五个阶段视为可选能力，只有严格模式才应用项目声明的 required 依赖；不需要的阶段记录为 `not-applicable`，不生成占位交付件。Host 读取固定版本内容并生成阶段提示；`StageRun` 固定绑定 Session、目标交付件及实际依赖，Agent scope 安装阶段 System Prompt 和工具 Guard。
 
 ## 交付件生命周期
 

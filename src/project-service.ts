@@ -21,6 +21,7 @@ import {
   type ImportPreview,
   type ImportPreviewItem,
   type OpenSpecValidation,
+  type OpenSpecTemplatesPreview,
   type ProjectConfig,
   type ProjectSnapshot,
   type QualityReport,
@@ -192,12 +193,13 @@ function defaultProject(path: string): ProjectConfig {
       }])) as ProjectConfig['identifiers']['namespaces'],
     },
     sources: {},
+    workflow: { mode: 'flexible' },
     dependencies: {
       requirements: {},
-      prototype: { requirements: 'required' },
-      architecture: { requirements: 'required', prototype: 'optional' },
-      specification: { requirements: 'required', prototype: 'optional', architecture: 'required' },
-      development: { requirements: 'optional', prototype: 'optional', architecture: 'optional', specification: 'required' },
+      prototype: { requirements: 'optional' },
+      architecture: { requirements: 'optional', prototype: 'optional' },
+      specification: { requirements: 'optional', prototype: 'optional', architecture: 'optional' },
+      development: { requirements: 'optional', prototype: 'optional', architecture: 'optional', specification: 'optional' },
     },
     development: {
       workspaceRoot: '.sdd-workspaces',
@@ -268,6 +270,7 @@ function validateProject(value: unknown): { project?: ProjectConfig; errors: str
     if (!object(binding) || !nonEmptyString(binding.provider)) errors.push(`sources.${kind}.provider：不能为空`)
     else if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(String(binding.provider))) errors.push(`sources.${kind}.provider：必须使用 kebab-case`)
   }
+  if (value.workflow !== undefined && (!object(value.workflow) || (value.workflow.mode !== 'flexible' && value.workflow.mode !== 'strict'))) errors.push('workflow.mode：必须是 flexible 或 strict')
   if (!object(value.dependencies)) errors.push('dependencies：必须是对象')
   else for (const [stageIndex, stage] of STAGES.entries()) {
     const dependencies = value.dependencies[stage.id]
@@ -327,7 +330,7 @@ export class SddProjectService {
     return { workspaceId, title: item.title, path: await realpath(item.path) }
   }
 
-  async execute(action: SddAction): Promise<ProjectSnapshot | ImportPreview | StageTemplatePreview | RepositoryInspection | { revisionPreview: RevisionPreview } | { prompt: string; run?: StageRun } | { artifactFile: { artifactUid: string; path: string; kind: ArtifactFileSummary['kind'] | 'manifest'; content?: string; dataUrl?: string } } | { opened: true }> {
+  async execute(action: SddAction): Promise<ProjectSnapshot | ImportPreview | StageTemplatePreview | RepositoryInspection | { openSpecTemplates: OpenSpecTemplatesPreview } | { revisionPreview: RevisionPreview } | { prompt: string; run?: StageRun } | { artifactFile: { artifactUid: string; path: string; kind: ArtifactFileSummary['kind'] | 'manifest'; content?: string; dataUrl?: string } } | { opened: true }> {
     if (action.kind === 'snapshot') return this.snapshot(action.workspaceId)
     if (action.kind === 'initialize') { await this.initialize(action.workspaceId); return this.snapshot(action.workspaceId) }
     if (action.kind === 'reinitialize') { await this.reinitialize(action.workspaceId); return this.snapshot(action.workspaceId) }
@@ -344,7 +347,11 @@ export class SddProjectService {
     if (action.kind === 'read-stage-template') return this.readStageTemplate(action.workspaceId, action.stage)
     if (action.kind === 'open-stage-template') { await this.openStageTemplate(action.workspaceId, action.stage, action.target); return { opened: true } }
     if (action.kind === 'update-work-item-settings') {
-      await this.updateWorkItemSettings(action.workspaceId, action.workItemUid, action.repositoryScope, action.developmentTargets, action.openSpec)
+      await this.updateWorkItemSettings(action.workspaceId, action.workItemUid, action.repositoryScope, action.developmentTargets, action.developmentTargetDetails, action.openSpec)
+      return this.snapshot(action.workspaceId)
+    }
+    if (action.kind === 'update-stage-applicability') {
+      await this.updateStageApplicability(action.workspaceId, action.workItemUid, action.stage, action.status, action.reason)
       return this.snapshot(action.workspaceId)
     }
     if (action.kind === 'add-project-repository') { await this.addProjectRepository(action.workspaceId, action.id, action.source, action.baseBranch); return this.snapshot(action.workspaceId) }
@@ -384,6 +391,7 @@ export class SddProjectService {
       const artifact = this.requireArtifact(snapshot, action.artifactUid)
       const workItem = artifact.workItemUid === undefined ? undefined : snapshot.workItems.find(item => item.uid === artifact.workItemUid)
       if (workItem !== undefined && !(workItem.developmentTargets ?? []).includes(action.repositoryId)) throw new Error(`repository ${action.repositoryId} is not a confirmed development target`)
+      if (workItem !== undefined && (workItem.developmentTargetDetails?.[action.repositoryId] ?? '').trim() === '') throw new Error(`repository ${action.repositoryId} is missing its concrete development target`)
       await this.git.create(snapshot.workspace.path, snapshot.project, artifact, action.repositoryId)
       await appendEvent(snapshot.workspace.path, 'development.workspace-created', artifact.key, artifact.stage, { repositoryId: action.repositoryId })
       return this.snapshot(action.workspaceId)
@@ -394,6 +402,19 @@ export class SddProjectService {
     }
     if (action.kind === 'development-initialize-openspec') {
       await this.initializeOpenSpec(action.workspaceId, action.artifactUid, action.tools)
+      return this.snapshot(action.workspaceId)
+    }
+    if (action.kind === 'development-fork-openspec-schema') {
+      await this.forkOpenSpecSchema(action.workspaceId, action.artifactUid, action.schema)
+      return this.snapshot(action.workspaceId)
+    }
+    if (action.kind === 'development-open-openspec-schema') {
+      await this.openOpenSpecSchema(action.workspaceId, action.artifactUid, action.schema)
+      return { opened: true }
+    }
+    if (action.kind === 'development-inspect-openspec-templates') return { openSpecTemplates: await this.inspectOpenSpecTemplates(action.workspaceId, action.artifactUid, action.schema) }
+    if (action.kind === 'development-create-openspec-change') {
+      await this.createOpenSpecChange(action.workspaceId, action.artifactUid, action.changeId, action.schema)
       return this.snapshot(action.workspaceId)
     }
     if (action.kind === 'development-status') {
@@ -598,9 +619,21 @@ export class SddProjectService {
           result[workItem.uid] = { status: 'invalid', message: `配置目录中不存在 config.yaml；${cli.installed ? '可使用 CLI 初始化' : 'CLI 未安装'}`, code: 'missing-config', canInitialize: cli.installed, ...cliFields }
           continue
         }
+        const configPath = await exists(join(target, 'config.yaml')) ? join(target, 'config.yaml') : join(target, 'config.yml')
+        let configuredSchema = configured.schema ?? 'spec-driven'
+        try {
+          const config = parse(await readFile(configPath, 'utf8')) as { schema?: unknown }
+          if (configured.schema === undefined && typeof config.schema === 'string' && config.schema.trim() !== '') configuredSchema = config.schema.trim()
+        } catch { /* OpenSpec owns detailed config validation. */ }
+        const schemaRoot = join(target, 'schemas')
+        const projectSchemas = await exists(schemaRoot)
+          ? (await readdir(schemaRoot, { withFileTypes: true })).filter(item => item.isDirectory()).map(item => item.name)
+          : []
+        const availableSchemas = [...new Set(['spec-driven', configuredSchema, ...projectSchemas])].sort()
+        const changeId = configured.changeId
         result[workItem.uid] = cli.installed
-          ? { status: 'valid', message: `配置目录与 CLI ${cli.version ?? ''} 已验证`.trim(), ...cliFields }
-          : { status: 'pending', message: '配置目录有效；OpenSpec CLI 未安装，可安装或忽略继续', code: 'cli-missing', ...cliFields }
+          ? { status: 'valid', message: `已初始化；Schema ${configuredSchema}${changeId === undefined ? '；尚未创建当前需求 Change' : ''}`, schema: configuredSchema, availableSchemas, ...(changeId === undefined ? {} : { changeId, changeExists: await exists(join(target, 'changes', changeId)) }), ...cliFields }
+          : { status: 'pending', message: '配置目录有效；OpenSpec CLI 未安装，可安装或忽略继续', code: 'cli-missing', schema: configuredSchema, availableSchemas, ...(changeId === undefined ? {} : { changeId, changeExists: await exists(join(target, 'changes', changeId)) }), ...cliFields }
       } catch {
         result[workItem.uid] = { status: 'invalid', message: `隔离代码空间中不存在配置目录；${cli.installed ? '可使用 CLI 初始化' : 'CLI 未安装'}`, code: 'missing-directory', canInitialize: cli.installed, ...cliFields }
       }
@@ -678,8 +711,10 @@ export class SddProjectService {
         ...(source.contentHash === undefined ? {} : { contentHash: source.contentHash }),
       }
     })
-    const requiredStages = Object.entries(snapshot.project?.dependencies[stage] ?? {})
+    if (workItem !== undefined && refs.length === 0 && sourceRefs.length === 0) throw new Error(`select at least one current source or accepted deliverable for work item ${workItem.key}`)
+    const requiredStages = snapshot.project?.workflow?.mode === 'strict' ? Object.entries(snapshot.project.dependencies[stage] ?? {})
       .filter(([, mode]) => mode === 'required').map(([requiredStage]) => requiredStage)
+      : []
     for (const requiredStage of requiredStages) {
       if (!refs.some(ref => snapshot.artifacts.find(item => item.uid === ref.uid)?.stage === requiredStage)) {
         throw new Error(`missing required ${requiredStage} input for ${stage}`)
@@ -695,6 +730,11 @@ export class SddProjectService {
     manifest.template = await snapshotStageTemplate(directory, stageTemplate)
     await writeFile(join(directory, 'manifest.yaml'), stringify(manifest), 'utf8')
     await writeFile(join(directory, 'deliverable.md'), renderStageTemplate(stageTemplate, key, title.trim()), 'utf8')
+    if (workItem?.stageApplicability?.[stage]?.status === 'not-applicable') {
+      const stageApplicability = { ...workItem.stageApplicability }
+      delete stageApplicability[stage]
+      await writeFile(join(snapshot.workspace.path, '.sdd', 'work-items', workItem.uid, 'work-item.yaml'), stringify({ ...workItem, stageApplicability, updatedAt: now }), 'utf8')
+    }
     await appendEvent(snapshot.workspace.path, 'artifact.created', key, stage, { artifactUid: uid })
   }
 
@@ -706,14 +746,17 @@ export class SddProjectService {
       const input = snapshot.artifacts.find(item => item.uid === reference.uid)
       if (input !== undefined) previousByStage.set(input.stage, reference)
     }
-    const dependencyStages = new Set<StageId>([...previousByStage.keys(), ...Object.entries(snapshot.project.dependencies[previous.stage] ?? {}).filter(([, mode]) => mode === 'required').map(([stage]) => stage as StageId)])
+    const strictRequired = snapshot.project.workflow?.mode === 'strict'
+      ? Object.entries(snapshot.project.dependencies[previous.stage] ?? {}).filter(([, mode]) => mode === 'required').map(([stage]) => stage as StageId)
+      : []
+    const dependencyStages = new Set<StageId>([...previousByStage.keys(), ...strictRequired])
     const basedOn: ArtifactReference[] = []
     for (const stage of dependencyStages) {
       const current = snapshot.artifacts.filter(item => item.stage === stage && item.status === 'accepted' && (workItem === undefined || item.workItemUid === workItem.uid))
         .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0]
       const old = previousByStage.get(stage)
       if (current === undefined) {
-        if ((snapshot.project.dependencies[previous.stage] ?? {})[stage] === 'required') throw new Error(`missing accepted ${stage} input for revision`)
+        if (snapshot.project.workflow?.mode === 'strict' && (snapshot.project.dependencies[previous.stage] ?? {})[stage] === 'required') throw new Error(`missing accepted ${stage} input for revision`)
         if (old !== undefined) basedOn.push(old)
         continue
       }
@@ -915,9 +958,101 @@ export class SddProjectService {
     await appendEvent(snapshot.workspace.path, 'development.openspec-initialized', artifact.key, artifact.stage, { repositoryId: configured.repositoryId, path: configured.path, tools: normalizedTools, version: cli.version })
   }
 
+  private async forkOpenSpecSchema(workspaceId: string, artifactUid: string, schema: string): Promise<void> {
+    const snapshot = await this.requireSnapshot(workspaceId)
+    const artifact = this.requireArtifact(snapshot, artifactUid)
+    const workItem = snapshot.workItems.find(item => item.uid === artifact.workItemUid)
+    const configured = workItem?.openSpec
+    const name = schema.trim()
+    if (artifact.stage !== 'development' || workItem === undefined || configured?.enabled !== true || configured.repositoryId === undefined || configured.path === undefined) throw new Error('OpenSpec is not configured for this development artifact')
+    if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name) || name === 'spec-driven') throw new Error('custom schema name must be kebab-case and different from spec-driven')
+    const development = snapshot.developmentWorkspaces.find(item => item.artifactUid === artifact.uid)
+    const repository = development?.repositories.find(item => item.id === configured.repositoryId)
+    if (repository === undefined) throw new Error('create the configured repository in the isolated development workspace first')
+    const target = resolve(repository.path, configured.path)
+    if (!(await exists(join(target, 'config.yaml'))) && !(await exists(join(target, 'config.yml')))) throw new Error('initialize OpenSpec before creating a custom schema')
+    const projectRoot = dirname(target)
+    const forked = await runNative([nativeExecutable('openspec'), 'schema', 'fork', 'spec-driven', name, '--no-color'], projectRoot, 60_000)
+    if (forked.exitCode !== 0) throw new Error(`OpenSpec schema fork failed: ${forked.stderr.trim() || forked.stdout.trim() || `exit ${forked.exitCode}`}`)
+    const validated = await runNative([nativeExecutable('openspec'), 'schema', 'validate', name, '--no-color'], projectRoot, 60_000)
+    if (validated.exitCode !== 0) throw new Error(`OpenSpec schema validation failed: ${validated.stderr.trim() || validated.stdout.trim() || `exit ${validated.exitCode}`}`)
+    await this.updateWorkItemSettings(workspaceId, workItem.uid, workItem.repositoryScope ?? [], workItem.developmentTargets ?? [], workItem.developmentTargetDetails, { ...configured, schema: name })
+    await appendEvent(snapshot.workspace.path, 'development.openspec-schema-forked', artifact.key, artifact.stage, { schema: name, repositoryId: configured.repositoryId })
+  }
+
+  private async createOpenSpecChange(workspaceId: string, artifactUid: string, changeId: string, schema: string): Promise<void> {
+    const snapshot = await this.requireSnapshot(workspaceId)
+    const artifact = this.requireArtifact(snapshot, artifactUid)
+    const workItem = snapshot.workItems.find(item => item.uid === artifact.workItemUid)
+    const configured = workItem?.openSpec
+    const normalizedChangeId = changeId.trim()
+    const normalizedSchema = schema.trim()
+    if (artifact.stage !== 'development' || workItem === undefined || configured?.enabled !== true || configured.repositoryId === undefined || configured.path === undefined) throw new Error('OpenSpec is not configured for this development artifact')
+    if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(normalizedChangeId)) throw new Error('OpenSpec change id must be kebab-case')
+    if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(normalizedSchema)) throw new Error('OpenSpec schema must be kebab-case')
+    const development = snapshot.developmentWorkspaces.find(item => item.artifactUid === artifact.uid)
+    const repository = development?.repositories.find(item => item.id === configured.repositoryId)
+    if (repository === undefined) throw new Error('create the configured repository in the isolated development workspace first')
+    const target = resolve(repository.path, configured.path)
+    if (await exists(join(target, 'changes', normalizedChangeId))) throw new Error(`OpenSpec change already exists: ${normalizedChangeId}`)
+    const validated = await runNative([nativeExecutable('openspec'), 'schema', 'validate', normalizedSchema, '--no-color'], dirname(target), 60_000)
+    if (validated.exitCode !== 0) throw new Error(`OpenSpec schema validation failed: ${validated.stderr.trim() || validated.stdout.trim() || `exit ${validated.exitCode}`}`)
+    const created = await runNative([nativeExecutable('openspec'), 'new', 'change', normalizedChangeId, '--schema', normalizedSchema, '--json', '--no-color'], dirname(target), 60_000)
+    if (created.exitCode !== 0) throw new Error(`OpenSpec change creation failed: ${created.stderr.trim() || created.stdout.trim() || `exit ${created.exitCode}`}`)
+    if (!(await exists(join(target, 'changes', normalizedChangeId)))) throw new Error('OpenSpec CLI completed without creating the change directory')
+    await this.updateWorkItemSettings(workspaceId, workItem.uid, workItem.repositoryScope ?? [], workItem.developmentTargets ?? [], workItem.developmentTargetDetails, { ...configured, schema: normalizedSchema, changeId: normalizedChangeId })
+    await appendEvent(snapshot.workspace.path, 'development.openspec-change-created', artifact.key, artifact.stage, { changeId: normalizedChangeId, schema: normalizedSchema, repositoryId: configured.repositoryId })
+  }
+
+  private async openOpenSpecSchema(workspaceId: string, artifactUid: string, schema: string): Promise<void> {
+    const snapshot = await this.requireSnapshot(workspaceId)
+    const artifact = this.requireArtifact(snapshot, artifactUid)
+    const workItem = snapshot.workItems.find(item => item.uid === artifact.workItemUid)
+    const configured = workItem?.openSpec
+    const normalizedSchema = schema.trim()
+    if (configured?.enabled !== true || configured.repositoryId === undefined || configured.path === undefined) throw new Error('OpenSpec is not configured for this work item')
+    if (normalizedSchema === 'spec-driven') throw new Error('official package templates are read-only; fork spec-driven before opening them for editing')
+    if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(normalizedSchema)) throw new Error('OpenSpec schema must be kebab-case')
+    const development = snapshot.developmentWorkspaces.find(item => item.artifactUid === artifact.uid)
+    const repository = development?.repositories.find(item => item.id === configured.repositoryId)
+    if (repository === undefined) throw new Error('create the configured repository in the isolated development workspace first')
+    const openSpecRoot = resolve(repository.path, configured.path)
+    const schemaPath = resolve(openSpecRoot, 'schemas', normalizedSchema)
+    if (!contained(openSpecRoot, schemaPath) || !(await exists(schemaPath))) throw new Error(`project-local OpenSpec schema not found: ${normalizedSchema}`)
+    const response = await this.api.host.openPath(request({ path: schemaPath }), AbortSignal.timeout(15_000))
+    if (!response.result.ok) throw new Error(`${response.result.error.code}: ${response.result.error.message}`)
+  }
+
+  private async inspectOpenSpecTemplates(workspaceId: string, artifactUid: string, schema: string): Promise<OpenSpecTemplatesPreview> {
+    const snapshot = await this.requireSnapshot(workspaceId)
+    const artifact = this.requireArtifact(snapshot, artifactUid)
+    const workItem = snapshot.workItems.find(item => item.uid === artifact.workItemUid)
+    const configured = workItem?.openSpec
+    const normalizedSchema = schema.trim()
+    if (configured?.enabled !== true || configured.repositoryId === undefined || configured.path === undefined) throw new Error('OpenSpec is not configured for this work item')
+    if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(normalizedSchema)) throw new Error('OpenSpec schema must be kebab-case')
+    const development = snapshot.developmentWorkspaces.find(item => item.artifactUid === artifact.uid)
+    const repository = development?.repositories.find(item => item.id === configured.repositoryId)
+    if (repository === undefined) throw new Error('create the configured repository in the isolated development workspace first')
+    const target = resolve(repository.path, configured.path)
+    const templates = await runNative([nativeExecutable('openspec'), 'templates', '--schema', normalizedSchema, '--json', '--no-color'], dirname(target), 30_000)
+    if (templates.exitCode !== 0) throw new Error(`OpenSpec template inspection failed: ${templates.stderr.trim() || templates.stdout.trim() || `exit ${templates.exitCode}`}`)
+    let paths: string[]
+    try {
+      const collect = (value: unknown): string[] => typeof value === 'string' && /\.md$/i.test(value) ? [value]
+        : Array.isArray(value) ? value.flatMap(collect)
+          : value !== null && typeof value === 'object' ? Object.values(value).flatMap(collect) : []
+      paths = [...new Set(collect(JSON.parse(templates.stdout)))].sort()
+    } catch {
+      paths = templates.stdout.split(/\r?\n/).map(line => line.split(/[→:]/).at(-1)?.trim() ?? '').filter(value => /\.md$/i.test(value))
+    }
+    return { schema: normalizedSchema, paths }
+  }
+
   private async updateWorkItemSettings(
     workspaceId: string, workItemUid: string, repositoryScope: string[], developmentTargets: string[],
-    openSpec?: { enabled: boolean; repositoryId?: string; path?: string },
+    developmentTargetDetails?: Record<string, string>,
+    openSpec?: { enabled: boolean; repositoryId?: string; path?: string; schema?: string; changeId?: string },
   ): Promise<void> {
     const snapshot = await this.requireSnapshot(workspaceId)
     const workItem = snapshot.workItems.find(item => item.uid === workItemUid)
@@ -926,14 +1061,43 @@ export class SddProjectService {
     const scope = [...new Set(repositoryScope)]
     const targets = [...new Set(developmentTargets)]
     if (scope.some(id => !configured.has(id))) throw new Error('repository scope contains an unconfigured repository')
-    if (targets.some(id => !scope.includes(id))) throw new Error('development targets must be inside the confirmed repository scope')
+    if (targets.some(id => !scope.includes(id))) throw new Error('development targets must be inside the selected repository scope')
+    const details = Object.fromEntries(targets.map(id => [id, String(developmentTargetDetails?.[id] ?? workItem.developmentTargetDetails?.[id] ?? '').trim()]))
     if (openSpec?.enabled === true) {
       if (openSpec.repositoryId === undefined || !targets.includes(openSpec.repositoryId)) throw new Error('OpenSpec repository must be a confirmed development target')
       if (openSpec.path === undefined || openSpec.path.trim() === '' || isAbsolute(openSpec.path) || openSpec.path.split(/[\\/]/).includes('..')) throw new Error('OpenSpec path must be a safe repository-relative path')
+      if (openSpec.schema !== undefined && !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(openSpec.schema)) throw new Error('OpenSpec schema must be kebab-case')
+      if (openSpec.changeId !== undefined && !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(openSpec.changeId)) throw new Error('OpenSpec change id must be kebab-case')
+      if (workItem.openSpec?.changeId !== undefined && openSpec.schema !== undefined && openSpec.schema !== workItem.openSpec.schema) throw new Error('cannot change the OpenSpec schema after this work item has created a change')
     }
-    const updated: WorkItem = { ...workItem, repositoryScope: scope, developmentTargets: targets, openSpec: openSpec?.enabled === true ? { enabled: true, repositoryId: openSpec.repositoryId, path: openSpec.path!.trim() } : { enabled: false }, updatedAt: new Date().toISOString() }
+    const updated: WorkItem = {
+      ...workItem, repositoryScope: scope, developmentTargets: targets, developmentTargetDetails: details,
+      openSpec: openSpec?.enabled === true ? {
+        enabled: true, repositoryId: openSpec.repositoryId, path: openSpec.path!.trim(), schema: openSpec.schema ?? workItem.openSpec?.schema ?? 'spec-driven',
+        ...((openSpec.changeId ?? workItem.openSpec?.changeId) === undefined ? {} : { changeId: openSpec.changeId ?? workItem.openSpec?.changeId }),
+      } : { enabled: false },
+      updatedAt: new Date().toISOString(),
+    }
     await writeFile(join(snapshot.workspace.path, '.sdd', 'work-items', workItem.uid, 'work-item.yaml'), stringify(updated), 'utf8')
-    await appendEvent(snapshot.workspace.path, 'work-item.development-settings-updated', workItem.key, undefined, { repositoryScope: scope, developmentTargets: targets, openSpec: updated.openSpec })
+    await appendEvent(snapshot.workspace.path, 'work-item.development-settings-updated', workItem.key, undefined, { repositoryScope: scope, developmentTargets: targets, developmentTargetDetails: details, openSpec: updated.openSpec })
+  }
+
+  private async updateStageApplicability(
+    workspaceId: string, workItemUid: string, stage: StageId, status: 'applicable' | 'not-applicable', reason?: string,
+  ): Promise<void> {
+    const snapshot = await this.requireSnapshot(workspaceId)
+    const workItem = snapshot.workItems.find(item => item.uid === workItemUid)
+    if (workItem === undefined) throw new Error(`work item not found: ${workItemUid}`)
+    if (status === 'not-applicable') {
+      if (snapshot.artifacts.some(item => item.workItemUid === workItemUid && item.stage === stage && item.status !== 'superseded')) throw new Error('已有当前阶段交付件，不能标记为不适用')
+      if (stage === 'requirements') throw new Error('需求讨论阶段不能标记为不适用；可以直接使用原始来源创建其他阶段交付件')
+    }
+    const now = new Date().toISOString()
+    const stageApplicability = { ...workItem.stageApplicability }
+    if (status === 'applicable') delete stageApplicability[stage]
+    else stageApplicability[stage] = { status, ...(reason?.trim() ? { reason: reason.trim() } : {}), updatedAt: now }
+    await writeFile(join(snapshot.workspace.path, '.sdd', 'work-items', workItem.uid, 'work-item.yaml'), stringify({ ...workItem, stageApplicability, updatedAt: now }), 'utf8')
+    await appendEvent(snapshot.workspace.path, `work-item.stage-${status}`, workItem.key, stage, { reason: reason?.trim() })
   }
 
   private async addProjectRepository(workspaceId: string, id: string, source: string, baseBranch: string): Promise<void> {
@@ -981,6 +1145,7 @@ export class SddProjectService {
         ...workItem,
         repositoryScope: (workItem.repositoryScope ?? []).filter(item => item !== id),
         developmentTargets: (workItem.developmentTargets ?? []).filter(item => item !== id),
+        developmentTargetDetails: Object.fromEntries(Object.entries(workItem.developmentTargetDetails ?? {}).filter(([repositoryId]) => repositoryId !== id)),
         openSpec: workItem.openSpec?.repositoryId === id ? { enabled: false } : workItem.openSpec,
         updatedAt: new Date().toISOString(),
       }
@@ -1123,6 +1288,8 @@ export class SddProjectService {
         status: existing === undefined ? 'active' : 'change-pending', createdAt: existing?.createdAt ?? now, updatedAt: now,
         ...(existing?.repositoryScope === undefined ? {} : { repositoryScope: existing.repositoryScope }),
         ...(existing?.developmentTargets === undefined ? {} : { developmentTargets: existing.developmentTargets }),
+        ...(existing?.developmentTargetDetails === undefined ? {} : { developmentTargetDetails: existing.developmentTargetDetails }),
+        ...(existing?.stageApplicability === undefined ? {} : { stageApplicability: existing.stageApplicability }),
         ...(existing?.openSpec === undefined ? {} : { openSpec: existing.openSpec }),
         ...(existing === undefined ? {} : { change: { kind: 'modified', detectedAt: now, changedPaths: previewItem.changedPaths, previousSourceUid: existing.sourceUid, reviewRequiredStages: [...new Set<StageId>(['requirements', ...acceptedStages])] } }),
       }
@@ -1181,13 +1348,10 @@ export class SddProjectService {
     const workItem = snapshot.workItems.find(item => item.uid === artifact.workItemUid)
     if (workItem === undefined) return 'bound work item is missing'
     const configured = new Set(snapshot.project?.development.repositories.map(item => item.id) ?? [])
-    if (artifact.stage === 'architecture') {
-      if ((workItem.repositoryScope ?? []).length === 0) return '系统设计阶段必须先确认涉及的代码仓库范围'
-      if (workItem.repositoryScope!.some(id => !configured.has(id))) return '代码仓库范围包含未配置仓库'
-    }
-    if (artifact.stage === 'specification' || artifact.stage === 'development') {
-      if ((workItem.developmentTargets ?? []).length === 0) return '规格设计阶段必须先确认本需求的开发目标仓库'
-      if (workItem.developmentTargets!.some(id => !(workItem.repositoryScope ?? []).includes(id))) return '开发目标仓库必须属于系统设计确认的仓库范围'
+    if (artifact.stage === 'development') {
+      if ((workItem.developmentTargets ?? []).length === 0) return '开发测试阶段必须先在本需求开发设置中选择目标代码仓库'
+      if (workItem.developmentTargets!.some(id => !configured.has(id))) return '开发目标包含未配置的项目代码仓库'
+      if (workItem.developmentTargets!.some(id => (workItem.developmentTargetDetails?.[id] ?? '').trim() === '')) return '每个开发目标仓库都必须填写本需求的具体改动目标'
     }
     return undefined
   }
@@ -1281,7 +1445,9 @@ export class SddProjectService {
     if (settingsError !== undefined) throw new Error(settingsError)
     const definition = stageDefinition(stage)
     const runtime = runtimeDefinition(stage)
-    const required = Object.entries(snapshot.project.dependencies[stage] ?? {}).filter(([, mode]) => mode === 'required').map(([id]) => id)
+    const required = snapshot.project.workflow?.mode === 'strict'
+      ? Object.entries(snapshot.project.dependencies[stage] ?? {}).filter(([, mode]) => mode === 'required').map(([id]) => id)
+      : []
     for (const requiredStage of required) {
       if (!selected.some(item => item.stage === requiredStage)) throw new Error(`conversation input is missing required ${requiredStage} artifact`)
     }
@@ -1302,7 +1468,7 @@ export class SddProjectService {
       `项目仓库：${snapshot.workspace.path}`,
       `本次固定绑定交付件：${target.key}，路径 ${target.relativeDirectory}/${target.entry}。`,
       `阶段目标：${runtime.objective}`,
-      workItem === undefined ? '' : `系统设计确认的仓库范围：${(workItem.repositoryScope ?? []).join('、') || '未配置'}\n规格设计确认的开发目标：${(workItem.developmentTargets ?? []).join('、') || '未配置'}\nOpenSpec：${openSpecDescription(workItem, snapshot.openSpecValidation[workItem.uid])}`,
+      workItem === undefined ? '' : `本需求选择的仓库范围：${(workItem.repositoryScope ?? []).join('、') || '未配置'}\n本需求开发目标：${(workItem.developmentTargets ?? []).map(id => `${id}${workItem.developmentTargetDetails?.[id] ? `（${workItem.developmentTargetDetails[id]}）` : ''}`).join('、') || '未配置'}\nOpenSpec：${openSpecDescription(workItem, snapshot.openSpecValidation[workItem.uid])}`,
       `完成清单：\n${runtime.completionChecklist.map((item, index) => `${index + 1}. ${item}`).join('\n')}`,
       target.template === undefined ? '' : `本交付件固定模板快照：${target.relativeDirectory}/${target.template.snapshotPath}\n模板版本：${target.template.version}\n模板哈希：${target.template.contentHash}`,
       target.revision === undefined ? '' : `本次修订类型：${target.revision.kind === 'upstream' ? '上游输入变更' : '用户主动调整'}\n变更原因：${target.revision.reason ?? '由结构化输入差异触发'}\n影响范围：${target.revision.affectedAreas?.join('、') || '待讨论确认'}\n输入差异：\n${target.revision.changes.map(change => `- ${change.label}：${change.previous?.version ?? change.previous?.contentHash ?? '无'} → ${change.current?.version ?? change.current?.contentHash ?? '无'}`).join('\n') || '- 用户主动调整，上游输入未变化'}\n历史阶段运行：${target.revision.previousRunUid ?? '无'}`,
@@ -1396,7 +1562,7 @@ export class SddProjectService {
     const openSpecTarget = openSpecRepository === undefined || workItem?.openSpec?.path === undefined
       ? undefined : resolve(openSpecRepository.path, workItem.openSpec.path)
     const openSpecRuntime = openSpecTarget === undefined || openSpecValidation?.status !== 'valid' ? ''
-      : `OpenSpec 已启用并通过检查。OpenSpec 项目根目录：${dirname(openSpecTarget)}。官方生成的共享 skills 位于 ${join(dirname(openSpecTarget), '.agents', 'skills')}；由于代码仓是当前 SDD 工作空间内的隔离 Worktree，执行 OpenSpec 工作流前必须先读取匹配的 openspec-*/SKILL.md 并遵循，在 OpenSpec 项目根目录运行 openspec 命令。`
+      : `OpenSpec 已启用并通过检查。OpenSpec 项目根目录：${dirname(openSpecTarget)}。当前 Schema：${openSpecValidation.schema ?? 'spec-driven'}。当前需求 Change：${openSpecValidation.changeExists === true ? openSpecValidation.changeId : '尚未创建，不能假设已有 proposal/specs/design/tasks'}。官方生成的共享 skills 位于 ${join(dirname(openSpecTarget), '.agents', 'skills')}；由于代码仓是当前 SDD 工作空间内的隔离 Worktree，执行 OpenSpec 工作流前必须先读取匹配的 openspec-*/SKILL.md 并遵循，在 OpenSpec 项目根目录运行 openspec 命令。`
     this.sessionController?.bind({
       sessionId, stage, artifactUid: artifact.uid, projectPath: workspacePath,
       artifactDirectory: resolve(workspacePath, artifact.relativeDirectory),
@@ -1407,7 +1573,7 @@ export class SddProjectService {
         `绑定项目：${project.project.key} · ${project.project.name}`,
         `绑定交付件：${artifact.key} (${artifact.uid})`,
         `交付件入口：${resolve(workspacePath, artifact.relativeDirectory, artifact.entry)}`,
-        workItem === undefined ? '' : `仓库范围：${(workItem.repositoryScope ?? []).join('、') || '未配置'}\n开发目标：${(workItem.developmentTargets ?? []).join('、') || '未配置'}\nOpenSpec：${openSpecDescription(workItem, openSpecValidation)}`,
+        workItem === undefined ? '' : `仓库范围：${(workItem.repositoryScope ?? []).join('、') || '未配置'}\n开发目标：${(workItem.developmentTargets ?? []).map(id => `${id}${workItem.developmentTargetDetails?.[id] ? `（${workItem.developmentTargetDetails[id]}）` : ''}`).join('、') || '未配置'}\nOpenSpec：${openSpecDescription(workItem, openSpecValidation)}`,
         openSpecRuntime,
         development === undefined ? '' : `隔离代码目录：\n${development.repositories.map(item => `- ${item.id}: ${item.path}`).join('\n')}`,
       ].filter(Boolean).join('\n'),
@@ -1441,12 +1607,13 @@ export class SddProjectService {
   ): DashboardSnapshot {
     const stages = STAGES.map(definition => {
       const items = artifacts.filter(item => item.stage === definition.id)
+      const notApplicable = workItems.filter(item => item.stageApplicability?.[definition.id]?.status === 'not-applicable').length
       const accepted = items.filter(item => item.status === 'accepted').length
       const drafts = items.filter(item => item.status === 'draft' || item.status === 'in-review').length
       const reports = items.map(item => quality[item.uid]).filter(item => item !== undefined)
       const failedChecks = reports.reduce((sum, report) => sum + report.checks.filter(item => item.status === 'failed').length, 0)
-      const completion = accepted > 0 ? 100 : Math.min(90, Math.max(0, ...reports.map(report => report.score), 0))
-      const status = accepted > 0 ? 'completed' as const : items.length === 0 ? 'not-started' as const
+      const completion = accepted > 0 || (workItems.length > 0 && notApplicable === workItems.length) ? 100 : Math.min(90, Math.max(0, ...reports.map(report => report.score), 0))
+      const status = accepted > 0 ? 'completed' as const : workItems.length > 0 && notApplicable === workItems.length ? 'not-applicable' as const : items.length === 0 ? 'not-started' as const
         : reports.some(report => report.ready) ? 'ready-for-review' as const : failedChecks > 0 ? 'blocked' as const : 'in-progress' as const
       return { stage: definition.id, status, completion, drafts, accepted, failedChecks }
     })
@@ -1458,8 +1625,7 @@ export class SddProjectService {
     const tests = workspaces.flatMap(item => item.repositories.flatMap(repository => repository.tests ?? [])).filter(item => !item.stale)
     const blockers = [
       ...workItems.filter(item => item.change !== undefined).map(item => `${item.key}：${item.status === 'removed-pending' ? '外部需求已移除，等待确认' : `需求已变更，需重审 ${item.change!.reviewRequiredStages.map(stage => stageDefinition(stage).label).join('、')}`}`),
-      ...workItems.filter(item => artifacts.some(artifact => artifact.workItemUid === item.uid && artifact.stage === 'architecture') && (item.repositoryScope ?? []).length === 0).map(item => `${item.key}：系统设计尚未确认代码仓库范围`),
-      ...workItems.filter(item => artifacts.some(artifact => artifact.workItemUid === item.uid && (artifact.stage === 'specification' || artifact.stage === 'development')) && (item.developmentTargets ?? []).length === 0).map(item => `${item.key}：规格设计尚未确认开发目标仓库`),
+      ...workItems.filter(item => artifacts.some(artifact => artifact.workItemUid === item.uid && artifact.stage === 'development') && (item.developmentTargets ?? []).length === 0).map(item => `${item.key}：开发测试尚未配置目标代码仓库`),
       ...artifacts.filter(item => item.status === 'accepted').flatMap(item => this.staleInputLabels({ artifacts, workItems }, item).map(label => `${item.key} v${item.version}：${label}，需要创建变更修订`)),
       ...Object.values(quality).flatMap(report => report.checks.filter(item => item.status === 'failed').map(item => `${stageDefinition(report.stage).label}：${item.label}`)),
     ].slice(0, 12)
@@ -1479,12 +1645,13 @@ export class SddProjectService {
         const artifact = stageArtifacts.find(item => item.status === 'draft' || item.status === 'in-review')
           ?? stageArtifacts.filter(item => item.status === 'accepted').sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0]
         let status: DeliveryCellStatus = 'not-started'
-        if (workItem.change?.reviewRequiredStages.includes(stage.id) === true || (artifact !== undefined && this.staleInputLabels({ artifacts, workItems }, artifact).length > 0)) status = 'blocked'
+        if (artifact === undefined && workItem.stageApplicability?.[stage.id]?.status === 'not-applicable') status = 'not-applicable'
+        else if (workItem.change?.reviewRequiredStages.includes(stage.id) === true || (artifact !== undefined && this.staleInputLabels({ artifacts, workItems }, artifact).length > 0)) status = 'blocked'
         else if (artifact?.status === 'accepted') status = 'completed'
         else if (artifact !== undefined && quality[artifact.uid]?.ready === true) status = 'ready-for-review'
         else if (artifact !== undefined) status = 'in-progress'
-        const settingsBlocked = artifact !== undefined && ((stage.id === 'architecture' && (workItem.repositoryScope ?? []).length === 0)
-          || ((stage.id === 'specification' || stage.id === 'development') && (workItem.developmentTargets ?? []).length === 0))
+        const settingsBlocked = artifact !== undefined && stage.id === 'development' && ((workItem.developmentTargets ?? []).length === 0
+          || workItem.developmentTargets?.some(id => (workItem.developmentTargetDetails?.[id] ?? '').trim() === ''))
         if (settingsBlocked) status = 'blocked'
         return {
           stage: stage.id, status,
@@ -1502,6 +1669,7 @@ export class SddProjectService {
         readyForReview: cells.filter(cell => cell.status === 'ready-for-review').length,
         completed: cells.filter(cell => cell.status === 'completed').length,
         blocked: cells.filter(cell => cell.status === 'blocked').length,
+        notApplicable: cells.filter(cell => cell.status === 'not-applicable').length,
       }
     })
     const scope = new Set<string>(); const delivered = new Set<string>(); const burnupByDate = new Map<string, { total: number; completed: number }>()
@@ -1524,8 +1692,10 @@ export class SddProjectService {
     recordBurnup(new Date().toISOString().slice(0, 10))
     let burnup = [...burnupByDate.entries()].sort(([left], [right]) => left.localeCompare(right)).map(([date, value]) => ({ date, ...value }))
     if (burnup.length > 30) burnup = [burnup[0]!, ...burnup.slice(-29)]
+    const applicableCells = deliveryMatrix.flatMap(row => row.cells).filter(cell => cell.status !== 'not-applicable')
+    const overallCompletion = applicableCells.length === 0 ? 0 : Math.round(applicableCells.filter(cell => cell.status === 'completed').length / applicableCells.length * 100)
     return {
-      overallCompletion: Math.round(stages.reduce((sum, stage) => sum + stage.completion, 0) / stages.length), stages,
+      overallCompletion, stages,
       requirements: { total: requirements.length, traced: requirements.filter(item => tracedSources.has(item.uid)).length, completed: requirements.filter(item => item.tracking?.normalizedStatus === 'done').length },
       defects: { total: defects.length, open: defects.filter(item => !resolvedStatuses.has(item.tracking?.normalizedStatus ?? '')).length, resolved: defects.filter(item => resolvedStatuses.has(item.tracking?.normalizedStatus ?? '')).length },
       artifacts: { total: artifacts.length, drafts: artifacts.filter(item => item.status === 'draft' || item.status === 'in-review').length, accepted: artifacts.filter(item => item.status === 'accepted').length },

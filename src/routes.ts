@@ -54,6 +54,7 @@ export function makeSddRoute(service: SddProjectService): WebRoute {
         if ('contentPath' in result) return writeJson(res, 200, { ok: true, template: result })
         if ('sourceKind' in result && 'branches' in result) return writeJson(res, 200, { ok: true, repositoryInspection: result })
         if ('revisionPreview' in result) return writeJson(res, 200, { ok: true, revisionPreview: result.revisionPreview })
+        if ('openSpecTemplates' in result) return writeJson(res, 200, { ok: true, openSpecTemplates: result.openSpecTemplates })
         if ('opened' in result) return writeJson(res, 200, { ok: true, opened: true })
         if ('schema' in result && result.schema === 'dsh-sdd/import-preview@1') return writeJson(res, 200, { ok: true, preview: result })
         if ('workspace' in result) return writeJson(res, 200, { ok: true, snapshot: result })

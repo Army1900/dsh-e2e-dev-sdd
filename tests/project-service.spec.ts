@@ -27,7 +27,15 @@ describe('SddProjectService', () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-sdd-'))
     const originalPath = process.env.PATH
     const bin = join(root, 'bin'); await mkdir(bin)
-    await writeFile(join(bin, 'openspec.cjs'), `const fs=require('node:fs');const path=require('node:path');if(process.argv.includes('--version')){console.log('1.8.0');process.exit(0)}if(process.argv.includes('init')){fs.mkdirSync(path.join(process.cwd(),'openspec','specs'),{recursive:true});fs.mkdirSync(path.join(process.cwd(),'openspec','changes','archive'),{recursive:true});fs.writeFileSync(path.join(process.cwd(),'openspec','config.yaml'),'schema: spec-driven\\n');fs.mkdirSync(path.join(process.cwd(),'.agents','skills','openspec-propose'),{recursive:true});fs.writeFileSync(path.join(process.cwd(),'.agents','skills','openspec-propose','SKILL.md'),'# OpenSpec propose\\n');process.exit(0)}process.exit(1)\n`)
+    await writeFile(join(bin, 'openspec.cjs'), `const fs=require('node:fs');const path=require('node:path');
+const args=process.argv.slice(2);const root=process.cwd();
+if(args.includes('--version')){console.log('1.8.0');process.exit(0)}
+if(args.includes('init')){fs.mkdirSync(path.join(root,'openspec','specs'),{recursive:true});fs.mkdirSync(path.join(root,'openspec','changes','archive'),{recursive:true});fs.writeFileSync(path.join(root,'openspec','config.yaml'),'schema: spec-driven\\n');fs.mkdirSync(path.join(root,'.agents','skills','openspec-propose'),{recursive:true});fs.writeFileSync(path.join(root,'.agents','skills','openspec-propose','SKILL.md'),'# OpenSpec propose\\n');process.exit(0)}
+if(args[0]==='templates'){console.log(JSON.stringify({proposal:'/package/proposal.md',specs:'/package/specs.md',design:'/package/design.md',tasks:'/package/tasks.md'}));process.exit(0)}
+if(args[0]==='schema'&&args[1]==='fork'){const name=args[3];const dir=path.join(root,'openspec','schemas',name,'templates');fs.mkdirSync(dir,{recursive:true});fs.writeFileSync(path.join(root,'openspec','schemas',name,'schema.yaml'),'name: '+name+'\\n');fs.writeFileSync(path.join(dir,'proposal.md'),'# Proposal\\n');process.exit(0)}
+if(args[0]==='schema'&&args[1]==='validate'){process.exit(0)}
+if(args[0]==='new'&&args[1]==='change'){fs.mkdirSync(path.join(root,'openspec','changes',args[2]),{recursive:true});fs.writeFileSync(path.join(root,'openspec','changes',args[2],'.openspec.yaml'),'schema: '+args[args.indexOf('--schema')+1]+'\\n');console.log('{}');process.exit(0)}
+process.exit(1)\n`)
     if (process.platform === 'win32') await writeFile(join(bin, 'openspec.cmd'), '@node "%~dp0\\openspec.cjs" %*\r\n')
     else { await writeFile(join(bin, 'openspec'), '#!/usr/bin/env node\nrequire("./openspec.cjs")\n'); await chmod(join(bin, 'openspec'), 0o755) }
     process.env.PATH = `${bin}${process.platform === 'win32' ? ';' : ':'}${process.env.PATH ?? ''}`
@@ -46,27 +54,35 @@ describe('SddProjectService', () => {
     execFileSync('git', ['add', 'README.md'], { cwd: repository })
     execFileSync('git', ['commit', '-m', 'initial'], { cwd: repository })
     await service.execute({ kind: 'add-project-repository', workspaceId: 'w1', id: 'app', source: './app', baseBranch: 'main' })
-    await service.execute({ kind: 'update-work-item-settings', workspaceId: 'w1', workItemUid: workItem.uid, repositoryScope: ['app'], developmentTargets: ['app'], openSpec: { enabled: true, repositoryId: 'app', path: 'openspec' } })
+    await service.execute({ kind: 'update-work-item-settings', workspaceId: 'w1', workItemUid: workItem.uid, repositoryScope: ['app'], developmentTargets: ['app'], developmentTargetDetails: { app: '实现当前需求并补充测试' }, openSpec: { enabled: true, repositoryId: 'app', path: 'openspec', schema: 'spec-driven' } })
     const projectPath = join(root, '.sdd', 'project.yaml')
     const project = parse(await readFile(projectPath, 'utf8'))
     project.dependencies.development = {}
     await writeFile(projectPath, stringify(project), 'utf8')
-    await service.execute({ kind: 'create-draft', workspaceId: 'w1', stage: 'development', title: workItem.title, basedOn: [], workItemUid: workItem.uid })
+    await service.execute({ kind: 'create-draft', workspaceId: 'w1', stage: 'development', title: workItem.title, basedOn: [], sourceUids: [workItem.sourceUid!], workItemUid: workItem.uid })
     snapshot = await service.snapshot('w1')
     const artifact = snapshot.artifacts.find(item => item.stage === 'development')!
     await service.execute({ kind: 'development-create', workspaceId: 'w1', artifactUid: artifact.uid, repositoryId: 'app' })
     snapshot = await service.snapshot('w1')
     expect(snapshot.openSpecValidation[workItem.uid]).toMatchObject({ status: 'invalid', code: 'missing-directory', cliInstalled: true, canInitialize: true })
-    await expect(service.execute({ kind: 'context', workspaceId: 'w1', stage: 'development', artifactUid: artifact.uid, artifactUids: [] }))
+    await expect(service.execute({ kind: 'context', workspaceId: 'w1', stage: 'development', artifactUid: artifact.uid, artifactUids: [], sourceUids: artifact.derivedFrom.map(item => item.uid) }))
       .resolves.toMatchObject({ prompt: expect.stringContaining('OpenSpec') })
     await service.execute({ kind: 'development-initialize-openspec', workspaceId: 'w1', artifactUid: artifact.uid, tools: 'agents' })
     snapshot = await service.snapshot('w1')
-    expect(snapshot.openSpecValidation[workItem.uid]).toMatchObject({ status: 'valid' })
+    expect(snapshot.openSpecValidation[workItem.uid]).toMatchObject({ status: 'valid', schema: 'spec-driven' })
+    await expect(service.execute({ kind: 'development-inspect-openspec-templates', workspaceId: 'w1', artifactUid: artifact.uid, schema: 'spec-driven' }))
+      .resolves.toMatchObject({ openSpecTemplates: { schema: 'spec-driven', paths: expect.arrayContaining(['/package/proposal.md', '/package/tasks.md']) } })
+    await service.execute({ kind: 'development-fork-openspec-schema', workspaceId: 'w1', artifactUid: artifact.uid, schema: 'company-sdd' })
+    await service.execute({ kind: 'development-create-openspec-change', workspaceId: 'w1', artifactUid: artifact.uid, changeId: 'req-open-spec', schema: 'company-sdd' })
+    snapshot = await service.snapshot('w1')
+    expect(snapshot.openSpecValidation[workItem.uid]).toMatchObject({ status: 'valid', schema: 'company-sdd', changeId: 'req-open-spec', changeExists: true })
     const isolated = snapshot.developmentWorkspaces[0]!.repositories[0]!.path
     expect(await readFile(join(isolated, 'openspec', 'config.yaml'), 'utf8')).toBe('schema: spec-driven\n')
     expect(await readdir(join(isolated, 'openspec', 'specs'))).toEqual([])
     expect(await readdir(join(isolated, 'openspec', 'changes', 'archive'))).toEqual([])
     expect(await readFile(join(isolated, '.agents', 'skills', 'openspec-propose', 'SKILL.md'), 'utf8')).toContain('OpenSpec propose')
+    expect(await readFile(join(isolated, 'openspec', 'schemas', 'company-sdd', 'templates', 'proposal.md'), 'utf8')).toContain('Proposal')
+    expect(await readFile(join(isolated, 'openspec', 'changes', 'req-open-spec', '.openspec.yaml'), 'utf8')).toContain('company-sdd')
     expect(execFileSync('git', ['status', '--short'], { cwd: repository, encoding: 'utf8' })).toBe('')
     process.env.PATH = originalPath
   })
@@ -82,6 +98,24 @@ describe('SddProjectService', () => {
     const snapshot = await service.snapshot('w1')
     expect(snapshot.workItems).toEqual([expect.objectContaining({ key: 'MANUAL-1', title: '订单部分退款', provider: 'manual' })])
     expect(snapshot.sources).toEqual([expect.objectContaining({ content: expect.objectContaining({ description: '规则待讨论' }) })])
+  })
+
+  it('allows flexible stage selection and records stages that are not applicable', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-sdd-'))
+    const provider = new ManualSourceProvider()
+    const sources = { names: () => ['manual'], fetch: async (_name: string, request: any) => provider.get({ ...request, signal: request.signal ?? AbortSignal.timeout(1000) }) } as unknown as SddSourceRegistry
+    const service = new SddProjectService(api(root), sources)
+    await service.execute({ kind: 'import-source', workspaceId: 'w1', provider: 'manual', sourceKind: 'requirement', key: 'SIMPLE-1', input: { title: '简单后端修复' } })
+    let snapshot = await service.snapshot('w1')
+    const workItem = snapshot.workItems[0]!
+    expect(snapshot.project?.workflow?.mode).toBe('flexible')
+    await service.execute({ kind: 'update-stage-applicability', workspaceId: 'w1', workItemUid: workItem.uid, stage: 'prototype', status: 'not-applicable', reason: '无界面变化' })
+    await service.execute({ kind: 'create-draft', workspaceId: 'w1', stage: 'development', title: workItem.title, basedOn: [], sourceUids: [workItem.sourceUid!], workItemUid: workItem.uid })
+    snapshot = await service.snapshot('w1')
+    expect(snapshot.dashboard.deliveryMatrix[0]?.cells.find(cell => cell.stage === 'prototype')).toMatchObject({ status: 'not-applicable' })
+    expect(snapshot.artifacts.find(item => item.stage === 'development')?.derivedFrom).toEqual([expect.objectContaining({ uid: workItem.sourceUid })])
+    await service.execute({ kind: 'update-stage-applicability', workspaceId: 'w1', workItemUid: workItem.uid, stage: 'prototype', status: 'applicable' })
+    expect((await service.snapshot('w1')).dashboard.deliveryMatrix[0]?.cells.find(cell => cell.stage === 'prototype')).toMatchObject({ status: 'not-started' })
   })
 
   it('initializes a project and creates an accepted artifact', async () => {
