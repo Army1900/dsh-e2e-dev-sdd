@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { GitDevelopmentService } from '../src/git-service.ts'
+import { GitDevelopmentService, ProjectGitService } from '../src/git-service.ts'
 import type { ArtifactSummary, ProjectConfig } from '../src/protocol.ts'
 
 function git(cwd: string, ...args: string[]): string { return execFileSync('git', args, { cwd, encoding: 'utf8' }).trim() }
@@ -66,5 +66,28 @@ describe('GitDevelopmentService', () => {
     await mkdir(source); await mkdir(projectPath); git(source, 'init', '-b', 'main'); await writeFile(join(source, 'staged.txt'), 'staged\n'); git(source, 'add', 'staged.txt')
     await expect(new GitDevelopmentService().initializeLocalSource(projectPath, source, 'main')).rejects.toThrow('staged files')
     expect(git(source, 'status', '--porcelain')).toContain('A  staged.txt')
+  })
+})
+
+describe('ProjectGitService', () => {
+  it('commits SDD files, pushes, fetches and fast-forwards remote collaboration changes', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-sdd-project-git-')); const seed = join(root, 'seed'); const remote = join(root, 'remote.git'); const projectPath = join(root, 'project'); const peer = join(root, 'peer')
+    await mkdir(seed); git(seed, 'init', '-b', 'main'); git(seed, 'config', 'user.email', 'sdd@example.test'); git(seed, 'config', 'user.name', 'SDD Test')
+    await writeFile(join(seed, 'README.md'), '# SDD project\n'); git(seed, 'add', 'README.md'); git(seed, 'commit', '-m', 'initial'); git(root, 'clone', '--bare', seed, remote); git(root, 'clone', remote, projectPath)
+    git(projectPath, 'config', 'user.email', 'sdd@example.test'); git(projectPath, 'config', 'user.name', 'SDD Test')
+    const project = { collaboration: { remote: 'origin', baseBranch: 'main', syncStrategy: 'ff-only', commitScope: 'sdd' } } as unknown as ProjectConfig
+    const service = new ProjectGitService()
+    await mkdir(join(projectPath, '.sdd')); await writeFile(join(projectPath, '.sdd', 'project.yaml'), 'schema: dsh-sdd/project@1\n'); await writeFile(join(projectPath, '.gitignore'), '.sdd-workspaces/\n')
+    expect(await service.inspect(projectPath, project)).toMatchObject({ isRepository: true, exactWorkspaceRoot: true, branch: 'main', changedFiles: 2, ahead: 0, behind: 0 })
+    await service.commit(projectPath, project, 'docs(sdd): initialize project'); expect((await service.inspect(projectPath, project)).ahead).toBe(1)
+    await service.push(projectPath, project); await service.fetch(projectPath, project); expect(await service.inspect(projectPath, project)).toMatchObject({ ahead: 0, behind: 0 })
+    git(root, 'clone', remote, peer); git(peer, 'config', 'user.email', 'peer@example.test'); git(peer, 'config', 'user.name', 'Peer')
+    await writeFile(join(peer, 'README.md'), '# Updated by peer\n'); git(peer, 'add', 'README.md'); git(peer, 'commit', '-m', 'peer update'); git(peer, 'push')
+    await service.fetch(projectPath, project); expect((await service.inspect(projectPath, project)).behind).toBe(1)
+    await service.sync(projectPath, project); expect(await readFile(join(projectPath, 'README.md'), 'utf8')).toBe('# Updated by peer\n')
+    await writeFile(join(projectPath, '.sdd', 'work.yaml'), 'uid: work\n'); await writeFile(join(projectPath, 'local-only.txt'), 'leave uncommitted\n')
+    await service.commit(projectPath, project, 'docs(sdd): add work item')
+    expect(git(projectPath, 'status', '--porcelain')).toContain('?? local-only.txt')
+    await expect(service.push(projectPath, project)).resolves.toBeUndefined()
   })
 })

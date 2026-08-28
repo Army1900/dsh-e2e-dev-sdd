@@ -32,6 +32,17 @@
       "required": ["mode"],
       "properties": { "mode": { "enum": ["flexible", "strict"] } }
     },
+    "collaboration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["remote", "baseBranch", "syncStrategy", "commitScope"],
+      "properties": {
+        "remote": { "type": "string", "pattern": "^[A-Za-z0-9._-]+$" },
+        "baseBranch": { "type": "string", "minLength": 1 },
+        "syncStrategy": { "enum": ["ff-only", "manual"] },
+        "commitScope": { "enum": ["sdd", "workspace"] }
+      }
+    },
     "dependencies": { "type": "object" },
     "development": {
       "type": "object",

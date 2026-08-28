@@ -1,6 +1,14 @@
-import type { ArtifactSummary, DevelopmentWorkspace, ProjectConfig, RepositoryInspection } from './protocol.ts';
+import type { ArtifactSummary, DevelopmentWorkspace, ProjectConfig, ProjectRepositoryState, RepositoryInspection } from './protocol.ts';
 export declare function readDevelopmentWorkspace(projectPath: string, artifactUid: string): Promise<DevelopmentWorkspace | undefined>;
 export declare function listDevelopmentWorkspaces(projectPath: string, artifacts: readonly ArtifactSummary[]): Promise<DevelopmentWorkspace[]>;
+export declare class ProjectGitService {
+    inspect(projectPath: string, project: ProjectConfig): Promise<ProjectRepositoryState>;
+    private assertUsable;
+    fetch(projectPath: string, project: ProjectConfig): Promise<void>;
+    sync(projectPath: string, project: ProjectConfig): Promise<void>;
+    commit(projectPath: string, project: ProjectConfig, message: string): Promise<void>;
+    push(projectPath: string, project: ProjectConfig): Promise<void>;
+}
 export declare class GitDevelopmentService {
     inheritRevision(projectPath: string, previousArtifactUid: string, artifact: ArtifactSummary): Promise<DevelopmentWorkspace | undefined>;
     discardInheritedRevision(projectPath: string, artifactUid: string, previousArtifactUid: string): Promise<boolean>;

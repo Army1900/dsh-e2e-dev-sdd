@@ -368,6 +368,39 @@ export interface ProjectConfig {
         mergeStrategy: 'pull-request' | 'local-merge' | 'manual';
         repositories: DevelopmentRepositoryConfig[];
     };
+    collaboration?: {
+        remote: string;
+        baseBranch: string;
+        syncStrategy: 'ff-only' | 'manual';
+        commitScope: 'sdd' | 'workspace';
+    };
+}
+export interface ArtifactKeyConflict {
+    stage: StageId;
+    key: string;
+    artifactUids: string[];
+    lineageUids: string[];
+    statuses: ArtifactStatus[];
+    renamableArtifactUids: string[];
+}
+export interface ProjectRepositoryState {
+    isRepository: boolean;
+    exactWorkspaceRoot: boolean;
+    repositoryRoot?: string;
+    branch?: string;
+    detached: boolean;
+    headCommit?: string;
+    remote: string;
+    baseBranch: string;
+    upstream?: string;
+    changedFiles: number;
+    stagedFiles: number;
+    untrackedFiles: number;
+    conflictFiles: string[];
+    ahead: number;
+    behind: number;
+    divergence: 'none' | 'ahead' | 'behind' | 'diverged' | 'untracked';
+    keyConflicts: ArtifactKeyConflict[];
 }
 export interface ArtifactSummary extends ArtifactManifest {
     relativeDirectory: string;
@@ -402,6 +435,7 @@ export interface ProjectSnapshot {
     developmentWorkspaces: DevelopmentWorkspace[];
     openSpecValidation: Record<string, OpenSpecValidation>;
     dashboard: DashboardSnapshot;
+    projectRepository?: ProjectRepositoryState;
 }
 export interface OpenSpecValidation {
     status: 'pending' | 'valid' | 'invalid';
@@ -612,6 +646,30 @@ export type SddAction = {
     kind: 'remove-project-repository';
     workspaceId: string;
     id: string;
+} | {
+    kind: 'update-project-collaboration';
+    workspaceId: string;
+    remote: string;
+    baseBranch: string;
+    syncStrategy: 'ff-only' | 'manual';
+    commitScope: 'sdd' | 'workspace';
+} | {
+    kind: 'project-git-fetch';
+    workspaceId: string;
+} | {
+    kind: 'project-git-sync';
+    workspaceId: string;
+} | {
+    kind: 'project-git-commit';
+    workspaceId: string;
+    message: string;
+} | {
+    kind: 'project-git-push';
+    workspaceId: string;
+} | {
+    kind: 'resolve-artifact-key-conflict';
+    workspaceId: string;
+    artifactUid: string;
 } | {
     kind: 'quality';
     workspaceId: string;

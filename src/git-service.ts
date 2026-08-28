@@ -1,9 +1,9 @@
 import { spawn } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
-import { access, lstat, mkdir, readFile, readlink, unlink, writeFile } from 'node:fs/promises'
+import { access, lstat, mkdir, readFile, readlink, realpath, unlink, writeFile } from 'node:fs/promises'
 import { isAbsolute, join, relative, resolve } from 'node:path'
 import { parse, stringify } from 'yaml'
-import type { ArtifactSummary, DevelopmentRepositoryConfig, DevelopmentRepositoryState, DevelopmentTestEvidence, DevelopmentWorkspace, ProjectConfig, RepositoryInspection } from './protocol.ts'
+import type { ArtifactSummary, DevelopmentRepositoryConfig, DevelopmentRepositoryState, DevelopmentTestEvidence, DevelopmentWorkspace, ProjectConfig, ProjectRepositoryState, RepositoryInspection } from './protocol.ts'
 
 const ID = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
 const MAX_OUTPUT = 1024 * 1024
@@ -154,6 +154,96 @@ function repositoryConfig(project: ProjectConfig, id: string): DevelopmentReposi
   if (config === undefined) throw new Error(`development repository is not configured: ${id}`)
   if (!ID.test(config.id)) throw new Error(`invalid development repository id: ${config.id}`)
   return config
+}
+
+function projectCollaboration(project: ProjectConfig): NonNullable<ProjectConfig['collaboration']> {
+  return project.collaboration ?? { remote: 'origin', baseBranch: 'main', syncStrategy: 'ff-only', commitScope: 'sdd' }
+}
+
+function conflictStatus(status: string): boolean {
+  return ['DD', 'AU', 'UD', 'UA', 'DU', 'AA', 'UU'].includes(status)
+}
+
+export class ProjectGitService {
+  async inspect(projectPath: string, project: ProjectConfig): Promise<ProjectRepositoryState> {
+    const collaboration = projectCollaboration(project)
+    const rootResult = await run(['git', 'rev-parse', '--show-toplevel'], projectPath, 30_000, true)
+    if (rootResult.exitCode !== 0) return {
+      isRepository: false, exactWorkspaceRoot: false, detached: false, remote: collaboration.remote, baseBranch: collaboration.baseBranch,
+      changedFiles: 0, stagedFiles: 0, untrackedFiles: 0, conflictFiles: [], ahead: 0, behind: 0, divergence: 'untracked', keyConflicts: [],
+    }
+    const repositoryRoot = await realpath(rootResult.stdout.trim())
+    const exactWorkspaceRoot = repositoryRoot === await realpath(projectPath)
+    const branchResult = await run(['git', 'symbolic-ref', '--quiet', '--short', 'HEAD'], repositoryRoot, 30_000, true)
+    const branch = branchResult.exitCode === 0 ? branchResult.stdout.trim() : undefined
+    const headResult = await run(['git', 'rev-parse', '--verify', 'HEAD'], repositoryRoot, 30_000, true)
+    const status = porcelainChanges((await run(['git', 'status', '--porcelain=v1', '-z', '--untracked-files=all'], repositoryRoot)).stdout)
+    const upstreamResult = await run(['git', 'rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{upstream}'], repositoryRoot, 30_000, true)
+    const configuredTarget = `${collaboration.remote}/${collaboration.baseBranch}`
+    const configuredExists = await run(['git', 'rev-parse', '--verify', `${configuredTarget}^{commit}`], repositoryRoot, 30_000, true)
+    const upstream = upstreamResult.exitCode === 0 ? upstreamResult.stdout.trim() : configuredExists.exitCode === 0 ? configuredTarget : undefined
+    let ahead = 0; let behind = 0
+    if (upstream !== undefined && headResult.exitCode === 0) {
+      const counts = await run(['git', 'rev-list', '--left-right', '--count', `${upstream}...HEAD`], repositoryRoot, 30_000, true)
+      const values = counts.stdout.trim().split(/\s+/).map(Number); behind = values[0] ?? 0; ahead = values[1] ?? 0
+    }
+    return {
+      isRepository: true, exactWorkspaceRoot, repositoryRoot, ...(branch === undefined ? {} : { branch }), detached: branch === undefined,
+      ...(headResult.exitCode === 0 ? { headCommit: headResult.stdout.trim() } : {}), remote: collaboration.remote, baseBranch: collaboration.baseBranch,
+      ...(upstream === undefined ? {} : { upstream }), changedFiles: status.length,
+      stagedFiles: status.filter(item => item.status[0] !== ' ' && item.status[0] !== '?').length,
+      untrackedFiles: status.filter(item => item.status === '??').length,
+      conflictFiles: status.filter(item => conflictStatus(item.status)).map(item => item.path), ahead, behind,
+      divergence: upstream === undefined ? 'untracked' : ahead > 0 && behind > 0 ? 'diverged' : ahead > 0 ? 'ahead' : behind > 0 ? 'behind' : 'none',
+      keyConflicts: [],
+    }
+  }
+
+  private assertUsable(state: ProjectRepositoryState): void {
+    if (!state.isRepository) throw new Error('当前 SDD 工作空间不是 Git 仓库；请先初始化 Git 并创建首个提交')
+    if (!state.exactWorkspaceRoot) throw new Error(`工作空间不是 Git 仓库根目录：${state.repositoryRoot ?? ''}`)
+    if (state.detached || state.branch === undefined) throw new Error('当前项目仓库处于 detached HEAD，不能执行协作同步')
+    if (state.conflictFiles.length > 0) throw new Error(`项目仓库存在未解决冲突：${state.conflictFiles.join('、')}`)
+  }
+
+  async fetch(projectPath: string, project: ProjectConfig): Promise<void> {
+    const state = await this.inspect(projectPath, project); this.assertUsable(state)
+    if (state.remote.trim() === '') throw new Error('项目协作远程仓库未配置')
+    await run(['git', 'fetch', '--prune', state.remote], projectPath, 180_000)
+  }
+
+  async sync(projectPath: string, project: ProjectConfig): Promise<void> {
+    const collaboration = projectCollaboration(project)
+    if (collaboration.syncStrategy === 'manual') throw new Error('当前同步策略为 manual，请在终端中完成同步后刷新状态')
+    await this.fetch(projectPath, project)
+    const state = await this.inspect(projectPath, project); this.assertUsable(state)
+    if (state.changedFiles > 0) throw new Error('同步前项目工作区必须干净；请先提交或处理本地修改')
+    if (state.upstream === undefined) throw new Error(`远程跟踪分支不存在；请先 Push 当前分支，或确认 ${state.remote}/${state.baseBranch} 已存在`)
+    if (state.ahead > 0 && state.behind > 0) throw new Error(`当前分支与 ${state.upstream} 已分叉，禁止自动合并；请在终端或专门的冲突处理流程中解决`)
+    if (state.behind === 0) return
+    await run(['git', 'merge', '--ff-only', state.upstream], projectPath, 120_000)
+  }
+
+  async commit(projectPath: string, project: ProjectConfig, message: string): Promise<void> {
+    const state = await this.inspect(projectPath, project); this.assertUsable(state)
+    if (message.trim() === '') throw new Error('项目提交说明不能为空')
+    const collaboration = projectCollaboration(project)
+    if (collaboration.commitScope === 'workspace') await run(['git', 'add', '-A'], projectPath)
+    else await run(['git', 'add', '-A', '--', '.sdd', '.gitignore'], projectPath)
+    const staged = await run(['git', 'diff', '--cached', '--quiet'], projectPath, 30_000, true)
+    if (staged.exitCode === 0) throw new Error(`没有可提交的${collaboration.commitScope === 'sdd' ? ' SDD ' : '项目'}变更`)
+    if (staged.exitCode !== 1) throw new Error(`无法检查项目暂存区，git 退出码 ${staged.exitCode}`)
+    await run(['git', 'commit', '-m', message.trim()], projectPath, 120_000)
+  }
+
+  async push(projectPath: string, project: ProjectConfig): Promise<void> {
+    const state = await this.inspect(projectPath, project); this.assertUsable(state)
+    if (state.remote.trim() === '') throw new Error('项目协作远程仓库未配置')
+    const argv = state.upstream === undefined
+      ? ['git', 'push', '--set-upstream', state.remote, state.branch!]
+      : ['git', 'push', state.remote, state.branch!]
+    await run(argv, projectPath, 180_000)
+  }
 }
 
 export class GitDevelopmentService {

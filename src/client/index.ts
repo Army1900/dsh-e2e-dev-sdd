@@ -57,7 +57,8 @@ async function call(action: SddAction): Promise<SddResponse> {
   const timeout = action.kind === 'development-install-openspec' ? 330_000
     : action.kind === 'development-initialize-openspec' ? 210_000
       : action.kind === 'development-fork-openspec-schema' || action.kind === 'development-create-openspec-change' || action.kind === 'development-inspect-openspec-templates' ? 75_000
-      : action.kind === 'add-project-repository' || action.kind === 'inspect-project-repository' || action.kind === 'initialize-project-repository' || action.kind === 'update-project-repository-branch' ? 75_000 : 20_000
+      : action.kind === 'project-git-fetch' || action.kind === 'project-git-sync' || action.kind === 'project-git-push' ? 210_000
+        : action.kind === 'add-project-repository' || action.kind === 'inspect-project-repository' || action.kind === 'initialize-project-repository' || action.kind === 'update-project-repository-branch' ? 75_000 : 20_000
   const response = await fetch(API_PATH, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(action), signal: AbortSignal.timeout(timeout) })
   return await response.json() as SddResponse
 }
@@ -207,7 +208,11 @@ class SddWorkbench {
       : `<div class="dsh-sdd-stat"><span class="dsh-sdd-muted">工作量</span><div class="dsh-sdd-workload-list">${dashboard.workload.map(item => `<div class="dsh-sdd-workload-row" title="${escapeHtml(item.unit)} · 已完成 ${item.completed} / 总计 ${item.total}"><span>${escapeHtml(item.unit)}</span><strong>${item.completed} / ${item.total}</strong></div>`).join('')}</div></div>`
     const pendingChanges = snapshot.workItems.filter(item => item.status === 'change-pending' || item.status === 'removed-pending').length
     const repositoryCount = snapshot.project?.development.repositories.length ?? 0
-    return `<div class="dsh-sdd-grid" style="margin-bottom:14px"><section class="dsh-sdd-card"><h2>需求与缺陷管理</h2><p class="dsh-sdd-muted">统一从业务系统导入或再次同步需求包、缺陷和问题；阶段页面只处理各自的交付流程。</p><div class="dsh-sdd-actions"><button class="dsh-sdd-button primary" data-action="import-source">导入或同步需求/缺陷</button></div></section><section class="dsh-sdd-card"><h2>项目设置</h2><p class="dsh-sdd-muted">已登记 ${repositoryCount} 个代码仓库。仓库目录、默认基线、工作流和模板入口统一在项目设置中维护。</p><div class="dsh-sdd-actions"><button class="dsh-sdd-button" data-action="open-settings">打开项目设置</button></div></section></div><div class="dsh-sdd-stats">${stat('总体完成度', `${dashboard.overallCompletion}%`, '实际采用阶段的质量状态')}${stat('需求工作单元', String(snapshot.workItems.length), `待处理变更 ${pendingChanges}`)}${stat('需求', String(dashboard.requirements.total), `已追踪 ${dashboard.requirements.traced}`)}${stat('缺陷', String(dashboard.defects.total), `待处理 ${dashboard.defects.open} · 已解决 ${dashboard.defects.resolved}`)}${stat('交付件', String(dashboard.artifacts.total), `草稿 ${dashboard.artifacts.drafts} · 已接受 ${dashboard.artifacts.accepted}`)}${stat('代码空间', String(dashboard.development.workspaces), `变更文件 ${dashboard.development.changedFiles}`)}${stat('测试', String(dashboard.development.passingTests + dashboard.development.failingTests), `通过 ${dashboard.development.passingTests} · 失败 ${dashboard.development.failingTests}`)}${workload}</div>
+    const projectGit = snapshot.projectRepository
+    const gitNote = projectGit?.isRepository !== true ? '当前工作空间尚未初始化 Git 仓库'
+      : !projectGit.exactWorkspaceRoot ? '当前工作空间不是 Git 仓库根目录'
+        : `${projectGit.branch ?? 'detached HEAD'} · ${projectGit.changedFiles} 个本地变更 · ahead ${projectGit.ahead} / behind ${projectGit.behind}${projectGit.keyConflicts.length ? ` · 编号冲突 ${projectGit.keyConflicts.length}` : ''}`
+    return `<div class="dsh-sdd-grid" style="margin-bottom:14px"><section class="dsh-sdd-card"><h2>需求与缺陷管理</h2><p class="dsh-sdd-muted">统一从业务系统导入或再次同步需求包、缺陷和问题；阶段页面只处理各自的交付流程。</p><div class="dsh-sdd-actions"><button class="dsh-sdd-button primary" data-action="import-source">导入或同步需求/缺陷</button></div></section><section class="dsh-sdd-card"><h2>项目仓库与设置</h2><p class="dsh-sdd-muted">${escapeHtml(gitNote)}。已登记 ${repositoryCount} 个目标代码仓库；协作远程、同步和仓库规则统一在项目设置维护。</p><div class="dsh-sdd-actions"><button class="dsh-sdd-button" data-action="open-settings">打开项目设置</button></div></section></div><div class="dsh-sdd-stats">${stat('总体完成度', `${dashboard.overallCompletion}%`, '实际采用阶段的质量状态')}${stat('需求工作单元', String(snapshot.workItems.length), `待处理变更 ${pendingChanges}`)}${stat('需求', String(dashboard.requirements.total), `已追踪 ${dashboard.requirements.traced}`)}${stat('缺陷', String(dashboard.defects.total), `待处理 ${dashboard.defects.open} · 已解决 ${dashboard.defects.resolved}`)}${stat('交付件', String(dashboard.artifacts.total), `草稿 ${dashboard.artifacts.drafts} · 已接受 ${dashboard.artifacts.accepted}`)}${stat('代码空间', String(dashboard.development.workspaces), `变更文件 ${dashboard.development.changedFiles}`)}${stat('测试', String(dashboard.development.passingTests + dashboard.development.failingTests), `通过 ${dashboard.development.passingTests} · 失败 ${dashboard.development.failingTests}`)}${workload}</div>
       <div class="dsh-sdd-chart-grid">${this.stageFlowHtml(snapshot)}${this.burnupHtml(dashboard.burnup)}</div>
       ${this.deliveryMatrixHtml(snapshot)}
       <div class="dsh-sdd-grid dsh-sdd-dashboard-columns" style="margin-top:14px"><section class="dsh-sdd-card"><h2>质量与追踪</h2><p>来源追踪覆盖率：<strong>${dashboard.traceability}%</strong></p>${dashboard.blockers.length === 0 ? '<div class="dsh-sdd-empty">当前没有结构化阻塞项</div>' : `<ul class="dsh-sdd-checks">${dashboard.blockers.map(item => `<li data-fail>${escapeHtml(item)}</li>`).join('')}</ul>`}</section><section class="dsh-sdd-card"><h2>最近活动</h2>${dashboard.recentEvents.length === 0 ? '<div class="dsh-sdd-empty">暂无事件</div>' : `<div class="dsh-sdd-list dsh-sdd-scroll-list">${dashboard.recentEvents.slice(0, 10).map(event => `<div class="dsh-sdd-row"><span></span><span><strong>${escapeHtml(event.subject)}</strong><span class="dsh-sdd-muted">${escapeHtml(event.type)} · ${escapeHtml(event.time)}</span></span></div>`).join('')}</div>`}</section></div>${this.traceabilityHtml(snapshot)}`
@@ -219,7 +224,15 @@ class SddWorkbench {
     const repositories = project.development.repositories
     const rows = repositories.map(repository => `<div class="dsh-sdd-row"><span></span><span><strong>${escapeHtml(repository.id)}</strong><span class="dsh-sdd-muted">${escapeHtml(repository.source)}<br>默认基线：${escapeHtml(repository.baseBranch)}</span></span><span><button class="dsh-sdd-button" data-change-repository-branch="${escapeHtml(repository.id)}">切换基线</button> <button class="dsh-sdd-button" data-remove-repository="${escapeHtml(repository.id)}">移除</button></span></div>`).join('')
     const dependencies = STAGES.map(stage => `${stage.label}：${Object.entries(project.dependencies[stage.id] ?? {}).map(([input, mode]) => `${STAGES.find(item => item.id === input)?.label ?? input}=${mode}`).join('、') || '无强制依赖'}`).join('\n')
-    return `<div class="dsh-sdd-grid dsh-sdd-settings-grid"><section class="dsh-sdd-card"><h2>项目代码仓库目录</h2><p class="dsh-sdd-muted">这里只登记项目可用仓库和默认基线，不会立即下载代码。具体需求在系统设计/规格设计中选择范围和开发目标。</p><div class="dsh-sdd-list dsh-sdd-bounded-list">${rows || '<div class="dsh-sdd-empty">尚未登记代码仓库</div>'}</div><div class="dsh-sdd-actions"><button class="dsh-sdd-button primary" data-action="add-repository">添加项目代码仓库</button></div></section><section class="dsh-sdd-card"><h2>开发空间规则</h2><p class="dsh-sdd-muted">隔离目录：<code>${escapeHtml(project.development.workspaceRoot)}</code></p><p class="dsh-sdd-muted">特性分支：<code>${escapeHtml(project.development.branchPattern)}</code></p><p class="dsh-sdd-muted">合并策略：<code>${escapeHtml(project.development.mergeStrategy)}</code>（当前版本仍只创建本地提交，不自动 push/合并）</p><h2 style="margin-top:18px">流程与扩展</h2><p class="dsh-sdd-muted">工作流：${escapeHtml(project.workflow?.mode ?? 'flexible')}<br><span style="white-space:pre-line">${escapeHtml(dependencies)}</span></p><p class="dsh-sdd-muted">业务扩展：<code>.sdd/business/</code><br>交付件模板：<code>.sdd/templates/</code><br>项目配置：<code>.sdd/project.yaml</code></p></section></div>`
+    const git = snapshot.projectRepository
+    const collaboration = project.collaboration ?? { remote: 'origin', baseBranch: 'main', syncStrategy: 'ff-only', commitScope: 'sdd' }
+    const gitState = git?.isRepository !== true ? '未初始化 Git 仓库'
+      : !git.exactWorkspaceRoot ? `工作空间位于仓库 ${git.repositoryRoot ?? ''} 内，但不是仓库根目录`
+        : `${git.branch ?? 'detached HEAD'} @ ${git.headCommit?.slice(0, 8) ?? '无提交'} · ${git.changedFiles} 个变更（暂存 ${git.stagedFiles}、未跟踪 ${git.untrackedFiles}）· ahead ${git.ahead} / behind ${git.behind}`
+    const conflictRows = (git?.keyConflicts ?? []).map(conflict => `<div class="dsh-sdd-row"><span>!</span><span><strong>${escapeHtml(conflict.key)} · ${escapeHtml(STAGES.find(item => item.id === conflict.stage)?.label ?? conflict.stage)}</strong><span class="dsh-sdd-muted">发现 ${conflict.lineageUids.length} 条不同 UID 血缘使用同一编号；状态：${escapeHtml(conflict.statuses.join('、'))}</span></span><span>${conflict.renamableArtifactUids.map(uid => `<button class="dsh-sdd-button" data-resolve-key-conflict="${escapeHtml(uid)}">调整草稿编号</button>`).join('') || '<span class="dsh-sdd-badge">需要人工处理</span>'}</span></div>`).join('')
+    const gitConflicts = git?.conflictFiles.length ? `<div class="dsh-sdd-error">Git 冲突：${escapeHtml(git.conflictFiles.join('、'))}。插件不会自动覆盖，请先解决冲突并刷新。</div>` : ''
+    const gitCard = `<section class="dsh-sdd-card dsh-sdd-wide"><h2>SDD 项目仓库协作</h2><p class="dsh-sdd-muted">${escapeHtml(gitState)}<br>远程：<code>${escapeHtml(collaboration.remote)}</code> · 协作基线：<code>${escapeHtml(collaboration.baseBranch)}</code> · 同步：<code>${escapeHtml(collaboration.syncStrategy)}</code> · 提交范围：<code>${escapeHtml(collaboration.commitScope)}</code>${git?.upstream ? `<br>当前跟踪：<code>${escapeHtml(git.upstream)}</code> · 状态 ${escapeHtml(git.divergence)}` : ''}</p>${gitConflicts}${conflictRows ? `<div class="dsh-sdd-list" style="margin-top:10px">${conflictRows}</div>` : ''}<div class="dsh-sdd-actions"><button class="dsh-sdd-button" data-action="configure-project-git">配置协作</button><button class="dsh-sdd-button" data-action="project-git-fetch"${git?.isRepository === true && git.exactWorkspaceRoot ? '' : ' disabled'}>获取远程状态</button><button class="dsh-sdd-button" data-action="project-git-sync"${git?.isRepository === true && git.exactWorkspaceRoot && git.changedFiles === 0 && git.conflictFiles.length === 0 && collaboration.syncStrategy === 'ff-only' ? '' : ' disabled'}>Fast-forward 同步</button><button class="dsh-sdd-button" data-action="project-git-commit"${git?.isRepository === true && git.exactWorkspaceRoot && git.changedFiles > 0 && git.conflictFiles.length === 0 ? '' : ' disabled'}>提交项目变更</button><button class="dsh-sdd-button primary" data-action="project-git-push"${git?.isRepository === true && git.exactWorkspaceRoot && git.conflictFiles.length === 0 ? '' : ' disabled'}>Push 当前分支</button></div><p class="dsh-sdd-muted">Fetch 不修改本地文件；同步只允许干净工作区上的 fast-forward。分叉、文本冲突和两个已验收交付件的编号冲突必须人工处理。</p></section>`
+    return `<div class="dsh-sdd-grid dsh-sdd-settings-grid">${gitCard}<section class="dsh-sdd-card"><h2>项目代码仓库目录</h2><p class="dsh-sdd-muted">这里只登记项目可用仓库和默认基线，不会立即下载代码。具体需求在系统设计/规格设计中选择范围和开发目标。</p><div class="dsh-sdd-list dsh-sdd-bounded-list">${rows || '<div class="dsh-sdd-empty">尚未登记代码仓库</div>'}</div><div class="dsh-sdd-actions"><button class="dsh-sdd-button primary" data-action="add-repository">添加项目代码仓库</button></div></section><section class="dsh-sdd-card"><h2>开发空间规则</h2><p class="dsh-sdd-muted">隔离目录：<code>${escapeHtml(project.development.workspaceRoot)}</code></p><p class="dsh-sdd-muted">特性分支：<code>${escapeHtml(project.development.branchPattern)}</code></p><p class="dsh-sdd-muted">合并策略：<code>${escapeHtml(project.development.mergeStrategy)}</code>（当前版本仍只创建本地提交，不自动 push/合并）</p><h2 style="margin-top:18px">流程与扩展</h2><p class="dsh-sdd-muted">工作流：${escapeHtml(project.workflow?.mode ?? 'flexible')}<br><span style="white-space:pre-line">${escapeHtml(dependencies)}</span></p><p class="dsh-sdd-muted">业务扩展：<code>.sdd/business/</code><br>交付件模板：<code>.sdd/templates/</code><br>项目配置：<code>.sdd/project.yaml</code></p></section></div>`
   }
 
   private stageFlowHtml(snapshot: ProjectSnapshot): string {
@@ -367,6 +380,12 @@ class SddWorkbench {
     root.querySelector<HTMLElement>('[data-action="view-template"]')?.addEventListener('click', () => this.showTemplate())
     root.querySelector<HTMLElement>('[data-action="configure-scope"]')?.addEventListener('click', () => { void this.configureRepositoryScope() })
     root.querySelector<HTMLElement>('[data-action="add-repository"]')?.addEventListener('click', () => { void this.addProjectRepository() })
+    root.querySelector<HTMLElement>('[data-action="configure-project-git"]')?.addEventListener('click', () => { void this.configureProjectGit() })
+    root.querySelector<HTMLElement>('[data-action="project-git-fetch"]')?.addEventListener('click', () => { void this.mutate({ kind: 'project-git-fetch', workspaceId: this.state.workspaceId! }) })
+    root.querySelector<HTMLElement>('[data-action="project-git-sync"]')?.addEventListener('click', () => { void this.syncProjectGit() })
+    root.querySelector<HTMLElement>('[data-action="project-git-commit"]')?.addEventListener('click', () => { void this.commitProjectGit() })
+    root.querySelector<HTMLElement>('[data-action="project-git-push"]')?.addEventListener('click', () => { void this.pushProjectGit() })
+    root.querySelectorAll<HTMLButtonElement>('[data-resolve-key-conflict]').forEach(button => button.addEventListener('click', () => { void this.resolveKeyConflict(button.dataset.resolveKeyConflict!) }))
     root.querySelectorAll<HTMLButtonElement>('[data-remove-repository]').forEach(button => button.addEventListener('click', () => { void this.removeProjectRepository(button.dataset.removeRepository!) }))
     root.querySelectorAll<HTMLButtonElement>('[data-change-repository-branch]').forEach(button => button.addEventListener('click', () => { void this.changeProjectRepositoryBranch(button.dataset.changeRepositoryBranch!) }))
     root.querySelector<HTMLElement>('[data-action="configure-targets"]')?.addEventListener('click', () => { void this.configureDevelopmentTargets() })
@@ -758,6 +777,64 @@ class SddWorkbench {
       submitLabel: '备份并重新初始化', fields: [],
     })
     if (values !== undefined) await this.mutate({ kind: 'reinitialize', workspaceId: this.state.workspaceId! })
+  }
+
+  private async configureProjectGit(): Promise<void> {
+    const collaboration = this.state.snapshot?.project?.collaboration ?? { remote: 'origin', baseBranch: 'main', syncStrategy: 'ff-only' as const, commitScope: 'sdd' as const }
+    const values = await this.openForm({
+      title: '配置 SDD 项目仓库协作',
+      description: '这里配置的是保存 .sdd、模板和交付件的外层项目仓库，不是开发阶段的目标代码仓库。',
+      submitLabel: '保存配置',
+      fields: [
+        { name: 'remote', label: 'Git remote 名称', type: 'text', required: true, value: collaboration.remote, placeholder: '例如：origin' },
+        { name: 'baseBranch', label: '协作基线分支', type: 'text', required: true, value: collaboration.baseBranch, placeholder: '例如：main' },
+        { name: 'syncStrategy', label: '同步策略', type: 'select', required: true, value: collaboration.syncStrategy, options: [{ value: 'ff-only', label: '仅 Fast-forward（推荐）' }, { value: 'manual', label: '手工同步' }] },
+        { name: 'commitScope', label: '项目提交范围', type: 'select', required: true, value: collaboration.commitScope, options: [{ value: 'sdd', label: '仅 .sdd 和 .gitignore（推荐）' }, { value: 'workspace', label: '整个工作空间' }] },
+      ],
+    })
+    if (values === undefined) return
+    await this.mutate({ kind: 'update-project-collaboration', workspaceId: this.state.workspaceId!, remote: String(values.remote), baseBranch: String(values.baseBranch), syncStrategy: String(values.syncStrategy) as 'ff-only' | 'manual', commitScope: String(values.commitScope) as 'sdd' | 'workspace' })
+  }
+
+  private async syncProjectGit(): Promise<void> {
+    const git = this.state.snapshot?.projectRepository
+    const values = await this.openForm({
+      title: '同步 SDD 项目仓库',
+      description: `将先 Fetch，再把当前分支 fast-forward 到 ${git?.upstream ?? `${git?.remote ?? 'origin'}/${git?.baseBranch ?? 'main'}`}。工作区不干净、分支分叉或存在冲突时不会执行。`,
+      submitLabel: '确认同步', fields: [],
+    })
+    if (values !== undefined) await this.mutate({ kind: 'project-git-sync', workspaceId: this.state.workspaceId! })
+  }
+
+  private async commitProjectGit(): Promise<void> {
+    const scope = this.state.snapshot?.project?.collaboration?.commitScope ?? 'sdd'
+    const values = await this.openForm({
+      title: '提交 SDD 项目变更',
+      description: scope === 'sdd' ? '只暂存 .sdd/ 和插件维护的 .gitignore，不会把工作空间中的其他业务文件带入提交。' : '当前配置会暂存整个工作空间，请先确认所有变更都属于本次提交。',
+      submitLabel: '创建本地提交', fields: [{ name: 'message', label: '提交说明', type: 'textarea', required: true, placeholder: '例如：docs(sdd): 完成 PAY-381 系统设计' }],
+    })
+    if (values !== undefined) await this.mutate({ kind: 'project-git-commit', workspaceId: this.state.workspaceId!, message: String(values.message) })
+  }
+
+  private async pushProjectGit(): Promise<void> {
+    const git = this.state.snapshot?.projectRepository
+    const values = await this.openForm({
+      title: 'Push SDD 项目分支',
+      description: `即将把当前分支 ${git?.branch ?? ''} 推送到 remote ${git?.remote ?? 'origin'}。首次 Push 会建立 upstream；插件不会创建或合并 PR/MR。`,
+      submitLabel: '确认 Push', fields: [],
+    })
+    if (values !== undefined) await this.mutate({ kind: 'project-git-push', workspaceId: this.state.workspaceId! })
+  }
+
+  private async resolveKeyConflict(artifactUid: string): Promise<void> {
+    const artifact = this.state.snapshot?.artifacts.find(item => item.uid === artifactUid)
+    if (artifact === undefined) return
+    const values = await this.openForm({
+      title: `调整冲突草稿编号 · ${artifact.key}`,
+      description: `该草稿尚未绑定会话、开发空间或修订血缘。插件将保留阶段前缀并追加 UID 短后缀；所有关系继续使用不可变 UID。已验收交付件不会被重编号。`,
+      submitLabel: '调整草稿编号', fields: [],
+    })
+    if (values !== undefined) await this.mutate({ kind: 'resolve-artifact-key-conflict', workspaceId: this.state.workspaceId!, artifactUid })
   }
 
   private async mutate(action: SddAction): Promise<void> { this.state.loading = true; this.state.error = undefined; this.render(); try { const response = await call(action); if (!response.ok) throw new Error(response.error); if ('snapshot' in response) this.state.snapshot = response.snapshot } catch (error) { this.state.error = error instanceof Error ? error.message : String(error) } finally { this.state.loading = false; this.render() } }

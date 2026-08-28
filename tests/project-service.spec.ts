@@ -100,6 +100,26 @@ process.exit(1)\n`)
     expect(snapshot.sources).toEqual([expect.objectContaining({ content: expect.objectContaining({ description: '规则待讨论' }) })])
   })
 
+  it('detects duplicate display keys by UID lineage and safely renumbers an unbound draft', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-sdd-key-conflict-'))
+    const provider = new ManualSourceProvider()
+    const sources = { names: () => ['manual'], fetch: async (_name: string, request: any) => provider.get({ ...request, signal: request.signal ?? AbortSignal.timeout(1000) }) } as unknown as SddSourceRegistry
+    const service = new SddProjectService(api(root), sources)
+    await service.execute({ kind: 'import-source', workspaceId: 'w1', provider: 'manual', sourceKind: 'requirement', key: 'ITEM-1', input: { title: '需求一' } })
+    await service.execute({ kind: 'import-source', workspaceId: 'w1', provider: 'manual', sourceKind: 'requirement', key: 'ITEM-2', input: { title: '需求二' } })
+    let snapshot = await service.snapshot('w1')
+    for (const item of snapshot.workItems) await service.execute({ kind: 'create-draft', workspaceId: 'w1', stage: 'requirements', title: item.title, basedOn: [], sourceUids: [item.sourceUid!], workItemUid: item.uid })
+    snapshot = await service.snapshot('w1')
+    const [first, second] = snapshot.artifacts.sort((left, right) => left.key.localeCompare(right.key))
+    const manifestPath = join(root, second!.relativeDirectory, 'manifest.yaml'); const manifest = parse(await readFile(manifestPath, 'utf8')); manifest.key = first!.key; await writeFile(manifestPath, stringify(manifest), 'utf8')
+    snapshot = await service.snapshot('w1')
+    expect(snapshot.projectRepository?.keyConflicts).toEqual([expect.objectContaining({ key: first!.key, lineageUids: expect.arrayContaining([first!.uid, second!.uid]), renamableArtifactUids: expect.arrayContaining([first!.uid, second!.uid]) })])
+    await service.execute({ kind: 'resolve-artifact-key-conflict', workspaceId: 'w1', artifactUid: second!.uid })
+    snapshot = await service.snapshot('w1')
+    expect(snapshot.projectRepository?.keyConflicts).toEqual([])
+    expect(snapshot.artifacts.find(item => item.uid === second!.uid)?.key).toMatch(new RegExp(`^${first!.key}-[A-Z0-9]{4}$`))
+  })
+
   it('allows flexible stage selection and records stages that are not applicable', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-sdd-'))
     const provider = new ManualSourceProvider()

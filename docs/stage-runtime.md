@@ -54,3 +54,7 @@ development:
 ## 看板事实源
 
 看板是只读投影。交付状态来自 `.sdd/artifacts`，需求和缺陷来自 `.sdd/sources`，会话运行来自 `.sdd/runs`，代码与测试来自 `.sdd/development` 和 Git，活动历史来自 `.sdd/events/*.jsonl`。外部 Provider 可在 `tracking` 中提供标准状态、优先级、严重性、负责人和工作量；缺失工作量时看板只展示事项数量，不推断工作量。
+
+## 项目仓库同步
+
+“项目设置”中的 SDD 项目仓库协作只操作当前 Workspace 的 Git 根目录。状态刷新不访问网络；“获取远程状态”执行 Fetch；“Fast-forward 同步”要求工作区干净、当前分支未分叉且无冲突。项目提交按照 `collaboration.commitScope` 暂存 `.sdd/` 或整个工作空间，Push 只推送当前分支并在首次推送时建立 upstream。插件不会为分叉执行隐式 merge/rebase，也不会自动解决冲突。同步完成后的 Snapshot 会重新加载交付件、运行绑定、模板哈希和编号冲突，避免旧会话覆盖远程更新。

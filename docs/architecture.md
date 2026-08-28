@@ -44,6 +44,12 @@
 
 Host 通过 DSH Workspace registry 校验 `workspaceId`，浏览器不能直接指定任意宿主路径。浏览器只发送 Workspace ID 和领域动作。
 
+## SDD 项目仓库协作
+
+外层 Workspace Git 仓库负责共享 `.sdd/`、模板和交付状态，与开发阶段绑定的目标代码仓库相互独立。`project.yaml` 的 `collaboration` 配置 remote、协作基线、同步策略和提交范围。页面读取本地分支、upstream、ahead/behind、暂存、未跟踪和冲突文件；Fetch 可以直接执行，自动同步只使用干净工作区上的 `merge --ff-only`。分支分叉和 Git 冲突不会被自动合并。项目提交默认只暂存 `.sdd/` 与 `.gitignore`，Push 必须由用户显式确认。
+
+交付件关系始终使用 UUID，`REQ/UX/ARCH/SPEC/DEV` key 只是显示编号。并行分支合并后若不同 UID 血缘使用同一 key，项目状态会报告编号冲突：尚未绑定会话、开发空间或修订血缘的草稿可以保留原前缀并追加 UID 短后缀；任何已验收血缘冲突都需要人工决定，不能静默重编号。
+
 ## 身份与编号
 
 编号分为三层，不能相互替代：

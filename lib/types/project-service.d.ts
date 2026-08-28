@@ -1,15 +1,16 @@
 import type { ApiProxy } from '@deepseek-ai/dsh-host-apiproxy';
 import { type ArtifactFileSummary, type ImportPreview, type OpenSpecTemplatesPreview, type ProjectSnapshot, type RepositoryInspection, type RevisionPreview, type SddAction, type StageRun, type StageTemplatePreview } from './protocol.ts';
 import { type SddSourceRegistry } from './extensions.ts';
-import { GitDevelopmentService } from './git-service.ts';
+import { GitDevelopmentService, ProjectGitService } from './git-service.ts';
 import type { StageSessionController } from './session-controller.ts';
 export declare class SddProjectService {
     private readonly api;
     private readonly sourceRegistry?;
     private readonly sessionController?;
     private readonly git;
+    private readonly projectGit;
     private openSpecCliCache?;
-    constructor(api: ApiProxy, sourceRegistry?: SddSourceRegistry | undefined, sessionController?: StageSessionController | undefined, git?: GitDevelopmentService);
+    constructor(api: ApiProxy, sourceRegistry?: SddSourceRegistry | undefined, sessionController?: StageSessionController | undefined, git?: GitDevelopmentService, projectGit?: ProjectGitService);
     private openSpecCli;
     private workspace;
     execute(action: SddAction): Promise<ProjectSnapshot | ImportPreview | StageTemplatePreview | RepositoryInspection | {
@@ -54,6 +55,8 @@ export declare class SddProjectService {
     private updateWorkItemSettings;
     private updateStageApplicability;
     private addProjectRepository;
+    private updateProjectCollaboration;
+    private resolveArtifactKeyConflict;
     private updateProjectRepositoryBranch;
     private removeProjectRepository;
     private nextKey;

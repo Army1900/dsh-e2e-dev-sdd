@@ -40,7 +40,7 @@ import {
 } from './protocol.ts'
 import { type SddSourceRegistry, validateSourceEnvelope } from './extensions.ts'
 import { appendEvent, readRecentEvents } from './event-log.ts'
-import { GitDevelopmentService, listDevelopmentWorkspaces } from './git-service.ts'
+import { GitDevelopmentService, listDevelopmentWorkspaces, ProjectGitService } from './git-service.ts'
 import { evaluateQuality } from './quality.ts'
 import { runtimeDefinition } from './stage-definitions.ts'
 import type { StageSessionController } from './session-controller.ts'
@@ -212,6 +212,7 @@ function defaultProject(path: string): ProjectConfig {
       mergeStrategy: 'pull-request',
       repositories: [],
     },
+    collaboration: { remote: 'origin', baseBranch: 'main', syncStrategy: 'ff-only', commitScope: 'sdd' },
   }
 }
 
@@ -276,6 +277,15 @@ function validateProject(value: unknown): { project?: ProjectConfig; errors: str
     else if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(String(binding.provider))) errors.push(`sources.${kind}.provider：必须使用 kebab-case`)
   }
   if (value.workflow !== undefined && (!object(value.workflow) || (value.workflow.mode !== 'flexible' && value.workflow.mode !== 'strict'))) errors.push('workflow.mode：必须是 flexible 或 strict')
+  if (value.collaboration !== undefined) {
+    if (!object(value.collaboration)) errors.push('collaboration：必须是对象')
+    else {
+      if (!nonEmptyString(value.collaboration.remote) || !/^[A-Za-z0-9._-]+$/.test(String(value.collaboration.remote))) errors.push('collaboration.remote：必须是有效的 Git remote 名称')
+      if (!nonEmptyString(value.collaboration.baseBranch)) errors.push('collaboration.baseBranch：不能为空')
+      if (value.collaboration.syncStrategy !== 'ff-only' && value.collaboration.syncStrategy !== 'manual') errors.push('collaboration.syncStrategy：必须是 ff-only 或 manual')
+      if (value.collaboration.commitScope !== 'sdd' && value.collaboration.commitScope !== 'workspace') errors.push('collaboration.commitScope：必须是 sdd 或 workspace')
+    }
+  }
   if (!object(value.dependencies)) errors.push('dependencies：必须是对象')
   else for (const [stageIndex, stage] of STAGES.entries()) {
     const dependencies = value.dependencies[stage.id]
@@ -310,6 +320,33 @@ function validateProject(value: unknown): { project?: ProjectConfig; errors: str
   return errors.length === 0 ? { project: value as unknown as ProjectConfig, errors } : { errors }
 }
 
+function artifactKeyConflicts(artifacts: ArtifactSummary[], runs: StageRun[], developmentWorkspaces: DevelopmentWorkspace[]) {
+  const byUid = new Map(artifacts.map(item => [item.uid, item]))
+  const rootUid = (artifact: ArtifactSummary): string => {
+    let current = artifact; const seen = new Set<string>()
+    while (current.supersedes?.uid !== undefined && !seen.has(current.uid)) {
+      seen.add(current.uid)
+      const previous = byUid.get(current.supersedes.uid)
+      if (previous === undefined) break
+      current = previous
+    }
+    return current.uid
+  }
+  const groups = new Map<string, ArtifactSummary[]>()
+  for (const artifact of artifacts.filter(item => item.key !== 'INVALID')) {
+    const group = `${artifact.stage}\0${artifact.key}`
+    groups.set(group, [...(groups.get(group) ?? []), artifact])
+  }
+  return [...groups.values()].flatMap(items => {
+    const lineages = [...new Set(items.map(rootUid))]
+    if (lineages.length < 2) return []
+    const renamableArtifactUids = items.filter(item => (item.status === 'draft' || item.status === 'in-review') && item.supersedes === undefined
+      && !runs.some(run => run.artifactUid === item.uid) && !developmentWorkspaces.some(workspace => workspace.artifactUid === item.uid)
+      && !artifacts.some(candidate => candidate.supersedes?.uid === item.uid)).map(item => item.uid)
+    return [{ stage: items[0]!.stage, key: items[0]!.key, artifactUids: items.map(item => item.uid), lineageUids: lineages, statuses: items.map(item => item.status), renamableArtifactUids }]
+  }).sort((left, right) => left.key.localeCompare(right.key))
+}
+
 export class SddProjectService {
   private openSpecCliCache?: { expiresAt: number; value: { installed: boolean; version?: string } }
 
@@ -318,6 +355,7 @@ export class SddProjectService {
     private readonly sourceRegistry?: SddSourceRegistry,
     private readonly sessionController?: StageSessionController,
     private readonly git = new GitDevelopmentService(),
+    private readonly projectGit = new ProjectGitService(),
   ) {}
 
   private async openSpecCli(cwd: string, refresh = false): Promise<{ installed: boolean; version?: string }> {
@@ -372,6 +410,30 @@ export class SddProjectService {
     }
     if (action.kind === 'update-project-repository-branch') { await this.updateProjectRepositoryBranch(action.workspaceId, action.id, action.baseBranch); return this.snapshot(action.workspaceId) }
     if (action.kind === 'remove-project-repository') { await this.removeProjectRepository(action.workspaceId, action.id); return this.snapshot(action.workspaceId) }
+    if (action.kind === 'update-project-collaboration') {
+      await this.updateProjectCollaboration(action.workspaceId, action.remote, action.baseBranch, action.syncStrategy, action.commitScope)
+      return this.snapshot(action.workspaceId)
+    }
+    if (action.kind === 'project-git-fetch') {
+      const snapshot = await this.requireSnapshot(action.workspaceId); await this.projectGit.fetch(snapshot.workspace.path, snapshot.project)
+      return this.snapshot(action.workspaceId)
+    }
+    if (action.kind === 'project-git-sync') {
+      const snapshot = await this.requireSnapshot(action.workspaceId); await this.projectGit.sync(snapshot.workspace.path, snapshot.project)
+      return this.snapshot(action.workspaceId)
+    }
+    if (action.kind === 'project-git-commit') {
+      const snapshot = await this.requireSnapshot(action.workspaceId); await this.projectGit.commit(snapshot.workspace.path, snapshot.project, action.message)
+      return this.snapshot(action.workspaceId)
+    }
+    if (action.kind === 'project-git-push') {
+      const snapshot = await this.requireSnapshot(action.workspaceId); await this.projectGit.push(snapshot.workspace.path, snapshot.project)
+      return this.snapshot(action.workspaceId)
+    }
+    if (action.kind === 'resolve-artifact-key-conflict') {
+      await this.resolveArtifactKeyConflict(action.workspaceId, action.artifactUid)
+      return this.snapshot(action.workspaceId)
+    }
     if (action.kind === 'quality') return this.snapshot(action.workspaceId)
     if (action.kind === 'import-source') {
       const preview = await this.previewSourceImport(action.workspaceId, action.provider, action.sourceKind, action.key, action.connector, action.input)
@@ -514,6 +576,7 @@ export class SddProjectService {
       ...parsed,
       sources: parsed.sources ?? {},
       development: { ...parsed.development, repositories: parsed.development?.repositories ?? [] },
+      collaboration: parsed.collaboration ?? { remote: 'origin', baseBranch: 'main', syncStrategy: 'ff-only', commitScope: 'sdd' },
     }
     const artifacts: ArtifactSummary[] = []
     const artifactManifests = [...await walkForManifest(join(workspace.path, '.sdd', 'artifacts')), ...await walkForManifest(join(workspace.path, '.sdd', 'work-items'))]
@@ -581,7 +644,9 @@ export class SddProjectService {
     }
     const recentEvents = await readRecentEvents(workspace.path, 5000)
     const dashboard = this.dashboard(artifacts, sources, workItems, quality, developmentWorkspaces, recentEvents)
-    return { workspace, initialized: true, configuration: { status: 'valid', path: PROJECT_FILE, errors: [] }, project, artifacts, sources, sourceProviders: this.sourceRegistry?.names() ?? [], connectors, workItems, runs, quality, developmentWorkspaces, openSpecValidation, dashboard }
+    const projectRepository = await this.projectGit.inspect(workspace.path, project)
+    projectRepository.keyConflicts = artifactKeyConflicts(artifacts, runs, developmentWorkspaces)
+    return { workspace, initialized: true, configuration: { status: 'valid', path: PROJECT_FILE, errors: [] }, project, artifacts, sources, sourceProviders: this.sourceRegistry?.names() ?? [], connectors, workItems, runs, quality, developmentWorkspaces, openSpecValidation, dashboard, projectRepository }
   }
 
   private async validateOpenSpecSettings(
@@ -1119,6 +1184,44 @@ export class SddProjectService {
     const project = { ...snapshot.project, development: { ...snapshot.project.development, repositories: [...snapshot.project.development.repositories, { id: normalizedId, source: source.trim(), baseBranch: baseBranch.trim() }] } }
     await writeFile(join(snapshot.workspace.path, PROJECT_FILE), stringify(project), 'utf8')
     await appendEvent(snapshot.workspace.path, 'project.repository-added', normalizedId, undefined, { source: source.trim(), baseBranch: baseBranch.trim(), sourceKind })
+  }
+
+  private async updateProjectCollaboration(
+    workspaceId: string, remote: string, baseBranch: string, syncStrategy: 'ff-only' | 'manual', commitScope: 'sdd' | 'workspace',
+  ): Promise<void> {
+    const snapshot = await this.requireSnapshot(workspaceId)
+    const normalizedRemote = remote.trim(); const normalizedBranch = baseBranch.trim()
+    if (!/^[A-Za-z0-9._-]+$/.test(normalizedRemote)) throw new Error('Git remote 名称不合法')
+    if (normalizedBranch === '') throw new Error('协作基线分支不能为空')
+    const project = { ...snapshot.project, collaboration: { remote: normalizedRemote, baseBranch: normalizedBranch, syncStrategy, commitScope } }
+    await writeFile(join(snapshot.workspace.path, PROJECT_FILE), stringify(project), 'utf8')
+    await appendEvent(snapshot.workspace.path, 'project.collaboration-updated', project.project.key, undefined, project.collaboration)
+  }
+
+  private async resolveArtifactKeyConflict(workspaceId: string, artifactUid: string): Promise<void> {
+    const snapshot = await this.requireSnapshot(workspaceId)
+    const conflict = snapshot.projectRepository?.keyConflicts.find(item => item.renamableArtifactUids.includes(artifactUid))
+    if (conflict === undefined) throw new Error('该交付件不能安全自动调整编号；已验收版本或已有会话必须人工处理')
+    const artifact = this.requireArtifact(snapshot, artifactUid)
+    const suffix = artifact.uid.replace(/[^a-fA-F0-9]/g, '').slice(0, 4).toUpperCase() || artifact.uid.slice(0, 4).toUpperCase()
+    const key = `${artifact.key}-${suffix}`
+    if (snapshot.artifacts.some(item => item.key === key && item.uid !== artifact.uid)) throw new Error(`建议编号仍然冲突：${key}`)
+    const source = resolve(snapshot.workspace.path, artifact.relativeDirectory)
+    const target = join(dirname(source), `${slug(key)}-${artifact.uid.slice(0, 8)}`)
+    if (!contained(resolve(snapshot.workspace.path, '.sdd'), source) || !contained(resolve(snapshot.workspace.path, '.sdd'), target)) throw new Error('交付件目录超出 .sdd')
+    if (source !== target && await exists(target)) throw new Error(`目标交付件目录已存在：${relative(snapshot.workspace.path, target)}`)
+    const manifestPath = join(source, 'manifest.yaml')
+    const manifest = parse(await readFile(manifestPath, 'utf8')) as ArtifactManifest
+    manifest.key = key; manifest.updatedAt = new Date().toISOString()
+    await writeFile(manifestPath, stringify(manifest), 'utf8')
+    const entryPath = join(source, manifest.entry)
+    if (await exists(entryPath)) {
+      const content = await readFile(entryPath, 'utf8'); const lines = content.split(/\r?\n/)
+      if (lines[0]?.startsWith(`# ${artifact.key} `)) lines[0] = `# ${key}${lines[0].slice(artifact.key.length + 2)}`
+      await writeFile(entryPath, lines.join('\n'), 'utf8')
+    }
+    if (source !== target) await rename(source, target)
+    await appendEvent(snapshot.workspace.path, 'artifact.key-renumbered', key, artifact.stage, { artifactUid, previousKey: artifact.key, key })
   }
 
   private async updateProjectRepositoryBranch(workspaceId: string, id: string, baseBranch: string): Promise<void> {

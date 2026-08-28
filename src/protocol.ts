@@ -411,6 +411,41 @@ export interface ProjectConfig {
     mergeStrategy: 'pull-request' | 'local-merge' | 'manual'
     repositories: DevelopmentRepositoryConfig[]
   }
+  collaboration?: {
+    remote: string
+    baseBranch: string
+    syncStrategy: 'ff-only' | 'manual'
+    commitScope: 'sdd' | 'workspace'
+  }
+}
+
+export interface ArtifactKeyConflict {
+  stage: StageId
+  key: string
+  artifactUids: string[]
+  lineageUids: string[]
+  statuses: ArtifactStatus[]
+  renamableArtifactUids: string[]
+}
+
+export interface ProjectRepositoryState {
+  isRepository: boolean
+  exactWorkspaceRoot: boolean
+  repositoryRoot?: string
+  branch?: string
+  detached: boolean
+  headCommit?: string
+  remote: string
+  baseBranch: string
+  upstream?: string
+  changedFiles: number
+  stagedFiles: number
+  untrackedFiles: number
+  conflictFiles: string[]
+  ahead: number
+  behind: number
+  divergence: 'none' | 'ahead' | 'behind' | 'diverged' | 'untracked'
+  keyConflicts: ArtifactKeyConflict[]
 }
 
 export interface ArtifactSummary extends ArtifactManifest {
@@ -449,6 +484,7 @@ export interface ProjectSnapshot {
   developmentWorkspaces: DevelopmentWorkspace[]
   openSpecValidation: Record<string, OpenSpecValidation>
   dashboard: DashboardSnapshot
+  projectRepository?: ProjectRepositoryState
 }
 
 export interface OpenSpecValidation {
@@ -560,6 +596,12 @@ export type SddAction =
   | { kind: 'initialize-project-repository'; workspaceId: string; source: string; branch: string }
   | { kind: 'update-project-repository-branch'; workspaceId: string; id: string; baseBranch: string }
   | { kind: 'remove-project-repository'; workspaceId: string; id: string }
+  | { kind: 'update-project-collaboration'; workspaceId: string; remote: string; baseBranch: string; syncStrategy: 'ff-only' | 'manual'; commitScope: 'sdd' | 'workspace' }
+  | { kind: 'project-git-fetch'; workspaceId: string }
+  | { kind: 'project-git-sync'; workspaceId: string }
+  | { kind: 'project-git-commit'; workspaceId: string; message: string }
+  | { kind: 'project-git-push'; workspaceId: string }
+  | { kind: 'resolve-artifact-key-conflict'; workspaceId: string; artifactUid: string }
   | { kind: 'quality'; workspaceId: string; artifactUid: string }
   | { kind: 'context'; workspaceId: string; stage: StageId; artifactUid: string; artifactUids: string[]; sourceUids?: string[] }
   | { kind: 'bind-session'; workspaceId: string; runUid?: string; stage: StageId; artifactUid: string; sessionId: string; artifactUids: string[]; sourceUids?: string[] }
@@ -624,6 +666,11 @@ export function parseAction(value: unknown): SddAction | undefined {
   if (action.kind === 'initialize-project-repository' && typeof action.source === 'string' && typeof action.branch === 'string') return action as unknown as SddAction
   if (action.kind === 'update-project-repository-branch' && typeof action.id === 'string' && typeof action.baseBranch === 'string') return action as unknown as SddAction
   if (action.kind === 'remove-project-repository' && typeof action.id === 'string') return action as unknown as SddAction
+  if (action.kind === 'update-project-collaboration' && typeof action.remote === 'string' && typeof action.baseBranch === 'string'
+    && (action.syncStrategy === 'ff-only' || action.syncStrategy === 'manual') && (action.commitScope === 'sdd' || action.commitScope === 'workspace')) return action as unknown as SddAction
+  if (action.kind === 'project-git-fetch' || action.kind === 'project-git-sync' || action.kind === 'project-git-push') return action as unknown as SddAction
+  if (action.kind === 'project-git-commit' && typeof action.message === 'string' && action.message.trim() !== '') return action as unknown as SddAction
+  if (action.kind === 'resolve-artifact-key-conflict' && typeof action.artifactUid === 'string') return action as unknown as SddAction
   if (action.kind === 'context' && isStageId(action.stage) && typeof action.artifactUid === 'string' && stringArray(action.artifactUids)
     && (action.sourceUids === undefined || stringArray(action.sourceUids))) return action as unknown as SddAction
   if (action.kind === 'bind-session' && isStageId(action.stage) && typeof action.artifactUid === 'string'
