@@ -94,13 +94,15 @@ Agent 可以创建和修改 draft；接受动作必须由用户从阶段页面�
 - 外部代码仓库使用独立 clone。
 - 一个开发单元可以包含多个仓库。
 - Agent Session 保持项目空间 cwd；代码工具的 `workdir` 被 Guard 限定到绑定的隔离 checkout。
+- 开发会话显式获得每个仓库的根目录和开发目标，并在修改前读取仓库内 `AGENTS.md`、构建/CI 配置及匹配的 `.agents/skills/*/SKILL.md`；嵌套 Skill 不依赖自动出现在外层会话目录。
+- 同一工作单元的开发交付件修订复用物理 checkout 和特性分支，但创建新的 artifact 注册并使旧测试证据失效。
 - 代码提交到目标仓库；SDD 仓库只保存 commit、PR、merge commit 和测试证据。
 
 合并策略支持 `pull-request`、`local-merge` 和 `manual`，默认 `pull-request`。
 
 ## UI 兼容性
 
-DSH 当前侧边栏没有第三方多入口导航 slot。插件采用 dsh-web 已验证的 DOM 注入和独立中央面板模式，集中管理五个入口。所有 DOM 写入都有插件属性标识并随 Cordis effect 卸载。后续 DSH 提供正式导航 slot 时，应迁移到 slot，而不改变领域协议。
+DSH 当前侧边栏没有第三方多入口导航 slot。插件采用 dsh-web 已验证的 DOM 注入和独立中央面板模式，集中管理项目看板、五阶段工作台和项目设置入口。所有 DOM 写入都有插件属性标识并随 Cordis effect 卸载。后续 DSH 提供正式导航 slot 时，应迁移到 slot，而不改变领域协议。
 
 ## 已实现的运行层
 

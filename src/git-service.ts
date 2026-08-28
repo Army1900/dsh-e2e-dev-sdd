@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
-import { access, lstat, mkdir, readFile, readlink, writeFile } from 'node:fs/promises'
+import { access, lstat, mkdir, readFile, readlink, unlink, writeFile } from 'node:fs/promises'
 import { isAbsolute, join, relative, resolve } from 'node:path'
 import { parse, stringify } from 'yaml'
 import type { ArtifactSummary, DevelopmentRepositoryConfig, DevelopmentRepositoryState, DevelopmentTestEvidence, DevelopmentWorkspace, ProjectConfig, RepositoryInspection } from './protocol.ts'
@@ -157,6 +157,40 @@ function repositoryConfig(project: ProjectConfig, id: string): DevelopmentReposi
 }
 
 export class GitDevelopmentService {
+  async inheritRevision(projectPath: string, previousArtifactUid: string, artifact: ArtifactSummary): Promise<DevelopmentWorkspace | undefined> {
+    if (artifact.stage !== 'development') return undefined
+    const current = await readDevelopmentWorkspace(projectPath, artifact.uid)
+    if (current !== undefined) return current
+    const previous = await readDevelopmentWorkspace(projectPath, previousArtifactUid)
+    if (previous === undefined) return undefined
+    const now = new Date().toISOString()
+    const inherited: DevelopmentWorkspace = {
+      ...previous,
+      uid: randomUUID(),
+      key: artifact.key,
+      artifactUid: artifact.uid,
+      inputs: artifact.basedOn.map(input => ({ artifactUid: input.uid, version: input.version })),
+      repositories: previous.repositories.map(repository => ({
+        ...repository,
+        tests: (repository.tests ?? []).map(test => ({ ...test, worktreeHash: `revision-invalidated:${test.worktreeHash}`, stale: true })),
+      })),
+      createdAt: now,
+      updatedAt: now,
+    }
+    await this.write(projectPath, inherited)
+    return inherited
+  }
+
+  async discardInheritedRevision(projectPath: string, artifactUid: string, previousArtifactUid: string): Promise<boolean> {
+    const current = await readDevelopmentWorkspace(projectPath, artifactUid)
+    const previous = await readDevelopmentWorkspace(projectPath, previousArtifactUid)
+    if (current === undefined || previous === undefined) return false
+    const signature = (workspace: DevelopmentWorkspace) => workspace.repositories.map(repository => `${repository.id}\0${resolve(repository.path)}`).sort()
+    if (JSON.stringify(signature(current)) !== JSON.stringify(signature(previous))) return false
+    await unlink(developmentFile(projectPath, artifactUid))
+    return true
+  }
+
   async inspectSource(projectPath: string, source: string): Promise<RepositoryInspection> {
     const normalized = source.trim()
     if (normalized === '') throw new Error('repository source is required')
@@ -213,7 +247,11 @@ export class GitDevelopmentService {
     const target = resolve(root, artifact.key, repositoryId)
     if (relative(root, target).startsWith('..')) throw new Error('development workspace path escapes configured root')
     await mkdir(resolve(root, artifact.key), { recursive: true })
-    if (await exists(target)) throw new Error(`development target already exists but is not registered: ${target}`)
+    if (await exists(target)) {
+      const inherited = artifact.supersedes?.uid === undefined ? undefined : await this.inheritRevision(projectPath, artifact.supersedes.uid, artifact)
+      if (inherited?.repositories.some(item => item.id === repositoryId)) return inherited
+      throw new Error(`development target already exists but is not registered: ${target}`)
+    }
     const branch = project.development.branchPattern.replaceAll('{artifactKey}', artifact.key).replaceAll('{repositoryId}', repositoryId)
     await run(['git', 'check-ref-format', '--branch', branch], projectPath)
     const localSource = isAbsolute(config.source) ? config.source : resolve(projectPath, config.source)

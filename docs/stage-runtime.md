@@ -26,11 +26,11 @@
 
 ## 隔离开发空间
 
-项目代码仓库目录与阶段解耦，可在任意阶段的“本需求开发设置”维护。本地来源读取现有本地分支及 `origin` 远程跟踪分支，远程来源通过 `git ls-remote --symref` 读取远程分支和默认分支，再用下拉框选择基线。工作单元用 `repositoryScope` 记录可能涉及的仓库，用 `developmentTargets` 和 `developmentTargetDetails` 记录实际修改仓库及每仓具体目标。隔离开发空间创建前可以切换基线或移除仓库；移除只修改 SDD 配置，不删除源代码。
+项目代码仓库目录与默认基线统一在“项目设置”维护。本地来源读取现有本地分支及 `origin` 远程跟踪分支，远程来源通过 `git ls-remote --symref` 读取远程分支和默认分支，再用下拉框选择基线。系统设计用 `repositoryScope` 确认可能涉及的仓库，规格设计用 `developmentTargets` 和 `developmentTargetDetails` 明确实际修改仓库及每仓具体目标；灵活流程跳过前置阶段时可在开发阶段补齐。隔离开发空间创建前可以切换基线或移除仓库；移除只修改 SDD 配置，不删除源代码。
 
 本地仓库只有 `git init`、尚无任何提交时，页面可以在用户明确确认后自动创建 `chore: initialize repository` 空提交和初始分支。自动提交使用临时提交身份，不修改用户 Git 配置，也不会添加未跟踪文件；如果索引中已经存在暂存文件则拒绝执行，避免把用户文件意外纳入提交。空远程仓库涉及远程写入和认证，插件不自动 push，用户需要先显式初始化远程。
 
-开发测试阶段不会直接在基线分支写代码。本地来源从所选基线提交创建 Git Worktree 和 `branchPattern` 定义的特性分支；远程来源在隔离目录克隆基线后创建同名特性分支。测试与提交都发生在特性分支，推送、创建合并请求以及合入基线是负责人显式执行的交付动作。
+开发测试阶段不会直接在基线分支写代码。本地来源从所选基线提交创建 Git Worktree 和 `branchPattern` 定义的特性分支；远程来源在隔离目录克隆基线后创建同名特性分支。开发交付件的新修订继承同一工作单元的物理 Worktree 和特性分支，注册切换到新 artifact uid，旧测试证据因输入修订而失效。测试与提交都发生在特性分支，推送、创建合并请求以及合入基线是负责人显式执行的交付动作。
 
 OpenSpec 是需求级可选增强，不是开发硬门禁。插件分别检查宿主机 CLI 和隔离 Worktree 中的配置目录；缺失时用户可以安装 CLI、执行官方 `openspec init --tools ...`，或关闭关联继续开发。初始化只准备 `openspec/config.yaml`、目录以及所选 AI 工具的 skills/commands，默认模板仍由 OpenSpec 安装包中的 `spec-driven` Schema 运行时解析，因此空的 `specs/` 与 `changes/` 是正常状态。初始化后插件展示 `openspec templates --json` 的解析位置；用户可执行 `openspec schema fork spec-driven <name>` 创建代码仓内可编辑、可提交的 Schema，并由插件执行校验。每个需求还需显式执行 `openspec new change <id> --schema <schema>` 创建 Change，之后 AI 才能维护 proposal/specs/design/tasks。插件不会自动提交或推送这些文件。
 

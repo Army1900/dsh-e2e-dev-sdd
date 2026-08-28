@@ -2,6 +2,8 @@ import type { ArtifactSummary, DevelopmentWorkspace, ProjectConfig, RepositoryIn
 export declare function readDevelopmentWorkspace(projectPath: string, artifactUid: string): Promise<DevelopmentWorkspace | undefined>;
 export declare function listDevelopmentWorkspaces(projectPath: string, artifacts: readonly ArtifactSummary[]): Promise<DevelopmentWorkspace[]>;
 export declare class GitDevelopmentService {
+    inheritRevision(projectPath: string, previousArtifactUid: string, artifact: ArtifactSummary): Promise<DevelopmentWorkspace | undefined>;
+    discardInheritedRevision(projectPath: string, artifactUid: string, previousArtifactUid: string): Promise<boolean>;
     inspectSource(projectPath: string, source: string): Promise<RepositoryInspection>;
     initializeLocalSource(projectPath: string, source: string, branch: string): Promise<RepositoryInspection>;
     validateSource(projectPath: string, source: string, baseBranch: string): Promise<'local' | 'remote'>;

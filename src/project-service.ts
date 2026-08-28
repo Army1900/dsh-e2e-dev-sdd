@@ -845,6 +845,7 @@ export class SddProjectService {
     }
     if (plan.templateChanged) manifest.template = await snapshotStageTemplate(directory, await loadStageTemplate(snapshot.workspace.path, previous.stage))
     await writeFile(join(directory, 'manifest.yaml'), stringify(manifest), 'utf8')
+    if (previous.stage === 'development') await this.git.inheritRevision(snapshot.workspace.path, previous.uid, { ...manifest, files: [], relativeDirectory: relative(snapshot.workspace.path, directory), validationErrors: [] })
     await appendEvent(snapshot.workspace.path, 'artifact.revision-created', previous.key, previous.stage, { artifactUid: uid, supersedes: previous.uid, version: manifest.version, revisionKind, changes: revision.changes.length, previousRunUid })
   }
 
@@ -852,7 +853,10 @@ export class SddProjectService {
     const snapshot = await this.requireSnapshot(workspaceId)
     const artifact = this.requireArtifact(snapshot, artifactUid)
     if (artifact.status !== 'draft' && artifact.status !== 'in-review') throw new Error('only a draft or in-review artifact can be discarded')
-    if (snapshot.developmentWorkspaces.some(item => item.artifactUid === artifact.uid)) throw new Error('cannot discard an artifact after its development workspace has been created')
+    if (snapshot.developmentWorkspaces.some(item => item.artifactUid === artifact.uid)) {
+      const detached = artifact.supersedes?.uid === undefined ? false : await this.git.discardInheritedRevision(snapshot.workspace.path, artifact.uid, artifact.supersedes.uid)
+      if (!detached) throw new Error('cannot discard an artifact after its development workspace has been created')
+    }
     const root = resolve(snapshot.workspace.path, '.sdd')
     const source = resolve(snapshot.workspace.path, artifact.relativeDirectory)
     if (!contained(root, source)) throw new Error('artifact directory escapes .sdd')
@@ -1568,6 +1572,7 @@ export class SddProjectService {
       ? undefined : resolve(openSpecRepository.path, workItem.openSpec.path)
     const openSpecRuntime = openSpecTarget === undefined || openSpecValidation?.status !== 'valid' ? ''
       : `OpenSpec 已启用并通过检查。OpenSpec 项目根目录：${dirname(openSpecTarget)}。当前 Schema：${openSpecValidation.schema ?? 'spec-driven'}。当前需求 Change：${openSpecValidation.changeExists === true ? openSpecValidation.changeId : '尚未创建，不能假设已有 proposal/specs/design/tasks'}。官方生成的共享 skills 位于 ${join(dirname(openSpecTarget), '.agents', 'skills')}；由于代码仓是当前 SDD 工作空间内的隔离 Worktree，执行 OpenSpec 工作流前必须先读取匹配的 openspec-*/SKILL.md 并遵循，在 OpenSpec 项目根目录运行 openspec 命令。`
+    const repositoryContext = stage !== 'development' || development === undefined ? '' : `开发仓库上下文加载协议：\n${development.repositories.map(repository => `- ${repository.id} 根目录：${repository.path}\n  具体开发目标：${workItem?.developmentTargetDetails?.[repository.id] ?? '未填写'}\n  首次修改前先在该根目录查找并读取 AGENTS.md、README、构建入口、CI 配置及 .agents/skills 下与当前工作匹配的 SKILL.md；读取仓库内文件后遵循更深层 AGENTS.md。`).join('\n')}\n会话 cwd 保持为外层 SDD 项目以维护交付件；代码操作必须使用上面绑定的仓库根目录。Skill 即使未自动出现在会话技能列表，也必须按明确路径读取后遵循。多仓库不得混用 workdir。`
     this.sessionController?.bind({
       sessionId, stage, artifactUid: artifact.uid, projectPath: workspacePath,
       artifactDirectory: resolve(workspacePath, artifact.relativeDirectory),
@@ -1583,6 +1588,7 @@ export class SddProjectService {
         workItem === undefined ? '' : `仓库范围：${(workItem.repositoryScope ?? []).join('、') || '未配置'}\n开发目标：${(workItem.developmentTargets ?? []).map(id => `${id}${workItem.developmentTargetDetails?.[id] ? `（${workItem.developmentTargetDetails[id]}）` : ''}`).join('、') || '未配置'}\nOpenSpec：${openSpecDescription(workItem, openSpecValidation)}`,
         openSpecRuntime,
         development === undefined ? '' : `隔离代码目录：\n${development.repositories.map(item => `- ${item.id}: ${item.path}`).join('\n')}`,
+        repositoryContext,
       ].filter(Boolean).join('\n'),
     })
   }

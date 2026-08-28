@@ -28,6 +28,13 @@ describe('GitDevelopmentService', () => {
     await writeFile(join(workspace.repositories[0]!.path, 'app.txt'), 'changed after test\n')
     await expect(service.commit(projectPath, artifact.uid, 'app', 'stale result')).rejects.toThrow('no valid test evidence')
     workspace = await service.recordAiTest(projectPath, artifact.uid, 'app', { command: 'test-command', description: 'Unit', exitCode: 0, output: 'passed again', sessionId: 's1', passed: true })
+    const revision = { ...artifact, uid: 'artifact-2', version: '0.2.0', supersedes: { uid: artifact.uid, version: '0.1.0' } } as ArtifactSummary
+    const inherited = await service.inheritRevision(projectPath, artifact.uid, revision)
+    expect(inherited).toMatchObject({ artifactUid: revision.uid, repositories: [{ id: 'app', path: workspace.repositories[0]!.path }] })
+    expect(inherited?.repositories[0]?.tests).not.toHaveLength(0)
+    expect(inherited?.repositories[0]?.tests?.every(test => test.stale && test.worktreeHash.startsWith('revision-invalidated:'))).toBe(true)
+    expect(await service.discardInheritedRevision(projectPath, revision.uid, artifact.uid)).toBe(true)
+    expect(await service.create(projectPath, project, revision, 'app')).toMatchObject({ artifactUid: revision.uid, repositories: [{ id: 'app', path: workspace.repositories[0]!.path }] })
     workspace = await service.commit(projectPath, artifact.uid, 'app', 'DEV-1 implementation'); expect(workspace.repositories[0]!.ahead).toBe(1); expect(workspace.repositories[0]!.changedFiles).toBe(0)
     expect(workspace.repositories[0]!.tests?.at(-1)).toMatchObject({ passed: true, stale: false })
     expect(await readFile(join(workspace.repositories[0]!.path, 'app.txt'), 'utf8')).toBe('changed after test\n')
