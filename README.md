@@ -120,7 +120,7 @@ dsh --profile web --dump-config
 - 外部材料必须先转换为 Source Envelope，再由 AI 整合为正式交付件。
 - 每个需求的代码开发使用独立 Worktree 或 clone，不污染主项目空间。
 
-阶段运行机制见 [docs/stage-runtime.md](docs/stage-runtime.md)，项目模板定制见 [docs/templates.md](docs/templates.md)，多文件交付规范见 [docs/artifact-package.md](docs/artifact-package.md)，详细设计见 [docs/architecture.md](docs/architecture.md)，业务适配开发见 [docs/business-development-guide.md](docs/business-development-guide.md)，Cordis Provider 扩展见 [docs/extensions.md](docs/extensions.md)，规范文件位于 [schemas/](schemas/)。
+完整的用户流程、角色分工和页面截图见 [五阶段 SDD 完整开发流程 Blog](docs/blog-sdd-end-to-end-workflow.md)。阶段运行机制见 [docs/stage-runtime.md](docs/stage-runtime.md)，项目模板定制见 [docs/templates.md](docs/templates.md)，多文件交付规范见 [docs/artifact-package.md](docs/artifact-package.md)，详细设计见 [docs/architecture.md](docs/architecture.md)，业务适配开发见 [docs/business-development-guide.md](docs/business-development-guide.md)，Cordis Provider 扩展见 [docs/extensions.md](docs/extensions.md)，规范文件位于 [schemas/](schemas/)。
 
 ## 开发验证
 
