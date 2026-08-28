@@ -1,13 +1,11 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { spawn } from 'node:child_process'
-import { readFileSync } from 'node:fs'
 import { access, copyFile, mkdir, readFile, readdir, realpath, rename, stat, unlink, writeFile } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import type { ApiProxy, RpcId } from '@deepseek-ai/dsh-host-apiproxy'
 import { parse, stringify } from 'yaml'
 import {
   STAGES,
-  artifactTemplate,
   type ArtifactManifest,
   type ArtifactFileSummary,
   type ArtifactReference,
@@ -46,7 +44,7 @@ import { GitDevelopmentService, listDevelopmentWorkspaces } from './git-service.
 import { evaluateQuality } from './quality.ts'
 import { runtimeDefinition } from './stage-definitions.ts'
 import type { StageSessionController } from './session-controller.ts'
-import { ensureProjectTemplates, loadStageTemplate, renderStageTemplate, renderStageTemplateContent, snapshotStageTemplate } from './template-store.ts'
+import { ensureProjectTemplates, loadStageTemplate, renderStageTemplate, snapshotStageTemplate } from './template-store.ts'
 
 const PROJECT_FILE = '.sdd/project.yaml'
 interface StagedImport { preview: ImportPreview; bundle: SourceBundle }
@@ -98,6 +96,13 @@ async function exists(path: string): Promise<boolean> {
 function contained(root: string, target: string): boolean {
   const path = relative(root, target)
   return path === '' || (!path.startsWith('..') && !isAbsolute(path))
+}
+
+/** DSH file mentions are workspace-relative and use forward slashes on every host. */
+function fileMention(path: string): string {
+  const normalized = path.replaceAll('\\', '/')
+  if (/[\u0000-\u001f\u007f-\u009f"]/u.test(normalized)) throw new Error(`path cannot be represented as a DSH file reference: ${path}`)
+  return /\s/u.test(normalized) ? `@"${normalized}"` : `@${normalized}`
 }
 
 interface NativeCommandResult { stdout: string; stderr: string; exitCode: number }
@@ -1453,26 +1458,29 @@ export class SddProjectService {
     }
     const inputs: string[] = []
     for (const artifact of selected) {
-      const path = join(snapshot.workspace.path, artifact.relativeDirectory, artifact.entry)
-      const inventory = artifact.files.map(file => `- ${artifact.relativeDirectory}/${file.path} · ${file.kind} · ${file.contentHash}`).join('\n')
-      inputs.push(`\n## 输入 ${artifact.key} v${artifact.version}\n主文档：${artifact.relativeDirectory}/${artifact.entry}\n交付包哈希：${artifact.contentHash ?? '未记录'}\n文件清单：\n${inventory || '- 无'}\n\n${await readFile(path, 'utf8')}`)
+      const manifestPath = join(artifact.relativeDirectory, 'manifest.yaml')
+      const entryPath = join(artifact.relativeDirectory, artifact.entry)
+      const inventory = artifact.files.map(file => `- ${fileMention(join(artifact.relativeDirectory, file.path))} · ${file.kind} · ${file.contentHash}`).join('\n')
+      inputs.push(`\n## 输入 ${artifact.key} v${artifact.version}\n交付件清单：${fileMention(manifestPath)}\n主文档：${fileMention(entryPath)}\n交付包哈希：${artifact.contentHash ?? '未记录'}\n文件清单：\n${inventory || '- 无'}\n读取要求：先读取清单和主文档；附件仅在当前问题需要时按清单读取。`)
     }
     for (const uid of sourceUids) {
       const source = snapshot.sources.find(item => item.uid === uid)
       if (source === undefined) throw new Error(`source not found: ${uid}`)
       if (source.validationErrors.length > 0) throw new Error(`source is invalid: ${source.title}: ${source.validationErrors.join('; ')}`)
-      inputs.push(`\n## 原始来源 ${source.externalKey ?? source.uid} · ${source.title}\nProvider：${source.provider}\n类型：${source.kind}\n内容哈希：${source.contentHash}\n\n${stringify(source.content)}`)
+      inputs.push(`\n## 原始来源 ${source.externalKey ?? source.uid} · ${source.title}\n来源文件：${fileMention(source.relativePath)}\nProvider：${source.provider}\n类型：${source.kind}\n内容哈希：${source.contentHash}\n读取要求：使用 read 工具读取来源文件后再提取需求，不得仅根据标题推断内容。`)
     }
+    const targetManifestPath = join(target.relativeDirectory, 'manifest.yaml')
+    const targetEntryPath = join(target.relativeDirectory, target.entry)
     return [
       `你正在执行 DSH SDD 的“${definition.label}”阶段，角色侧重：${definition.role}。`,
       `项目仓库：${snapshot.workspace.path}`,
-      `本次固定绑定交付件：${target.key}，路径 ${target.relativeDirectory}/${target.entry}。`,
+      `本次固定绑定交付件：${target.key}\n交付件清单：${fileMention(targetManifestPath)}\n交付件正文：${fileMention(targetEntryPath)}`,
       `阶段目标：${runtime.objective}`,
       workItem === undefined ? '' : `本需求选择的仓库范围：${(workItem.repositoryScope ?? []).join('、') || '未配置'}\n本需求开发目标：${(workItem.developmentTargets ?? []).map(id => `${id}${workItem.developmentTargetDetails?.[id] ? `（${workItem.developmentTargetDetails[id]}）` : ''}`).join('、') || '未配置'}\nOpenSpec：${openSpecDescription(workItem, snapshot.openSpecValidation[workItem.uid])}`,
       `完成清单：\n${runtime.completionChecklist.map((item, index) => `${index + 1}. ${item}`).join('\n')}`,
-      target.template === undefined ? '' : `本交付件固定模板快照：${target.relativeDirectory}/${target.template.snapshotPath}\n模板版本：${target.template.version}\n模板哈希：${target.template.contentHash}`,
+      target.template === undefined ? '' : `本交付件固定模板快照：${fileMention(join(target.relativeDirectory, target.template.snapshotPath))}\n模板配置：${fileMention(join(target.relativeDirectory, target.template.configSnapshotPath))}\n模板版本：${target.template.version}\n模板哈希：${target.template.contentHash}`,
       target.revision === undefined ? '' : `本次修订类型：${target.revision.kind === 'upstream' ? '上游输入变更' : '用户主动调整'}\n变更原因：${target.revision.reason ?? '由结构化输入差异触发'}\n影响范围：${target.revision.affectedAreas?.join('、') || '待讨论确认'}\n输入差异：\n${target.revision.changes.map(change => `- ${change.label}：${change.previous?.version ?? change.previous?.contentHash ?? '无'} → ${change.current?.version ?? change.current?.contentHash ?? '无'}`).join('\n') || '- 用户主动调整，上游输入未变化'}\n历史阶段运行：${target.revision.previousRunUid ?? '无'}`,
-      '先检查输入完整性，再与用户讨论。每轮形成的确定结论必须同步写入绑定交付件；不得创建或切换到另一个交付件。',
+      '文件引用只提供定位信息，不代表文件内容已经进入上下文。首次回答前必须使用 read 工具读取绑定交付件、固定模板、全部所选来源及上游主文档，再检查输入完整性并与用户讨论；其他附件按需读取。每轮形成的确定结论必须同步写入绑定交付件；不得创建或切换到另一个交付件。',
       ...inputs,
     ].filter(Boolean).join('\n\n')
   }
@@ -1548,15 +1556,12 @@ export class SddProjectService {
     sessionId: string, stage: StageId, workspacePath: string, project: ProjectConfig,
     artifact: ArtifactSummary, development: DevelopmentWorkspace | undefined, workItem?: WorkItem, openSpecValidation?: OpenSpecValidation,
   ): void {
-    let boundTemplate = artifactTemplate(artifact.stage, artifact.key, artifact.title)
-    if (artifact.template !== undefined) {
-      const templatePath = resolve(workspacePath, artifact.relativeDirectory, artifact.template.snapshotPath)
-      const artifactRoot = resolve(workspacePath, artifact.relativeDirectory)
-      if (contained(artifactRoot, templatePath)) {
-        try { boundTemplate = readFileSync(templatePath, 'utf8') } catch { /* legacy or damaged snapshots fall back to the built-in template */ }
-      }
-    }
-    boundTemplate = renderStageTemplateContent(boundTemplate, artifact.key, artifact.title)
+    const templatePath = artifact.template === undefined
+      ? join('.sdd', 'templates', artifact.stage, 'deliverable.md')
+      : join(artifact.relativeDirectory, artifact.template.snapshotPath)
+    const templateConfigPath = artifact.template === undefined
+      ? join('.sdd', 'templates', artifact.stage, 'template.yaml')
+      : join(artifact.relativeDirectory, artifact.template.configSnapshotPath)
     const openSpecRepository = workItem?.openSpec?.enabled === true
       ? development?.repositories.find(item => item.id === workItem.openSpec?.repositoryId) : undefined
     const openSpecTarget = openSpecRepository === undefined || workItem?.openSpec?.path === undefined
@@ -1568,7 +1573,9 @@ export class SddProjectService {
       artifactDirectory: resolve(workspacePath, artifact.relativeDirectory),
       developmentDirectories: development?.repositories.map(item => item.path) ?? [],
       developmentRepositories: development?.repositories.map(item => ({ id: item.id, path: item.path })) ?? [],
-      artifactTemplate: boundTemplate,
+      artifactTemplateReference: fileMention(templatePath),
+      artifactTemplateConfigReference: fileMention(templateConfigPath),
+      requiredSections: artifact.template?.requiredSections ?? runtimeDefinition(stage).requiredSections.slice(),
       systemPrompt: [
         `绑定项目：${project.project.key} · ${project.project.name}`,
         `绑定交付件：${artifact.key} (${artifact.uid})`,

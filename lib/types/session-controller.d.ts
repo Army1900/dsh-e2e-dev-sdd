@@ -12,7 +12,9 @@ interface SessionBindingSpec {
         id: string;
         path: string;
     }>;
-    artifactTemplate: string;
+    artifactTemplateReference: string;
+    artifactTemplateConfigReference?: string;
+    requiredSections: string[];
 }
 export interface AiTestExecutionEvidence {
     projectPath: string;
