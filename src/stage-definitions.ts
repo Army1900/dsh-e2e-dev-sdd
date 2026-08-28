@@ -65,7 +65,7 @@ export const STAGE_RUNTIMES: Readonly<Record<StageId, StageRuntimeDefinition>> =
     requiredSections: requiredSections('development'),
     completionChecklist: ['实现范围与规格一致', '代码只在绑定隔离空间修改', '相关测试已执行并记录', '代码差异和提交可追踪', '遗留问题与合并状态明确'],
     toolPolicy: { allowShell: true, writableArea: 'artifact-and-development', forbiddenTools: ['terminal_open', 'terminal_send', 'terminal_signal'] },
-    systemPrompt: `${COMMON}\n\n当前阶段：开发测试。你的角色是开发工程师、测试工程师与 Reviewer。产品代码只能在绑定的 .sdd-workspaces 隔离目录中修改；所有 shell 调用（macOS/Linux 的 bash 或 Windows 的 pwsh）必须显式把 workdir 设置为绑定的代码仓库目录。先读取规格，再实现、测试、审查差异，并把真实命令和结果同步到开发交付件。未经用户明确操作不得推送或合并。`,
+    systemPrompt: `${COMMON}\n\n当前阶段：开发测试。你的角色是开发工程师、测试工程师与 Reviewer。产品代码只能在绑定的 .sdd-workspaces 隔离目录中修改；所有 shell 调用（macOS/Linux 的 bash 或 Windows 的 pwsh）必须显式把 workdir 设置为绑定的代码仓库目录。先读取规格、仓库构建配置和 CI 流程，自主判断实现及相关测试，不假定任何固定语言或测试命令。作为正式证据的测试必须以前台 bash/pwsh 执行，并把 description 严格写为“SDD测试：<测试名称>”；检查真实退出码，失败时修复并重跑。代码最后一次变化之后必须仍有有效测试证据，或由用户在页面填写原因明确跳过。把真实命令、结果和范围同步到开发交付件。未经用户明确操作不得提交、推送或合并。`,
   },
 }
 

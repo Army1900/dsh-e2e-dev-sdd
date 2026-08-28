@@ -334,7 +334,8 @@ export interface DevelopmentRepositoryConfig {
   id: string
   source: string
   baseBranch: string
-  testCommands: Array<{ id: string; label: string; argv: string[] }>
+  /** Legacy input retained for existing project files; AI-driven testing does not execute it. */
+  testCommands?: Array<{ id: string; label: string; argv: string[] }>
 }
 
 export interface RepositoryInspection {
@@ -356,7 +357,22 @@ export interface DevelopmentRepositoryState {
   changedFiles: number
   ahead: number
   behind: number
-  lastTest?: { id: string; passed: boolean; exitCode: number; ranAt: string; output: string }
+  tests?: DevelopmentTestEvidence[]
+}
+
+export interface DevelopmentTestEvidence {
+  uid: string
+  source: 'ai-shell' | 'manual-skip'
+  command?: string
+  description: string
+  passed: boolean
+  skipped: boolean
+  exitCode?: number | null
+  ranAt: string
+  output: string
+  worktreeHash: string
+  stale: boolean
+  sessionId?: string
 }
 
 export interface DevelopmentWorkspace {
@@ -538,7 +554,7 @@ export type SddAction =
   | { kind: 'development-install-openspec'; workspaceId: string; workItemUid: string }
   | { kind: 'development-initialize-openspec'; workspaceId: string; artifactUid: string; tools: string }
   | { kind: 'development-status'; workspaceId: string; artifactUid: string }
-  | { kind: 'development-test'; workspaceId: string; artifactUid: string; repositoryId: string; testId: string }
+  | { kind: 'development-skip-test'; workspaceId: string; artifactUid: string; repositoryId: string; reason: string }
   | { kind: 'development-commit'; workspaceId: string; artifactUid: string; repositoryId: string; message: string }
   | { kind: 'import-source'; workspaceId: string; provider: string; sourceKind: string; key: string; connector?: string; input?: ManualSourceInput }
   | { kind: 'preview-source-import'; workspaceId: string; provider: string; sourceKind: string; key: string; connector?: string; input?: ManualSourceInput }
@@ -596,8 +612,8 @@ export function parseAction(value: unknown): SddAction | undefined {
     && (action.kind === 'development-status' || typeof action.repositoryId === 'string')) return action as unknown as SddAction
   if (action.kind === 'development-install-openspec' && typeof action.workItemUid === 'string') return action as unknown as SddAction
   if (action.kind === 'development-initialize-openspec' && typeof action.artifactUid === 'string' && typeof action.tools === 'string') return action as unknown as SddAction
-  if (action.kind === 'development-test' && typeof action.artifactUid === 'string' && typeof action.repositoryId === 'string'
-    && typeof action.testId === 'string') return action as unknown as SddAction
+  if (action.kind === 'development-skip-test' && typeof action.artifactUid === 'string' && typeof action.repositoryId === 'string'
+    && typeof action.reason === 'string' && action.reason.trim() !== '') return action as unknown as SddAction
   if (action.kind === 'development-commit' && typeof action.artifactUid === 'string' && typeof action.repositoryId === 'string'
     && typeof action.message === 'string' && action.message.trim() !== '') return action as unknown as SddAction
   if ((action.kind === 'import-source' || action.kind === 'preview-source-import') && typeof action.provider === 'string' && typeof action.sourceKind === 'string'

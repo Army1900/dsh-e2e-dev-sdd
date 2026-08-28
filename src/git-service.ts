@@ -1,8 +1,9 @@
 import { spawn } from 'node:child_process'
+import { createHash, randomUUID } from 'node:crypto'
 import { access, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { isAbsolute, join, relative, resolve } from 'node:path'
 import { parse, stringify } from 'yaml'
-import type { ArtifactSummary, DevelopmentRepositoryConfig, DevelopmentRepositoryState, DevelopmentWorkspace, ProjectConfig, RepositoryInspection } from './protocol.ts'
+import type { ArtifactSummary, DevelopmentRepositoryConfig, DevelopmentRepositoryState, DevelopmentTestEvidence, DevelopmentWorkspace, ProjectConfig, RepositoryInspection } from './protocol.ts'
 
 const ID = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
 const MAX_OUTPUT = 1024 * 1024
@@ -50,7 +51,18 @@ async function repositoryState(state: DevelopmentRepositoryState): Promise<Devel
   const status = await run(['git', 'status', '--porcelain=v1'], state.path)
   const head = (await run(['git', 'rev-parse', 'HEAD'], state.path)).stdout.trim()
   const counts = (await run(['git', 'rev-list', '--left-right', '--count', `${state.baseCommit}...HEAD`], state.path)).stdout.trim().split(/\s+/).map(Number)
-  return { ...state, headCommit: head, behind: counts[0] ?? 0, ahead: counts[1] ?? 0, changedFiles: status.stdout.split(/\r?\n/).filter(Boolean).length }
+  const worktreeHash = await worktreeFingerprint(state.path)
+  return { ...state, headCommit: head, behind: counts[0] ?? 0, ahead: counts[1] ?? 0, changedFiles: status.stdout.split(/\r?\n/).filter(Boolean).length, tests: (state.tests ?? []).map(test => ({ ...test, stale: test.worktreeHash !== worktreeHash })) }
+}
+
+async function worktreeFingerprint(path: string): Promise<string> {
+  const files = [...new Set((await run(['git', 'ls-files', '-c', '-o', '--exclude-standard', '-z'], path)).stdout.split('\0').filter(Boolean))].sort()
+  const hashes: string[] = []
+  for (const file of files) {
+    const hashed = await run(['git', 'hash-object', '--', file], path, 120_000, true)
+    hashes.push(`${file}\0${hashed.exitCode === 0 ? hashed.stdout.trim() : 'MISSING'}`)
+  }
+  return `sha256:${createHash('sha256').update(hashes.join('\0')).digest('hex')}`
 }
 
 export async function readDevelopmentWorkspace(projectPath: string, artifactUid: string): Promise<DevelopmentWorkspace | undefined> {
@@ -154,7 +166,7 @@ export class GitDevelopmentService {
     const now = new Date().toISOString()
     const state: DevelopmentRepositoryState = {
       id: config.id, source: config.source, baseBranch: config.baseBranch, baseCommit, workingBranch: branch,
-      path: target, headCommit: baseCommit, changedFiles: 0, ahead: 0, behind: 0,
+      path: target, headCommit: baseCommit, changedFiles: 0, ahead: 0, behind: 0, tests: [],
     }
     const workspace: DevelopmentWorkspace = existing ?? {
       schema: 'dsh-sdd/development-workspace@1', uid: crypto.randomUUID(), key: artifact.key, artifactUid: artifact.uid,
@@ -174,21 +186,38 @@ export class GitDevelopmentService {
     return workspace
   }
 
-  async test(projectPath: string, project: ProjectConfig, artifactUid: string, repositoryId: string, testId: string): Promise<DevelopmentWorkspace> {
+  async recordAiTest(
+    projectPath: string, artifactUid: string, repositoryId: string,
+    evidence: { command: string; description: string; exitCode: number | null; output: string; sessionId: string; passed: boolean },
+  ): Promise<DevelopmentWorkspace> {
     const workspace = await readDevelopmentWorkspace(projectPath, artifactUid)
     if (workspace === undefined) throw new Error('development workspace has not been created')
     const state = workspace.repositories.find(item => item.id === repositoryId)
     if (state === undefined) throw new Error(`development repository has not been created: ${repositoryId}`)
-    const command = repositoryConfig(project, repositoryId).testCommands.find(item => item.id === testId)
-    if (command === undefined) throw new Error(`test command is not configured: ${testId}`)
-    const result = await run(command.argv, state.path, 600_000, true)
-    state.lastTest = {
-      id: command.id, passed: result.exitCode === 0, exitCode: result.exitCode, ranAt: new Date().toISOString(),
-      output: `${result.stdout}${result.stderr}`.slice(-64 * 1024),
+    const test: DevelopmentTestEvidence = {
+      uid: randomUUID(), source: 'ai-shell', command: evidence.command, description: evidence.description,
+      passed: evidence.passed, skipped: false, exitCode: evidence.exitCode, ranAt: new Date().toISOString(),
+      output: evidence.output.slice(-64 * 1024), worktreeHash: await worktreeFingerprint(state.path), stale: false, sessionId: evidence.sessionId,
     }
-    Object.assign(state, await repositoryState(state)); workspace.updatedAt = new Date().toISOString()
+    const previous = (state.tests ?? []).filter(item => item.command !== evidence.command || item.worktreeHash !== test.worktreeHash)
+    state.tests = [...previous, test].slice(-50); workspace.updatedAt = new Date().toISOString()
     await this.write(projectPath, workspace)
     return workspace
+  }
+
+  async skipTest(projectPath: string, artifactUid: string, repositoryId: string, reason: string): Promise<DevelopmentWorkspace> {
+    const workspace = await readDevelopmentWorkspace(projectPath, artifactUid)
+    if (workspace === undefined) throw new Error('development workspace has not been created')
+    const state = workspace.repositories.find(item => item.id === repositoryId)
+    if (state === undefined) throw new Error(`development repository has not been created: ${repositoryId}`)
+    const description = reason.trim()
+    if (description === '') throw new Error('a reason is required to skip testing')
+    const test: DevelopmentTestEvidence = {
+      uid: randomUUID(), source: 'manual-skip', description, passed: true, skipped: true, ranAt: new Date().toISOString(),
+      output: '', worktreeHash: await worktreeFingerprint(state.path), stale: false,
+    }
+    state.tests = [...(state.tests ?? []).filter(item => item.worktreeHash !== test.worktreeHash), test].slice(-50)
+    workspace.updatedAt = new Date().toISOString(); await this.write(projectPath, workspace); return workspace
   }
 
   async commit(projectPath: string, artifactUid: string, repositoryId: string, message: string): Promise<DevelopmentWorkspace> {
@@ -197,6 +226,10 @@ export class GitDevelopmentService {
     const state = workspace.repositories.find(item => item.id === repositoryId)
     if (state === undefined) throw new Error(`development repository has not been created: ${repositoryId}`)
     if (message.trim() === '') throw new Error('commit message must not be empty')
+    Object.assign(state, await repositoryState(state))
+    const currentEvidence = (state.tests ?? []).filter(test => !test.stale)
+    if (currentEvidence.length === 0) throw new Error('current code has no valid test evidence; ask AI to verify it or explicitly skip testing with a reason')
+    if (currentEvidence.some(test => !test.passed)) throw new Error('current code still has failing test evidence')
     await run(['git', 'add', '-A'], state.path)
     const staged = await run(['git', 'diff', '--cached', '--quiet'], state.path, 120_000, true)
     if (staged.exitCode === 0) throw new Error('there are no changes to commit')

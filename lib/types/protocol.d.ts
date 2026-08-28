@@ -274,7 +274,8 @@ export interface DevelopmentRepositoryConfig {
     id: string;
     source: string;
     baseBranch: string;
-    testCommands: Array<{
+    /** Legacy input retained for existing project files; AI-driven testing does not execute it. */
+    testCommands?: Array<{
         id: string;
         label: string;
         argv: string[];
@@ -298,13 +299,21 @@ export interface DevelopmentRepositoryState {
     changedFiles: number;
     ahead: number;
     behind: number;
-    lastTest?: {
-        id: string;
-        passed: boolean;
-        exitCode: number;
-        ranAt: string;
-        output: string;
-    };
+    tests?: DevelopmentTestEvidence[];
+}
+export interface DevelopmentTestEvidence {
+    uid: string;
+    source: 'ai-shell' | 'manual-skip';
+    command?: string;
+    description: string;
+    passed: boolean;
+    skipped: boolean;
+    exitCode?: number | null;
+    ranAt: string;
+    output: string;
+    worktreeHash: string;
+    stale: boolean;
+    sessionId?: string;
 }
 export interface DevelopmentWorkspace {
     schema: 'dsh-sdd/development-workspace@1';
@@ -619,11 +628,11 @@ export type SddAction = {
     workspaceId: string;
     artifactUid: string;
 } | {
-    kind: 'development-test';
+    kind: 'development-skip-test';
     workspaceId: string;
     artifactUid: string;
     repositoryId: string;
-    testId: string;
+    reason: string;
 } | {
     kind: 'development-commit';
     workspaceId: string;

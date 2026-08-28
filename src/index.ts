@@ -7,6 +7,7 @@ import { SddSourceRegistry } from './extensions.ts'
 import { CommandSourceProvider } from './providers/command-source.ts'
 import { ManualSourceProvider } from './providers/manual-source.ts'
 import { StageSessionController } from './session-controller.ts'
+import { GitDevelopmentService } from './git-service.ts'
 import type {} from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-system-prompt'
 import type {} from '@deepseek-ai/dsh-tools'
@@ -26,8 +27,9 @@ function installBuiltins(ctx: Context): void {
 
 installHostApi.inject = ['apiProxy', 'webServer', 'agents', 'systemPrompt', 'tools', 'dshSddSources']
 function installHostApi(ctx: Context): void {
-  const sessions = new StageSessionController(ctx)
-  const service = new SddProjectService(ctx.apiProxy, ctx.dshSddSources, sessions)
+  const git = new GitDevelopmentService()
+  const sessions = new StageSessionController(ctx, async evidence => { await git.recordAiTest(evidence.projectPath, evidence.artifactUid, evidence.repositoryId, evidence) })
+  const service = new SddProjectService(ctx.apiProxy, ctx.dshSddSources, sessions, git)
   ctx.effect(() => ctx.webServer.register(makeSddRoute(service)), 'dsh-sdd: host api')
 }
 

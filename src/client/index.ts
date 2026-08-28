@@ -284,7 +284,15 @@ class SddWorkbench {
     const workItem = snapshot.workItems.find(item => item.uid === artifact.workItemUid)
     const targets = new Set(workItem?.developmentTargets ?? [])
     const configured = (snapshot.project?.development.repositories ?? []).filter(item => artifact.workItemUid === undefined || targets.has(item.id))
-    return `<section class="dsh-sdd-card dsh-sdd-wide"><h2>隔离开发空间 · ${escapeHtml(artifact.key)}</h2>${workspace === undefined ? `<p class="dsh-sdd-muted">可用代码仓库：${configured.map(item => `${item.id}（基线 ${item.baseBranch}）`).join('、') || '尚未在 project.yaml 配置 repositories'}。创建后会从所选基线建立独立的 SDD 特性分支。</p><button class="dsh-sdd-button" data-action="development-create">创建 Worktree / Clone 与特性分支</button>` : `<div class="dsh-sdd-list">${workspace.repositories.map(repo => `<div class="dsh-sdd-row"><span></span><span><strong>${escapeHtml(repo.id)} · 特性分支 ${escapeHtml(repo.workingBranch)}</strong><span class="dsh-sdd-muted">基线 ${escapeHtml(repo.baseBranch)} @ ${escapeHtml(repo.baseCommit.slice(0, 8))}<br>${escapeHtml(repo.path)}<br>变更 ${repo.changedFiles} · ahead ${repo.ahead} · behind ${repo.behind}${repo.lastTest ? ` · 测试 ${repo.lastTest.passed ? '通过' : '失败'}` : ''}</span></span><span><button class="dsh-sdd-button" data-dev-test="${escapeHtml(repo.id)}">运行测试</button><button class="dsh-sdd-button" data-dev-commit="${escapeHtml(repo.id)}">提交代码</button></span></div>`).join('')}</div><p class="dsh-sdd-muted">插件只在特性分支提交代码；推送、创建合并请求并合入基线分支由负责人显式执行，避免自动改写主分支。</p><div class="dsh-sdd-actions"><button class="dsh-sdd-button" data-action="development-create">添加仓库</button><button class="dsh-sdd-button" data-action="development-status">刷新 Git 状态</button></div>`}</section>`
+    const repositoryRows = workspace?.repositories.map(repo => {
+      const currentTests = (repo.tests ?? []).filter(test => !test.stale)
+      const testState = currentTests.length === 0 ? '当前代码尚无测试证据'
+        : currentTests.some(test => !test.passed) ? `当前测试失败 ${currentTests.filter(test => !test.passed).length} 项`
+          : currentTests.every(test => test.skipped) ? `已人工跳过测试：${currentTests.at(-1)?.description ?? ''}`
+            : `当前测试通过 ${currentTests.filter(test => !test.skipped).length} 项${currentTests.some(test => test.skipped) ? '（含跳过说明）' : ''}`
+      return `<div class="dsh-sdd-row"><span></span><span><strong>${escapeHtml(repo.id)} · 特性分支 ${escapeHtml(repo.workingBranch)}</strong><span class="dsh-sdd-muted">基线 ${escapeHtml(repo.baseBranch)} @ ${escapeHtml(repo.baseCommit.slice(0, 8))}<br>${escapeHtml(repo.path)}<br>变更 ${repo.changedFiles} · ahead ${repo.ahead} · behind ${repo.behind} · ${escapeHtml(testState)}</span></span><span><button class="dsh-sdd-button" data-dev-test="${escapeHtml(repo.id)}">让 AI 验证</button><button class="dsh-sdd-button" data-dev-skip-test="${escapeHtml(repo.id)}">跳过测试</button><button class="dsh-sdd-button" data-dev-commit="${escapeHtml(repo.id)}">提交代码</button></span></div>`
+    }).join('') ?? ''
+    return `<section class="dsh-sdd-card dsh-sdd-wide"><h2>隔离开发空间 · ${escapeHtml(artifact.key)}</h2>${workspace === undefined ? `<p class="dsh-sdd-muted">可用代码仓库：${configured.map(item => `${item.id}（基线 ${item.baseBranch}）`).join('、') || '尚未在 project.yaml 配置 repositories'}。创建后会从所选基线建立独立的 SDD 特性分支。</p><button class="dsh-sdd-button" data-action="development-create">创建 Worktree / Clone 与特性分支</button>` : `<div class="dsh-sdd-list">${repositoryRows}</div><p class="dsh-sdd-muted">AI 根据仓库、规格和 CI 自行选择测试。真实 shell 退出码会绑定当前代码状态；测试后再次修改代码会使证据过期。提交、推送和合并仍由负责人显式操作。</p><div class="dsh-sdd-actions"><button class="dsh-sdd-button" data-action="development-create">添加仓库</button><button class="dsh-sdd-button" data-action="development-status">刷新 Git 状态</button></div>`}</section>`
   }
 
   private bind(): void {
@@ -314,7 +322,7 @@ class SddWorkbench {
     root.querySelectorAll<HTMLButtonElement>('[data-sync]').forEach(button => button.addEventListener('click', () => { void this.resumeRun(button.dataset.sync!, true) }))
     root.querySelectorAll<HTMLButtonElement>('[data-complete]').forEach(button => button.addEventListener('click', () => { void this.mutate({ kind: 'complete-run', workspaceId: this.state.workspaceId!, runUid: button.dataset.complete! }) }))
     root.querySelector<HTMLElement>('[data-action="development-create"]')?.addEventListener('click', () => { void this.createDevelopment() }); root.querySelector<HTMLElement>('[data-action="development-status"]')?.addEventListener('click', () => { if (this.state.targetArtifactUid) void this.mutate({ kind: 'development-status', workspaceId: this.state.workspaceId!, artifactUid: this.state.targetArtifactUid }) })
-    root.querySelectorAll<HTMLButtonElement>('[data-dev-test]').forEach(button => button.addEventListener('click', () => { void this.runTest(button.dataset.devTest!) })); root.querySelectorAll<HTMLButtonElement>('[data-dev-commit]').forEach(button => button.addEventListener('click', () => { void this.commit(button.dataset.devCommit!) }))
+    root.querySelectorAll<HTMLButtonElement>('[data-dev-test]').forEach(button => button.addEventListener('click', () => { void this.runTest(button.dataset.devTest!) })); root.querySelectorAll<HTMLButtonElement>('[data-dev-skip-test]').forEach(button => button.addEventListener('click', () => { void this.skipTest(button.dataset.devSkipTest!) })); root.querySelectorAll<HTMLButtonElement>('[data-dev-commit]').forEach(button => button.addEventListener('click', () => { void this.commit(button.dataset.devCommit!) }))
     root.querySelector<HTMLButtonElement>('[data-resolve-removal]')?.addEventListener('click', () => { void this.resolveRemoval() })
     root.querySelectorAll<HTMLButtonElement>('[data-matrix-work-item]').forEach(button => button.addEventListener('click', () => {
       this.state.workItemUid = button.dataset.matrixWorkItem; this.state.menu = button.dataset.matrixStage as StageId; this.state.targetArtifactUid = button.dataset.matrixArtifact
@@ -840,20 +848,41 @@ class SddWorkbench {
 
   private async runTest(repositoryId: string): Promise<void> {
     if (!this.state.targetArtifactUid) return
-    const repository = this.state.snapshot?.project?.development.repositories.find(item => item.id === repositoryId)
-    if (repository === undefined || repository.testCommands.length === 0) { this.state.error = `仓库 ${repositoryId} 尚未配置测试项`; return this.render() }
+    const snapshot = this.state.snapshot
+    const workspace = snapshot?.developmentWorkspaces.find(item => item.artifactUid === this.state.targetArtifactUid)
+    const repository = workspace?.repositories.find(item => item.id === repositoryId)
+    const run = snapshot?.runs.find(item => item.artifactUid === this.state.targetArtifactUid && item.status !== 'completed' && item.sessionId !== undefined)
+    if (repository === undefined) return
+    if (run?.sessionId === undefined) { this.state.error = '请先开始开发阶段对话，再让 AI 执行测试验证'; return this.render() }
+    const binding = this.sessions.binding(run.sessionId as never)
+    if (binding === undefined) { this.state.error = '绑定的开发会话当前不可用，请先恢复对话'; return this.render() }
+    const prompt = `请对代码仓库 ${repositoryId} 完成当前变更的测试验证。仓库路径：${repository.path}。先读取已接受规格、仓库构建配置和 CI 流程，自主判断需要运行的测试；可以修复失败后重跑。每个要作为正式测试证据的命令必须使用前台 bash/pwsh，workdir 必须位于该仓库，并把 description 严格写成“SDD测试：<测试名称>”。不要伪造结果；将实际命令、退出码、覆盖范围、跳过项和最终结论同步到绑定开发交付件。完成前确认代码最后一次变化之后仍有通过的测试证据。`
+    try {
+      const accepted = await binding.session.prompt([{ type: 'text', text: prompt }], 'queue')
+      if (!accepted.ok) { this.state.error = `${accepted.error.code}: ${accepted.error.message}`; return this.render() }
+      this.sessions.open(run.sessionId as never); this.close()
+    } catch (error) {
+      this.state.error = `无法将测试任务发送给开发会话：${error instanceof Error ? error.message : String(error)}`
+      this.render()
+    }
+  }
+
+  private async skipTest(repositoryId: string): Promise<void> {
+    if (!this.state.targetArtifactUid) return
     const values = await this.openForm({
-      title: `运行测试 · ${repositoryId}`, description: '只允许执行项目配置中预先声明的测试项。', submitLabel: '开始测试',
-      fields: [{ name: 'testId', label: '测试项', type: 'select', required: true, value: repository.testCommands[0]!.id, options: repository.testCommands.map(item => ({ value: item.id, label: `${item.label} · ${item.argv.join(' ')}` })) }],
+      title: `跳过测试 · ${repositoryId}`,
+      description: '仅用于文档变更、测试环境不可用或确实没有可执行测试的情况。原因会绑定当前代码状态；代码变化后需要重新确认。',
+      submitLabel: '确认跳过测试',
+      fields: [{ name: 'reason', label: '跳过原因', type: 'textarea', required: true, placeholder: '说明为什么当前变更不运行测试，以及采用了什么替代验证。' }],
     })
     if (values === undefined) return
-    await this.mutate({ kind: 'development-test', workspaceId: this.state.workspaceId!, artifactUid: this.state.targetArtifactUid, repositoryId, testId: String(values.testId) })
+    await this.mutate({ kind: 'development-skip-test', workspaceId: this.state.workspaceId!, artifactUid: this.state.targetArtifactUid, repositoryId, reason: String(values.reason) })
   }
 
   private async commit(repositoryId: string): Promise<void> {
     if (!this.state.targetArtifactUid) return
     const values = await this.openForm({
-      title: `提交代码 · ${repositoryId}`, description: '将把该隔离开发空间中的全部变更暂存并创建本地 Git 提交；不会自动推送或合并。', submitLabel: '提交代码',
+      title: `提交代码 · ${repositoryId}`, description: '仅当当前代码状态存在有效的通过或人工跳过证据时才允许提交。插件会暂存隔离开发空间中的全部变更并创建本地 Git 提交；不会自动推送或合并。', submitLabel: '提交代码',
       fields: [{ name: 'message', label: '提交说明', type: 'textarea', required: true, placeholder: '例如：feat: 完成订单部分退款流程' }],
     })
     if (values === undefined) return

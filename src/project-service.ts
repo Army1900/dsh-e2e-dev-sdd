@@ -293,14 +293,6 @@ function validateProject(value: unknown): { project?: ProjectConfig; errors: str
       if (!nonEmptyString(repository.id) || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(String(repository.id))) errors.push(`${base}.id：必须是非空 kebab-case`)
       if (!nonEmptyString(repository.source)) errors.push(`${base}.source：不能为空`)
       if (!nonEmptyString(repository.baseBranch)) errors.push(`${base}.baseBranch：不能为空`)
-      if (!Array.isArray(repository.testCommands)) errors.push(`${base}.testCommands：必须是数组`)
-      else repository.testCommands.forEach((command, commandIndex) => {
-        const commandBase = `${base}.testCommands[${commandIndex}]`
-        if (!object(command) || !nonEmptyString(command.id) || !nonEmptyString(command.label)
-          || !Array.isArray(command.argv) || command.argv.length === 0 || command.argv.some(argument => !nonEmptyString(argument))) {
-          errors.push(`${commandBase}：需要有效的 id、label 和非空 argv`)
-        }
-      })
     })
     if (Array.isArray(value.development.repositories)) {
       const ids = value.development.repositories.filter(object).map(repository => repository.id).filter(nonEmptyString)
@@ -409,12 +401,11 @@ export class SddProjectService {
       await this.git.status(snapshot.workspace.path, action.artifactUid)
       return this.snapshot(action.workspaceId)
     }
-    if (action.kind === 'development-test') {
+    if (action.kind === 'development-skip-test') {
       const snapshot = await this.requireSnapshot(action.workspaceId)
       const artifact = this.requireArtifact(snapshot, action.artifactUid)
-      const development = await this.git.test(snapshot.workspace.path, snapshot.project, artifact.uid, action.repositoryId, action.testId)
-      const result = development.repositories.find(item => item.id === action.repositoryId)?.lastTest
-      await appendEvent(snapshot.workspace.path, 'test.completed', artifact.key, artifact.stage, { repositoryId: action.repositoryId, testId: action.testId, passed: result?.passed ?? false })
+      await this.git.skipTest(snapshot.workspace.path, artifact.uid, action.repositoryId, action.reason)
+      await appendEvent(snapshot.workspace.path, 'test.skipped', artifact.key, artifact.stage, { repositoryId: action.repositoryId, reason: action.reason.trim() })
       return this.snapshot(action.workspaceId)
     }
     if (action.kind === 'development-commit') {
@@ -952,7 +943,7 @@ export class SddProjectService {
     if (source.trim() === '' || baseBranch.trim() === '') throw new Error('repository source and base branch are required')
     if (snapshot.project.development.repositories.some(item => item.id === normalizedId)) throw new Error(`repository already exists: ${normalizedId}`)
     const sourceKind = await this.git.validateSource(snapshot.workspace.path, source.trim(), baseBranch.trim())
-    const project = { ...snapshot.project, development: { ...snapshot.project.development, repositories: [...snapshot.project.development.repositories, { id: normalizedId, source: source.trim(), baseBranch: baseBranch.trim(), testCommands: [] }] } }
+    const project = { ...snapshot.project, development: { ...snapshot.project.development, repositories: [...snapshot.project.development.repositories, { id: normalizedId, source: source.trim(), baseBranch: baseBranch.trim() }] } }
     await writeFile(join(snapshot.workspace.path, PROJECT_FILE), stringify(project), 'utf8')
     await appendEvent(snapshot.workspace.path, 'project.repository-added', normalizedId, undefined, { source: source.trim(), baseBranch: baseBranch.trim(), sourceKind })
   }
@@ -1407,9 +1398,10 @@ export class SddProjectService {
     const openSpecRuntime = openSpecTarget === undefined || openSpecValidation?.status !== 'valid' ? ''
       : `OpenSpec 已启用并通过检查。OpenSpec 项目根目录：${dirname(openSpecTarget)}。官方生成的共享 skills 位于 ${join(dirname(openSpecTarget), '.agents', 'skills')}；由于代码仓是当前 SDD 工作空间内的隔离 Worktree，执行 OpenSpec 工作流前必须先读取匹配的 openspec-*/SKILL.md 并遵循，在 OpenSpec 项目根目录运行 openspec 命令。`
     this.sessionController?.bind({
-      sessionId, stage, projectPath: workspacePath,
+      sessionId, stage, artifactUid: artifact.uid, projectPath: workspacePath,
       artifactDirectory: resolve(workspacePath, artifact.relativeDirectory),
       developmentDirectories: development?.repositories.map(item => item.path) ?? [],
+      developmentRepositories: development?.repositories.map(item => ({ id: item.id, path: item.path })) ?? [],
       artifactTemplate: boundTemplate,
       systemPrompt: [
         `绑定项目：${project.project.key} · ${project.project.name}`,
@@ -1463,7 +1455,7 @@ export class SddProjectService {
     const requirements = currentSources.filter(item => item.kind === 'requirement')
     const defects = currentSources.filter(item => item.kind === 'defect')
     const tracedSources = new Set(artifacts.flatMap(item => item.derivedFrom.map(reference => reference.uid)))
-    const tests = workspaces.flatMap(item => item.repositories.map(repository => repository.lastTest)).filter(item => item !== undefined)
+    const tests = workspaces.flatMap(item => item.repositories.flatMap(repository => repository.tests ?? [])).filter(item => !item.stale)
     const blockers = [
       ...workItems.filter(item => item.change !== undefined).map(item => `${item.key}：${item.status === 'removed-pending' ? '外部需求已移除，等待确认' : `需求已变更，需重审 ${item.change!.reviewRequiredStages.map(stage => stageDefinition(stage).label).join('、')}`}`),
       ...workItems.filter(item => artifacts.some(artifact => artifact.workItemUid === item.uid && artifact.stage === 'architecture') && (item.repositoryScope ?? []).length === 0).map(item => `${item.key}：系统设计尚未确认代码仓库范围`),
@@ -1537,7 +1529,7 @@ export class SddProjectService {
       requirements: { total: requirements.length, traced: requirements.filter(item => tracedSources.has(item.uid)).length, completed: requirements.filter(item => item.tracking?.normalizedStatus === 'done').length },
       defects: { total: defects.length, open: defects.filter(item => !resolvedStatuses.has(item.tracking?.normalizedStatus ?? '')).length, resolved: defects.filter(item => resolvedStatuses.has(item.tracking?.normalizedStatus ?? '')).length },
       artifacts: { total: artifacts.length, drafts: artifacts.filter(item => item.status === 'draft' || item.status === 'in-review').length, accepted: artifacts.filter(item => item.status === 'accepted').length },
-      development: { workspaces: workspaces.length, changedFiles: workspaces.flatMap(item => item.repositories).reduce((sum, item) => sum + item.changedFiles, 0), passingTests: tests.filter(item => item.passed).length, failingTests: tests.filter(item => !item.passed).length, commits: workspaces.flatMap(item => item.repositories).filter(item => item.headCommit !== item.baseCommit).length },
+      development: { workspaces: workspaces.length, changedFiles: workspaces.flatMap(item => item.repositories).reduce((sum, item) => sum + item.changedFiles, 0), passingTests: tests.filter(item => item.passed && !item.skipped).length, failingTests: tests.filter(item => !item.passed).length, commits: workspaces.flatMap(item => item.repositories).filter(item => item.headCommit !== item.baseCommit).length },
       workload: [...workload.entries()].sort(([left], [right]) => left.localeCompare(right)).map(([unit, value]) => ({ unit, ...value })),
       stageFlow, deliveryMatrix, burnup,
       traceability: currentSources.length === 0 ? 100 : Math.round(currentSources.filter(item => tracedSources.has(item.uid)).length / currentSources.length * 100), blockers, recentEvents,

@@ -38,7 +38,7 @@
           "type": "array",
           "items": {
             "type": "object", "additionalProperties": false,
-            "required": ["id", "source", "baseBranch", "testCommands"],
+            "required": ["id", "source", "baseBranch"],
             "properties": {
               "id": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$" },
               "source": { "type": "string", "minLength": 1 },

@@ -25,7 +25,8 @@ describe('StageSessionController', () => {
   it('installs a scoped stage prompt and enforces write and shell policy', async () => {
     const ctx = new Context(); const prompts = new FakePrompt(ctx); const tools = new FakeTools(ctx); const agents = new FakeAgents(ctx)
     agents.agent = { id: 's1', ctx }
-    const controller = new StageSessionController(ctx)
+    const evidence: unknown[] = []
+    const controller = new StageSessionController(ctx, async item => { evidence.push(item) })
     controller.bind({ sessionId: 's1', stage: 'requirements', systemPrompt: 'BOUND {{project}}', projectPath: '/project', artifactDirectory: '/project/.sdd/artifacts/requirements/a1', developmentDirectories: [], artifactTemplate: '# {{artifactKey}} Requirements template' })
     expect(prompts.sections[0]?.text).toContain('BOUND')
     expect(prompts.sections[0]?.text).not.toContain('{{')
@@ -36,7 +37,7 @@ describe('StageSessionController', () => {
     expect(guard({ name: 'write', arguments: { file_path: '.sdd/artifacts/requirements/a1/deliverable.md' }, agent: agents.agent })).toBeUndefined()
     expect(guard({ name: 'write', arguments: { file_path: '.sdd/artifacts/requirements/a1/.template/deliverable.md' }, agent: agents.agent })).toContain('快照不可修改')
     expect(guard({ name: 'write', arguments: { file_path: 'src/app.ts' }, agent: agents.agent })).toContain('只能修改')
-    controller.bind({ sessionId: 's1', stage: 'development', systemPrompt: 'DEV', projectPath: '/project', artifactDirectory: '/project/.sdd/artifacts/development/d1', developmentDirectories: ['/project/.sdd-workspaces/DEV-1/app'], artifactTemplate: '# Development template' })
+    controller.bind({ sessionId: 's1', stage: 'development', artifactUid: 'd1', systemPrompt: 'DEV', projectPath: '/project', artifactDirectory: '/project/.sdd/artifacts/development/d1', developmentDirectories: ['/project/.sdd-workspaces/DEV-1/app'], developmentRepositories: [{ id: 'app', path: '/project/.sdd-workspaces/DEV-1/app' }], artifactTemplate: '# Development template' })
     const developmentGuard = tools.guards[0]!
     expect(developmentGuard({ name: 'bash', arguments: { command: 'pnpm test' }, agent: agents.agent })).toContain('workdir')
     expect(developmentGuard({ name: 'bash', arguments: { command: 'pnpm test', workdir: '.sdd-workspaces/DEV-1/app' }, agent: agents.agent })).toBeUndefined()
@@ -44,6 +45,8 @@ describe('StageSessionController', () => {
     expect(developmentGuard({ name: 'pwsh', arguments: { command: 'pnpm test', workdir: '.sdd-workspaces/DEV-1/app' }, agent: agents.agent })).toBeUndefined()
     expect(developmentGuard({ name: 'pwsh', arguments: { command: 'git push', workdir: '.sdd-workspaces/DEV-1/app' }, agent: agents.agent })).toContain('显式用户操作')
     expect(developmentGuard({ name: 'str_replace_editor', arguments: { command: 'str_replace', path: '/project/src/app.ts' }, agent: agents.agent })).toContain('只能修改')
+    await ctx.waterfall(ctx as never, 'tools/post-execute', { name: 'bash', arguments: { command: 'mvn verify', description: 'SDD测试：Maven verify', workdir: '.sdd-workspaces/DEV-1/app' }, agent: agents.agent as never } as never, { isError: false, value: { kind: 'foreground', exitCode: 0, timedOut: false, aborted: false, stdout: { text: 'ok' }, stderr: { text: '' } }, content: [] } as never, async () => ({ kind: 'accept' as const }))
+    expect(evidence).toEqual([expect.objectContaining({ artifactUid: 'd1', repositoryId: 'app', command: 'mvn verify', description: 'Maven verify', passed: true })])
   })
 
   it('preloads a persisted binding before a cold agent resumes', () => {

@@ -45,16 +45,9 @@ development:
     - id: web
       source: ../product-web
       baseBranch: main
-      testCommands:
-        - id: unit
-          label: 单元测试
-          argv: [pnpm, test]
-        - id: typecheck
-          label: 类型检查
-          argv: [pnpm, typecheck]
 ```
 
-`source` 指向本地 Git 仓库时使用 `git worktree add`；指向远程地址时使用单分支 clone。测试只能从 `testCommands` 中选择，使用 argv 且不经过 shell。提交操作只发生在隔离目录，执行前由用户确认；插件不 push、不创建 PR/MR、不合并。
+`source` 指向本地 Git 仓库时使用 `git worktree add`；指向远程地址时使用单分支 clone。测试不在项目配置中枚举命令：用户点击“让 AI 验证”后，绑定开发会话读取规格、仓库构建文件和 CI 配置，自主选择并执行相关测试。正式测试调用必须使用 `SDD测试：` 描述标记；插件从真实 bash/pwsh 结果记录命令、退出码和当前代码指纹。代码变化会使旧证据过期，提交前必须存在当前通过证据；确实不适用时由用户填写原因跳过。提交操作只发生在隔离目录，执行前由用户确认；插件不 push、不创建 PR/MR、不合并。
 
 开发页面只允许为当前工作单元 `developmentTargets` 中的仓库创建隔离空间。
 

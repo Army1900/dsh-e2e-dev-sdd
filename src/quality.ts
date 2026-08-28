@@ -24,11 +24,11 @@ function check(code: string, label: string, passed: boolean, message: string, wa
 
 function developmentChecks(workspace: DevelopmentWorkspace | undefined): QualityCheck[] {
   if (workspace === undefined) return [check('development-workspace', '隔离开发空间', false, '尚未创建隔离代码工作空间')]
-  const tests = workspace.repositories.map(repository => repository.lastTest).filter(result => result !== undefined)
+  const tests = workspace.repositories.flatMap(repository => repository.tests ?? []).filter(result => !result.stale)
   return [
     check('development-workspace', '隔离开发空间', workspace.repositories.length > 0, `已配置 ${workspace.repositories.length} 个代码仓库`),
     check('development-commit', '代码提交', workspace.repositories.some(repository => repository.headCommit !== repository.baseCommit), '至少一个仓库需要形成独立提交'),
-    check('development-test', '测试证据', tests.length > 0 && tests.every(result => result.passed), tests.length === 0 ? '尚未执行配置的测试' : '最近测试必须全部通过'),
+    check('development-test', '测试证据', tests.length > 0 && tests.every(result => result.passed), tests.length === 0 ? '当前代码尚无有效测试或跳过证据' : '当前代码的测试证据必须全部通过'),
     check('development-clean', '未提交变更', workspace.repositories.every(repository => repository.changedFiles === 0), '交付前隔离空间不应留有未提交变更'),
   ]
 }

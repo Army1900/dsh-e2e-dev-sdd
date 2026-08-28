@@ -7,7 +7,15 @@ export declare class GitDevelopmentService {
     validateSource(projectPath: string, source: string, baseBranch: string): Promise<'local' | 'remote'>;
     create(projectPath: string, project: ProjectConfig, artifact: ArtifactSummary, repositoryId: string): Promise<DevelopmentWorkspace>;
     status(projectPath: string, artifactUid: string): Promise<DevelopmentWorkspace>;
-    test(projectPath: string, project: ProjectConfig, artifactUid: string, repositoryId: string, testId: string): Promise<DevelopmentWorkspace>;
+    recordAiTest(projectPath: string, artifactUid: string, repositoryId: string, evidence: {
+        command: string;
+        description: string;
+        exitCode: number | null;
+        output: string;
+        sessionId: string;
+        passed: boolean;
+    }): Promise<DevelopmentWorkspace>;
+    skipTest(projectPath: string, artifactUid: string, repositoryId: string, reason: string): Promise<DevelopmentWorkspace>;
     commit(projectPath: string, artifactUid: string, repositoryId: string, message: string): Promise<DevelopmentWorkspace>;
     private write;
 }

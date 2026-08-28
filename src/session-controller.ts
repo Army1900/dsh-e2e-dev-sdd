@@ -10,11 +10,25 @@ import { runtimeDefinition } from './stage-definitions.ts'
 interface SessionBindingSpec {
   sessionId: string
   stage: StageId
+  artifactUid?: string
   systemPrompt: string
   projectPath: string
   artifactDirectory: string
   developmentDirectories: string[]
+  developmentRepositories?: Array<{ id: string; path: string }>
   artifactTemplate: string
+}
+
+export interface AiTestExecutionEvidence {
+  projectPath: string
+  artifactUid: string
+  repositoryId: string
+  command: string
+  description: string
+  exitCode: number | null
+  output: string
+  sessionId: string
+  passed: boolean
 }
 
 interface ActiveBinding { dispose: () => void; signature: string }
@@ -41,7 +55,7 @@ export class StageSessionController {
   private readonly active = new Map<string, ActiveBinding>()
   private readonly desired = new Map<string, SessionBindingSpec>()
 
-  constructor(private readonly ctx: Context) {
+  constructor(private readonly ctx: Context, private readonly recordAiTest?: (evidence: AiTestExecutionEvidence) => Promise<void>) {
     ctx.effect(() => () => {
       for (const binding of this.active.values()) binding.dispose()
       this.active.clear()
@@ -107,6 +121,30 @@ export class StageSessionController {
           }
         }
         return undefined
+      }))
+      disposers.push(agent.ctx.on('tools/post-execute', async (execution, result, next) => {
+        const decision = await next()
+        if (this.recordAiTest === undefined || spec.stage !== 'development' || spec.artifactUid === undefined || (execution.name !== 'bash' && execution.name !== 'pwsh') || result.isError) return decision
+        const description = stringArgument(execution.arguments, 'description')
+        const command = stringArgument(execution.arguments, 'command')
+        const workdir = stringArgument(execution.arguments, 'workdir')
+        if (description === undefined || !/^SDD测试[:：]/.test(description) || command === undefined || workdir === undefined) return decision
+        const resolvedWorkdir = resolve(spec.projectPath, workdir)
+        const repository = spec.developmentRepositories?.find(item => contained(resolve(item.path), resolvedWorkdir))
+        if (repository === undefined || typeof result.value !== 'object' || result.value === null || Array.isArray(result.value)) return decision
+        const value = result.value as Record<string, unknown>
+        if (value.kind === 'background' || (typeof value.exitCode !== 'number' && value.exitCode !== null)) return decision
+        const streamText = (stream: unknown): string => typeof stream === 'object' && stream !== null && typeof (stream as { text?: unknown }).text === 'string' ? String((stream as { text: string }).text) : ''
+        const exitCode = value.exitCode as number | null
+        try {
+          await this.recordAiTest({
+            projectPath: spec.projectPath, artifactUid: spec.artifactUid, repositoryId: repository.id,
+            command, description: description.replace(/^SDD测试[:：]\s*/, ''), exitCode,
+            output: `${streamText(value.stdout)}${streamText(value.stderr)}`,
+            sessionId: spec.sessionId, passed: exitCode === 0 && value.timedOut !== true && value.aborted !== true,
+          })
+        } catch { /* evidence persistence must not replace the real shell result */ }
+        return decision
       }))
       this.active.set(spec.sessionId, { signature, dispose: () => { for (const dispose of disposers.reverse()) dispose() } })
     } catch (error) {

@@ -107,7 +107,7 @@ DSH 当前侧边栏没有第三方多入口导航 slot。插件采用 dsh-web �
 - `StageRun` 持久绑定阶段、交付件、输入和 DSH Session。
 - Agent scope System Prompt 和工具执行 Guard。
 - 阶段输入门禁、结构质量报告、人工验收清单和 accepted 哈希冻结。
-- 开发阶段 Worktree/clone、Git 状态、配置化测试与本地提交。
+- 开发阶段 Worktree/clone、AI 驱动测试、真实执行证据与本地提交门禁。
 - 项目看板与 append-only 事件日志。
 
 ## 后续边界
