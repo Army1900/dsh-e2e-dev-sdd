@@ -119,6 +119,12 @@ process.exit(1)\n`)
     expect(defect).toMatchObject({ kind: 'defect', executionMode: 'attached', parentWorkItemUid: requirement.uid })
     expect(snapshot.workItems.find(item => item.uid === requirement.uid)).toMatchObject({ status: 'change-pending', change: { reviewRequiredStages: ['development'] } })
     expect(snapshot.dashboard.deliveryMatrix.map(item => item.key)).toEqual(['REQ-1'])
+    expect(snapshot.dashboard.deliveryMatrix[0]).toMatchObject({
+      kind: 'requirement', workItemStatus: 'change-pending', attachedDefects: { total: 1, pending: 1, covered: 0 },
+    })
+    expect(snapshot.dashboard.requirements).toMatchObject({ packages: 1, total: 1 })
+    expect(snapshot.dashboard.defects).toMatchObject({ total: 1, standalone: 0, attached: 1, deliveryPending: 1, deliveryCovered: 0 })
+    expect(snapshot.dashboard.burnup.at(-1)).toMatchObject({ total: 1, completed: 0 })
     await service.execute({ kind: 'create-draft', workspaceId: 'w1', stage: 'development', title: '支付升级开发', basedOn: [], sourceUids: [requirement.sourceUid!, defect.sourceUid!], workItemUid: requirement.uid })
     expect((await service.snapshot('w1')).artifacts[0]?.derivedFrom.map(item => item.externalKey)).toEqual(['REQ-1', 'BUG-1'])
   })
@@ -139,6 +145,8 @@ process.exit(1)\n`)
     snapshot = await service.snapshot('w1')
     expect(snapshot.workItems[0]).toMatchObject({ key: 'OLD-BUG-1', executionMode: 'standalone' })
     expect(snapshot.dashboard.deliveryMatrix.map(item => item.key)).toEqual(['OLD-BUG-1'])
+    expect(snapshot.dashboard.deliveryMatrix[0]).toMatchObject({ kind: 'defect', attachedDefects: { total: 0, pending: 0, covered: 0 } })
+    expect(snapshot.dashboard.defects).toMatchObject({ total: 1, standalone: 1, attached: 0 })
   })
 
   it('detects duplicate display keys by UID lineage and safely renumbers an unbound draft', async () => {

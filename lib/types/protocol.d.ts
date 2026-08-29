@@ -520,6 +520,13 @@ export interface DeliveryMatrixRow {
     workItemUid: string;
     key: string;
     title: string;
+    kind: string;
+    workItemStatus: WorkItem['status'];
+    attachedDefects: {
+        total: number;
+        pending: number;
+        covered: number;
+    };
     cells: DeliveryMatrixCell[];
 }
 export interface BurnupPoint {
@@ -530,15 +537,28 @@ export interface BurnupPoint {
 export interface DashboardSnapshot {
     overallCompletion: number;
     stages: StageProgress[];
+    workItems: {
+        total: number;
+        requirements: number;
+        standaloneDefects: number;
+        custom: number;
+        pendingChanges: number;
+        completed: number;
+    };
     requirements: {
+        packages: number;
         total: number;
         traced: number;
         completed: number;
     };
     defects: {
         total: number;
+        standalone: number;
+        attached: number;
         open: number;
         resolved: number;
+        deliveryPending: number;
+        deliveryCovered: number;
     };
     artifacts: {
         total: number;

@@ -1821,7 +1821,8 @@ export class SddProjectService {
   private emptyDashboard(): DashboardSnapshot {
     return {
       overallCompletion: 0, stages: STAGES.map(stage => ({ stage: stage.id, status: 'not-started', completion: 0, drafts: 0, accepted: 0, failedChecks: 0 })),
-      requirements: { total: 0, traced: 0, completed: 0 }, defects: { total: 0, open: 0, resolved: 0 }, artifacts: { total: 0, drafts: 0, accepted: 0 },
+      workItems: { total: 0, requirements: 0, standaloneDefects: 0, custom: 0, pendingChanges: 0, completed: 0 },
+      requirements: { packages: 0, total: 0, traced: 0, completed: 0 }, defects: { total: 0, standalone: 0, attached: 0, open: 0, resolved: 0, deliveryPending: 0, deliveryCovered: 0 }, artifacts: { total: 0, drafts: 0, accepted: 0 },
       development: { workspaces: 0, changedFiles: 0, passingTests: 0, failingTests: 0, commits: 0 }, workload: [], stageFlow: [], deliveryMatrix: [], burnup: [],
       traceability: 100, blockers: [], recentEvents: [],
     }
@@ -1831,29 +1832,137 @@ export class SddProjectService {
     artifacts: ArtifactSummary[], sources: SourceSummary[], workItems: WorkItem[], quality: Record<string, QualityReport>,
     workspaces: DevelopmentWorkspace[], recentEvents: SddEvent[],
   ): DashboardSnapshot {
-    const deliveryWorkItems = workItems.filter(item => item.executionMode !== 'attached')
+    const deliveryWorkItems = workItems.filter(item => item.executionMode !== 'attached' && item.status !== 'completed')
+    const deliveryWorkItemUids = new Set(deliveryWorkItems.map(item => item.uid))
+    const workItemByUid = new Map(workItems.map(item => [item.uid, item]))
+    const sourceByUid = new Map(sources.map(item => [item.uid, item]))
+    const artifactByUid = new Map(artifacts.map(item => [item.uid, item]))
+    const artifactsByStage = new Map<StageId, ArtifactSummary[]>(STAGES.map(stage => [stage.id, []]))
+    const artifactsByWorkItemStage = new Map<string, ArtifactSummary[]>()
+    for (const artifact of artifacts) {
+      artifactsByStage.get(artifact.stage)!.push(artifact)
+      if (artifact.workItemUid === undefined) continue
+      const key = `${artifact.workItemUid}:${artifact.stage}`
+      const group = artifactsByWorkItemStage.get(key) ?? []
+      group.push(artifact)
+      artifactsByWorkItemStage.set(key, group)
+    }
+    const attachedByParent = new Map<string, WorkItem[]>()
+    for (const workItem of workItems) {
+      if (workItem.executionMode !== 'attached' || workItem.parentWorkItemUid === undefined || workItem.status === 'completed') continue
+      const children = attachedByParent.get(workItem.parentWorkItemUid) ?? []
+      children.push(workItem)
+      attachedByParent.set(workItem.parentWorkItemUid, children)
+    }
+    const latestAcceptedByWorkItemStage = new Map<string, ArtifactSummary>()
+    for (const [key, group] of artifactsByWorkItemStage) {
+      const latest = group.filter(item => item.status === 'accepted').reduce<ArtifactSummary | undefined>((current, item) => current === undefined || item.updatedAt > current.updatedAt ? item : current, undefined)
+      if (latest !== undefined) latestAcceptedByWorkItemStage.set(key, latest)
+    }
+    const currentSourceUidsFor = (workItem: WorkItem, stage: StageId): string[] => {
+      const owned = stage === 'specification' || stage === 'development' ? [workItem, ...(attachedByParent.get(workItem.uid) ?? [])] : [workItem]
+      return [...new Set(owned.flatMap(item => [item.sourceUid, item.bundleSourceUid]).filter((uid): uid is string => uid !== undefined))]
+    }
+    const staleInputCache = new Map<string, string[]>()
+    const staleInputs = (artifact: ArtifactSummary): string[] => {
+      const cached = staleInputCache.get(artifact.uid)
+      if (cached !== undefined) return cached
+      const labels: string[] = []
+      for (const reference of artifact.basedOn) {
+        const previous = artifactByUid.get(reference.uid)
+        if (previous === undefined) { labels.push(`缺失上游交付件 ${reference.uid}`); continue }
+        const current = artifact.workItemUid === undefined
+          ? (artifactsByStage.get(previous.stage) ?? []).filter(item => item.workItemUid === undefined && item.status === 'accepted').reduce<ArtifactSummary | undefined>((latest, item) => latest === undefined || item.updatedAt > latest.updatedAt ? item : latest, undefined)
+          : latestAcceptedByWorkItemStage.get(`${artifact.workItemUid}:${previous.stage}`)
+        if (current !== undefined && (current.uid !== reference.uid || current.version !== reference.version || current.contentHash !== reference.contentHash)) labels.push(`${stageDefinition(previous.stage).label}已从 ${previous.version} 更新到 ${current.version}`)
+      }
+      if (artifact.workItemUid !== undefined) {
+        const workItem = workItemByUid.get(artifact.workItemUid)
+        if (workItem !== undefined) {
+          const bound = new Set(artifact.derivedFrom.map(reference => reference.uid))
+          if (currentSourceUidsFor(workItem, artifact.stage).some(uid => !bound.has(uid))) labels.push('原始需求或关联缺陷来源已更新')
+        }
+      }
+      staleInputCache.set(artifact.uid, labels)
+      return labels
+    }
+    const developmentAcceptedByWorkItem = new Map<string, ArtifactSummary[]>()
+    for (const artifact of artifactsByStage.get('development') ?? []) {
+      if (artifact.workItemUid === undefined || artifact.status !== 'accepted') continue
+      const accepted = developmentAcceptedByWorkItem.get(artifact.workItemUid) ?? []
+      accepted.push(artifact)
+      developmentAcceptedByWorkItem.set(artifact.workItemUid, accepted)
+    }
+    const attachedDefectCovered = (defect: WorkItem): boolean => defect.parentWorkItemUid !== undefined && defect.sourceUid !== undefined
+      && (developmentAcceptedByWorkItem.get(defect.parentWorkItemUid) ?? []).some(artifact => Date.parse(artifact.updatedAt) >= Date.parse(defect.updatedAt)
+        && artifact.derivedFrom.some(reference => reference.uid === defect.sourceUid))
+    const deliveryMatrix: DeliveryMatrixRow[] = deliveryWorkItems.map(workItem => {
+      const children = attachedByParent.get(workItem.uid) ?? []
+      const covered = children.filter(attachedDefectCovered).length
+      const cells: DeliveryMatrixCell[] = STAGES.map(stage => {
+        const stageArtifacts = artifactsByWorkItemStage.get(`${workItem.uid}:${stage.id}`) ?? []
+        const artifact = stageArtifacts.find(item => item.status === 'draft' || item.status === 'in-review')
+          ?? stageArtifacts.filter(item => item.status === 'accepted').reduce<ArtifactSummary | undefined>((latest, item) => latest === undefined || item.updatedAt > latest.updatedAt ? item : latest, undefined)
+        let status: DeliveryCellStatus = 'not-started'
+        if (artifact === undefined && workItem.stageApplicability?.[stage.id]?.status === 'not-applicable') status = 'not-applicable'
+        else if (workItem.change?.reviewRequiredStages.includes(stage.id) === true || (artifact !== undefined && staleInputs(artifact).length > 0)) status = 'blocked'
+        else if (artifact?.status === 'accepted') status = 'completed'
+        else if (artifact !== undefined && quality[artifact.uid]?.ready === true) status = 'ready-for-review'
+        else if (artifact !== undefined) status = 'in-progress'
+        const settingsBlocked = artifact !== undefined && stage.id === 'development' && ((workItem.developmentTargets ?? []).length === 0
+          || workItem.developmentTargets?.some(id => (workItem.developmentTargetDetails?.[id] ?? '').trim() === ''))
+        if (settingsBlocked) status = 'blocked'
+        return {
+          stage: stage.id, status,
+          ...(artifact === undefined ? {} : { artifactUid: artifact.uid, artifactKey: artifact.key, version: artifact.version }),
+        }
+      })
+      return {
+        workItemUid: workItem.uid, key: workItem.key, title: workItem.title, kind: workItem.kind, workItemStatus: workItem.status,
+        attachedDefects: { total: children.length, covered, pending: children.length - covered }, cells,
+      }
+    })
+    const stageFlow = STAGES.map(stage => {
+      const cells = deliveryMatrix.map(row => row.cells.find(cell => cell.stage === stage.id)!)
+      return {
+        stage: stage.id,
+        notStarted: cells.filter(cell => cell.status === 'not-started').length,
+        inProgress: cells.filter(cell => cell.status === 'in-progress').length,
+        readyForReview: cells.filter(cell => cell.status === 'ready-for-review').length,
+        completed: cells.filter(cell => cell.status === 'completed').length,
+        blocked: cells.filter(cell => cell.status === 'blocked').length,
+        notApplicable: cells.filter(cell => cell.status === 'not-applicable').length,
+      }
+    })
     const stages = STAGES.map(definition => {
-      const items = artifacts.filter(item => item.stage === definition.id)
-      const notApplicable = deliveryWorkItems.filter(item => item.stageApplicability?.[definition.id]?.status === 'not-applicable').length
-      const accepted = items.filter(item => item.status === 'accepted').length
-      const drafts = items.filter(item => item.status === 'draft' || item.status === 'in-review').length
+      const items = artifactsByStage.get(definition.id) ?? []
+      const flow = stageFlow.find(item => item.stage === definition.id)!
+      const total = deliveryWorkItems.length
+      const completedCount = flow.completed + flow.notApplicable
       const reports = items.map(item => quality[item.uid]).filter(item => item !== undefined)
       const failedChecks = reports.reduce((sum, report) => sum + report.checks.filter(item => item.status === 'failed').length, 0)
-      const completion = accepted > 0 || (deliveryWorkItems.length > 0 && notApplicable === deliveryWorkItems.length) ? 100 : Math.min(90, Math.max(0, ...reports.map(report => report.score), 0))
-      const status = accepted > 0 ? 'completed' as const : deliveryWorkItems.length > 0 && notApplicable === deliveryWorkItems.length ? 'not-applicable' as const : items.length === 0 ? 'not-started' as const
-        : reports.some(report => report.ready) ? 'ready-for-review' as const : failedChecks > 0 ? 'blocked' as const : 'in-progress' as const
-      return { stage: definition.id, status, completion, drafts, accepted, failedChecks }
+      const completion = total === 0 ? 0 : Math.round(completedCount / total * 100)
+      const status = total > 0 && flow.notApplicable === total ? 'not-applicable' as const
+        : total > 0 && completedCount === total ? 'completed' as const
+          : flow.blocked > 0 ? 'blocked' as const : flow.readyForReview > 0 ? 'ready-for-review' as const
+            : flow.inProgress > 0 ? 'in-progress' as const : 'not-started' as const
+      return { stage: definition.id, status, completion, drafts: items.filter(item => item.status === 'draft' || item.status === 'in-review').length, accepted: items.filter(item => item.status === 'accepted').length, failedChecks }
     })
     const currentSourceUids = new Set(workItems.filter(item => item.status !== 'completed').map(item => item.sourceUid).filter((uid): uid is string => uid !== undefined))
     const currentSources = workItems.length === 0 ? sources : sources.filter(item => currentSourceUids.has(item.uid))
-    const requirements = currentSources.filter(item => item.kind === 'requirement')
-    const defects = currentSources.filter(item => item.kind === 'defect')
+    const requirementWorkItems = deliveryWorkItems.filter(item => item.kind === 'requirement' && item.status !== 'completed')
+    const standaloneDefects = deliveryWorkItems.filter(item => item.kind === 'defect' && item.status !== 'completed')
+    const attachedDefects = workItems.filter(item => item.kind === 'defect' && item.executionMode === 'attached' && item.status !== 'completed')
+    const activeDefects = [...standaloneDefects, ...attachedDefects]
+    const requirementSources = requirementWorkItems.map(item => item.sourceUid === undefined ? undefined : sourceByUid.get(item.sourceUid)).filter((item): item is SourceSummary => item !== undefined)
+    const defectSources = activeDefects.map(item => item.sourceUid === undefined ? undefined : sourceByUid.get(item.sourceUid)).filter((item): item is SourceSummary => item !== undefined)
     const tracedSources = new Set(artifacts.flatMap(item => item.derivedFrom.map(reference => reference.uid)))
     const tests = workspaces.flatMap(item => item.repositories.flatMap(repository => repository.tests ?? [])).filter(item => !item.stale)
+    const typeLabel = (workItem: WorkItem) => workItem.kind === 'defect' ? '独立缺陷' : workItem.kind === 'requirement' ? '需求' : workItem.kind
     const blockers = [
-      ...workItems.filter(item => item.change !== undefined).map(item => `${item.key}：${item.status === 'removed-pending' ? '外部需求已移除，等待确认' : `需求已变更，需重审 ${item.change!.reviewRequiredStages.map(stage => stageDefinition(stage).label).join('、')}`}`),
-      ...workItems.filter(item => artifacts.some(artifact => artifact.workItemUid === item.uid && artifact.stage === 'development') && (item.developmentTargets ?? []).length === 0).map(item => `${item.key}：开发测试尚未配置目标代码仓库`),
-      ...artifacts.filter(item => item.status === 'accepted').flatMap(item => this.staleInputLabels({ artifacts, workItems }, item).map(label => `${item.key} v${item.version}：${label}，需要创建变更修订`)),
+      ...deliveryWorkItems.filter(item => item.change !== undefined).map(item => `${item.key}（${typeLabel(item)}）：${item.status === 'removed-pending' ? '外部事项已移除，等待确认' : `来源或关联缺陷有变化，需重审 ${item.change!.reviewRequiredStages.map(stage => stageDefinition(stage).label).join('、')}`}`),
+      ...deliveryWorkItems.filter(item => (artifactsByWorkItemStage.get(`${item.uid}:development`) ?? []).length > 0 && (item.developmentTargets ?? []).length === 0).map(item => `${item.key}：开发测试尚未配置目标代码仓库`),
+      ...artifacts.filter(item => item.status === 'accepted').flatMap(item => staleInputs(item).map(label => `${item.key} v${item.version}：${label}，需要创建变更修订`)),
       ...Object.values(quality).flatMap(report => report.checks.filter(item => item.status === 'failed').map(item => `${stageDefinition(report.stage).label}：${item.label}`)),
     ].slice(0, 12)
     const resolvedStatuses = new Set(['resolved', 'done', 'cancelled'])
@@ -1866,50 +1975,17 @@ export class SddProjectService {
       if (resolvedStatuses.has(source.tracking?.normalizedStatus ?? '')) current.completed += estimate.value
       workload.set(estimate.unit, current)
     }
-    const deliveryMatrix: DeliveryMatrixRow[] = deliveryWorkItems.map(workItem => {
-      const cells: DeliveryMatrixCell[] = STAGES.map(stage => {
-        const stageArtifacts = artifacts.filter(item => item.workItemUid === workItem.uid && item.stage === stage.id && item.status !== 'superseded')
-        const artifact = stageArtifacts.find(item => item.status === 'draft' || item.status === 'in-review')
-          ?? stageArtifacts.filter(item => item.status === 'accepted').sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0]
-        let status: DeliveryCellStatus = 'not-started'
-        if (artifact === undefined && workItem.stageApplicability?.[stage.id]?.status === 'not-applicable') status = 'not-applicable'
-        else if (workItem.change?.reviewRequiredStages.includes(stage.id) === true || (artifact !== undefined && this.staleInputLabels({ artifacts, workItems }, artifact).length > 0)) status = 'blocked'
-        else if (artifact?.status === 'accepted') status = 'completed'
-        else if (artifact !== undefined && quality[artifact.uid]?.ready === true) status = 'ready-for-review'
-        else if (artifact !== undefined) status = 'in-progress'
-        const settingsBlocked = artifact !== undefined && stage.id === 'development' && ((workItem.developmentTargets ?? []).length === 0
-          || workItem.developmentTargets?.some(id => (workItem.developmentTargetDetails?.[id] ?? '').trim() === ''))
-        if (settingsBlocked) status = 'blocked'
-        return {
-          stage: stage.id, status,
-          ...(artifact === undefined ? {} : { artifactUid: artifact.uid, artifactKey: artifact.key, version: artifact.version }),
-        }
-      })
-      return { workItemUid: workItem.uid, key: workItem.key, title: workItem.title, cells }
-    })
-    const stageFlow = STAGES.map(stage => {
-      const cells = deliveryMatrix.flatMap(row => row.cells).filter(cell => cell.stage === stage.id)
-      return {
-        stage: stage.id,
-        notStarted: cells.filter(cell => cell.status === 'not-started').length,
-        inProgress: cells.filter(cell => cell.status === 'in-progress').length,
-        readyForReview: cells.filter(cell => cell.status === 'ready-for-review').length,
-        completed: cells.filter(cell => cell.status === 'completed').length,
-        blocked: cells.filter(cell => cell.status === 'blocked').length,
-        notApplicable: cells.filter(cell => cell.status === 'not-applicable').length,
-      }
-    })
     const scope = new Set<string>(); const delivered = new Set<string>(); const burnupByDate = new Map<string, { total: number; completed: number }>()
     const artifactWorkItem = new Map(artifacts.filter(item => item.workItemUid !== undefined).map(item => [item.uid, item.workItemUid!]))
     const recordBurnup = (date: string) => burnupByDate.set(date, { total: scope.size, completed: [...delivered].filter(uid => scope.has(uid)).length })
     for (const event of [...recentEvents].sort((left, right) => left.time.localeCompare(right.time))) {
       const workItemUid = typeof event.detail?.workItemUid === 'string' ? event.detail.workItemUid : undefined
       let changed = false
-      if (event.type === 'work-item.created' && workItemUid !== undefined) { scope.add(workItemUid); changed = true }
+      if (event.type === 'work-item.created' && workItemUid !== undefined && workItemByUid.get(workItemUid)?.executionMode !== 'attached') { scope.add(workItemUid); changed = true }
       else if (event.type === 'work-item.archived' && workItemUid !== undefined) { scope.delete(workItemUid); delivered.delete(workItemUid); changed = true }
       else if (event.type === 'artifact.accepted' && event.stage === 'development' && typeof event.detail?.artifactUid === 'string') {
         const uid = artifactWorkItem.get(event.detail.artifactUid)
-        if (uid !== undefined) { delivered.add(uid); changed = true }
+        if (uid !== undefined && deliveryWorkItemUids.has(uid)) { delivered.add(uid); changed = true }
       }
       if (changed) recordBurnup(event.time.slice(0, 10))
     }
@@ -1921,10 +1997,27 @@ export class SddProjectService {
     if (burnup.length > 30) burnup = [burnup[0]!, ...burnup.slice(-29)]
     const applicableCells = deliveryMatrix.flatMap(row => row.cells).filter(cell => cell.status !== 'not-applicable')
     const overallCompletion = applicableCells.length === 0 ? 0 : Math.round(applicableCells.filter(cell => cell.status === 'completed').length / applicableCells.length * 100)
+    const completedWorkItems = deliveryMatrix.filter(row => row.cells.some(cell => cell.status === 'completed') && row.cells.every(cell => cell.status === 'completed' || cell.status === 'not-applicable')).length
+    const standaloneCovered = standaloneDefects.filter(defect => (developmentAcceptedByWorkItem.get(defect.uid) ?? []).length > 0).length
+    const attachedCovered = attachedDefects.filter(attachedDefectCovered).length
     return {
       overallCompletion, stages,
-      requirements: { total: requirements.length, traced: requirements.filter(item => tracedSources.has(item.uid)).length, completed: requirements.filter(item => item.tracking?.normalizedStatus === 'done').length },
-      defects: { total: defects.length, open: defects.filter(item => !resolvedStatuses.has(item.tracking?.normalizedStatus ?? '')).length, resolved: defects.filter(item => resolvedStatuses.has(item.tracking?.normalizedStatus ?? '')).length },
+      workItems: {
+        total: deliveryWorkItems.filter(item => item.status !== 'completed').length, requirements: requirementWorkItems.length, standaloneDefects: standaloneDefects.length,
+        custom: deliveryWorkItems.filter(item => item.status !== 'completed' && item.kind !== 'requirement' && item.kind !== 'defect').length,
+        pendingChanges: deliveryWorkItems.filter(item => item.change !== undefined).length, completed: completedWorkItems,
+      },
+      requirements: {
+        packages: new Set(requirementWorkItems.map(item => `${item.provider}:${item.bundleKey}`)).size,
+        total: requirementWorkItems.length, traced: requirementSources.filter(item => tracedSources.has(item.uid)).length,
+        completed: requirementSources.filter(item => item.tracking?.normalizedStatus === 'done').length,
+      },
+      defects: {
+        total: activeDefects.length, standalone: standaloneDefects.length, attached: attachedDefects.length,
+        open: defectSources.filter(item => !resolvedStatuses.has(item.tracking?.normalizedStatus ?? '')).length,
+        resolved: defectSources.filter(item => resolvedStatuses.has(item.tracking?.normalizedStatus ?? '')).length,
+        deliveryPending: activeDefects.length - standaloneCovered - attachedCovered, deliveryCovered: standaloneCovered + attachedCovered,
+      },
       artifacts: { total: artifacts.length, drafts: artifacts.filter(item => item.status === 'draft' || item.status === 'in-review').length, accepted: artifacts.filter(item => item.status === 'accepted').length },
       development: { workspaces: workspaces.length, changedFiles: workspaces.flatMap(item => item.repositories).reduce((sum, item) => sum + item.changedFiles, 0), passingTests: tests.filter(item => item.passed && !item.skipped).length, failingTests: tests.filter(item => !item.passed).length, commits: workspaces.flatMap(item => item.repositories).filter(item => item.headCommit !== item.baseCommit).length },
       workload: [...workload.entries()].sort(([left], [right]) => left.localeCompare(right)).map(([unit, value]) => ({ unit, ...value })),
