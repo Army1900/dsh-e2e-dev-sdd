@@ -12,7 +12,7 @@
 
 ## 工具策略
 
-需求、原型、系统设计和规格设计阶段禁止 shell 与可写终端操作，`write`/`edit` 只能访问绑定交付件目录。开发测试阶段允许 macOS/Linux 的 `bash` 或 Windows 的 `pwsh`，但每次调用必须显式设置位于当前 `.sdd-workspaces` 绑定仓库内的 `workdir`；`write`/`edit` 只能访问绑定交付件或绑定代码目录。Guard 在工具执行前拒绝越权调用，提示词不是唯一约束。
+需求、原型、系统设计和规格设计阶段禁止 shell 与可写终端操作，`write`/`edit` 只能访问绑定交付件目录；项目已关联的全部代码仓库自动作为按需读取的只读辅助输入，不要求逐阶段选择。开发测试阶段允许 macOS/Linux 的 `bash` 或 Windows 的 `pwsh`，但每次调用必须显式设置位于当前 `.sdd-workspaces` 绑定仓库内的 `workdir`；`write`/`edit` 只能访问绑定交付件或绑定代码目录。Guard 在工具执行前拒绝越权调用，提示词不是唯一约束。
 
 ## 输入门禁
 
@@ -26,7 +26,7 @@
 
 ## 隔离开发空间
 
-项目代码仓库目录与默认基线统一在“项目设置”维护。本地来源读取现有本地分支及 `origin` 远程跟踪分支，远程来源通过 `git ls-remote --symref` 读取远程分支和默认分支，再用下拉框选择基线。系统设计用 `repositoryScope` 确认可能涉及的仓库，规格设计用 `developmentTargets` 和 `developmentTargetDetails` 明确实际修改仓库及每仓具体目标；灵活流程跳过前置阶段时可在开发阶段补齐。隔离开发空间创建前可以切换基线或移除仓库；移除只修改 SDD 配置，不删除源代码。
+项目代码仓库目录与默认基线统一在“项目设置”维护。本地来源读取现有本地分支及 `origin` 远程跟踪分支，远程来源通过 `git ls-remote --symref` 读取远程分支和默认分支，再用下拉框选择基线。非开发会话自动绑定所有已登记仓库：干净且位于基线 Commit 的本地仓库直接只读，其他本地状态按需创建 Detached 参考 Worktree；远程仓库在 `.sdd-workspaces/.repositories/` 只保存一份 bare 对象库，在 `.references/` 复用按 Commit 检出的只读 Worktree。准备失败只在运行中记录为不可用，不阻止原先没有仓库的流程。系统设计用 `repositoryScope` 记录影响范围，规格设计用 `developmentTargets` 和 `developmentTargetDetails` 明确实际修改仓库及每仓具体目标；灵活流程跳过前置阶段时可在开发阶段补齐。
 
 本地仓库只有 `git init`、尚无任何提交时，页面可以在用户明确确认后自动创建 `chore: initialize repository` 空提交和初始分支。自动提交使用临时提交身份，不修改用户 Git 配置，也不会添加未跟踪文件；如果索引中已经存在暂存文件则拒绝执行，避免把用户文件意外纳入提交。空远程仓库涉及远程写入和认证，插件不自动 push，用户需要先显式初始化远程。
 

@@ -1,7 +1,7 @@
 import type { ClientContext, ISessions, IWorkspaces, WorkspaceId } from '@deepseek-ai/dsh-client-runtime/client'
 import DOMPurify from 'dompurify'
 import { marked } from 'marked'
-import { STAGES, STAGE_ARTIFACT_TEMPLATES, type ArtifactSummary, type BurnupPoint, type DeliveryCellStatus, type ProjectSnapshot, type RepositoryInspection, type SddAction, type SddResponse, type SourceSummary, type StageId, type StageRun, type StageTemplatePreview } from '../protocol.ts'
+import { STAGES, STAGE_ARTIFACT_TEMPLATES, type ArtifactSummary, type BurnupPoint, type DeliveryCellStatus, type ProjectSnapshot, type RepositoryInspection, type SddAction, type SddResponse, type SourceImportDetail, type SourceSummary, type StageId, type StageRun, type StageTemplatePreview } from '../protocol.ts'
 
 export const name = 'dsh-e2e-dev-sdd-client'
 export const inject = ['workspaces', 'sessions']
@@ -19,7 +19,7 @@ html[${ACTIVE_ATTR}] [data-dsh-sdd-view]{display:block}html[${ACTIVE_ATTR}] [dat
 .dsh-sdd-grid{display:grid;grid-template-columns:minmax(0,.8fr) minmax(0,1.2fr);gap:14px}@media(max-width:850px){.dsh-sdd-grid{grid-template-columns:minmax(0,1fr)}}.dsh-sdd-card{min-width:0;border:1px solid var(--dsw-alias-border-l1,#ddd);border-radius:12px;background:var(--dsw-alias-bg-layer-2,#fafafa);padding:14px}.dsh-sdd-card h2{font-size:15px;margin:0 0 10px}.dsh-sdd-muted{font-size:12px;color:var(--dsw-alias-label-secondary,#666);overflow-wrap:anywhere}.dsh-sdd-list{display:flex;min-width:0;flex-direction:column;gap:8px}.dsh-sdd-row{display:grid;min-width:0;grid-template-columns:auto minmax(0,1fr) auto;align-items:start;gap:9px;padding:10px;border:1px solid var(--dsw-alias-border-l1,#ddd);border-radius:9px;background:var(--dsw-alias-bg-base,#fff)}.dsh-sdd-row>span{min-width:0}.dsh-sdd-row strong{display:block;font-size:13px;overflow-wrap:anywhere}.dsh-sdd-badge{display:inline-block;max-width:100%;font-size:11px;padding:2px 6px;border-radius:999px;background:var(--dsw-alias-interactive-bg-hover,#eee);margin:0 0 4px 4px;overflow-wrap:anywhere}.dsh-sdd-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}.dsh-sdd-error{padding:9px;border-radius:8px;background:#c5303018;color:#c53030;font-size:12px;overflow-wrap:anywhere}.dsh-sdd-empty{padding:18px;text-align:center;color:var(--dsw-alias-label-secondary,#666)}
 .dsh-sdd-stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:14px}.dsh-sdd-stat{box-sizing:border-box;min-width:0;border:1px solid var(--dsw-alias-border-l1,#ddd);border-radius:12px;padding:14px;background:var(--dsw-alias-bg-layer-2,#fafafa);overflow:hidden}.dsh-sdd-stat b{display:block;min-width:0;font-size:clamp(20px,2vw,25px);line-height:1.2;margin-top:5px;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}.dsh-sdd-workload-list{display:flex;flex-direction:column;gap:5px;max-height:86px;margin-top:8px;overflow:auto}.dsh-sdd-workload-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:center;font-size:12px}.dsh-sdd-workload-row span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.dsh-sdd-workload-row strong{font-variant-numeric:tabular-nums;white-space:nowrap}.dsh-sdd-progress{height:8px;background:var(--dsw-alias-interactive-bg-hover,#e5e5e5);border-radius:999px;overflow:hidden;margin-top:7px}.dsh-sdd-progress span{display:block;height:100%;background:var(--dsw-alias-brand-primary,#3b63f3)}.dsh-sdd-stage-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px}.dsh-sdd-stage-grid .dsh-sdd-stat{padding:12px}.dsh-sdd-stage-head{display:flex;align-items:flex-start;justify-content:space-between;gap:6px}.dsh-sdd-stage-head .dsh-sdd-badge{flex:none}.dsh-sdd-scroll-list{max-height:340px;overflow:auto;overscroll-behavior:contain;padding-right:3px}.dsh-sdd-dashboard-columns{align-items:start}.dsh-sdd-dashboard-columns>.dsh-sdd-card{max-height:430px;overflow:hidden}.dsh-sdd-dashboard-columns .dsh-sdd-checks{max-height:340px;overflow:auto;padding-right:4px}.dsh-sdd-trace-list{max-height:420px;overflow:auto;overscroll-behavior:contain}.dsh-sdd-checks{margin:7px 0 0;padding-left:17px;font-size:12px;overflow-wrap:anywhere}.dsh-sdd-checks li+li{margin-top:5px}.dsh-sdd-checks li[data-fail]{color:#c53030}.dsh-sdd-checks li[data-pass]{color:#238636}.dsh-sdd-wide{grid-column:1/-1}@media(max-width:1000px){.dsh-sdd-stats{grid-template-columns:repeat(3,minmax(0,1fr))}.dsh-sdd-stage-grid{grid-template-columns:repeat(3,minmax(0,1fr))}}@media(max-width:700px){.dsh-sdd-stats,.dsh-sdd-stage-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.dsh-sdd-page{padding:14px}.dsh-sdd-header{gap:8px}.dsh-sdd-header h1{width:100%;order:-1}.dsh-sdd-header .dsh-sdd-select{flex:1 1 220px}}@media(max-width:430px){.dsh-sdd-stats,.dsh-sdd-stage-grid{grid-template-columns:minmax(0,1fr)}}
 .dsh-sdd-chart-grid{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(320px,.85fr);gap:14px;margin-bottom:14px}.dsh-sdd-chart-legend{display:flex;flex-wrap:wrap;gap:8px 14px;margin-top:10px;font-size:11px;color:var(--dsw-alias-label-secondary,#666)}.dsh-sdd-chart-legend span{display:inline-flex;align-items:center;gap:5px}.dsh-sdd-legend-swatch{width:14px;height:9px;border:1px solid var(--dsw-alias-label-secondary,#666);border-radius:2px}.dsh-sdd-flow-list{display:flex;flex-direction:column;gap:10px}.dsh-sdd-flow-row{display:grid;grid-template-columns:72px minmax(0,1fr) 28px;align-items:center;gap:9px;font-size:12px}.dsh-sdd-flow-bar{display:flex;height:15px;overflow:hidden;border:1px solid var(--dsw-alias-border-l2,#bbb);border-radius:4px;background:var(--dsw-alias-bg-base,#fff)}.dsh-sdd-flow-segment{height:100%;min-width:0}.dsh-sdd-flow-segment[data-status="not-started"],.dsh-sdd-legend-swatch[data-status="not-started"]{background:transparent}.dsh-sdd-flow-segment[data-status="in-progress"],.dsh-sdd-legend-swatch[data-status="in-progress"]{background:var(--dsw-alias-label-tertiary,#aaa)}.dsh-sdd-flow-segment[data-status="ready-for-review"],.dsh-sdd-legend-swatch[data-status="ready-for-review"]{background:repeating-linear-gradient(90deg,var(--dsw-alias-label-secondary,#666) 0 2px,transparent 2px 4px)}.dsh-sdd-flow-segment[data-status="completed"],.dsh-sdd-legend-swatch[data-status="completed"]{background:var(--dsw-alias-label-primary,#222)}.dsh-sdd-flow-segment[data-status="blocked"],.dsh-sdd-legend-swatch[data-status="blocked"]{background:repeating-linear-gradient(135deg,var(--dsw-alias-label-primary,#222) 0 2px,transparent 2px 5px)}.dsh-sdd-burnup{display:block;width:100%;height:auto;min-height:210px;color:var(--dsw-alias-label-primary,#222)}.dsh-sdd-burnup-grid{stroke:var(--dsw-alias-border-l1,#ddd);stroke-width:1}.dsh-sdd-burnup-total{fill:none;stroke:currentColor;stroke-width:2;stroke-dasharray:6 4;opacity:.55}.dsh-sdd-burnup-completed{fill:none;stroke:currentColor;stroke-width:2.5}.dsh-sdd-burnup-point{fill:var(--dsw-alias-bg-base,#fff);stroke:currentColor;stroke-width:2}.dsh-sdd-burnup text{fill:var(--dsw-alias-label-secondary,#666);font:11px var(--dsw-font-family,system-ui)}.dsh-sdd-matrix-scroll{max-height:520px;overflow:auto;overscroll-behavior:contain;border:1px solid var(--dsw-alias-border-l1,#ddd);border-radius:9px}.dsh-sdd-matrix{width:100%;min-width:820px;border-collapse:separate;border-spacing:0;font-size:12px}.dsh-sdd-matrix th,.dsh-sdd-matrix td{padding:7px;border-right:1px solid var(--dsw-alias-border-l1,#ddd);border-bottom:1px solid var(--dsw-alias-border-l1,#ddd);background:var(--dsw-alias-bg-base,#fff)}.dsh-sdd-matrix th{position:sticky;top:0;z-index:2;background:var(--dsw-alias-bg-layer-2,#fafafa);text-align:left}.dsh-sdd-matrix th:first-child,.dsh-sdd-matrix td:first-child{position:sticky;left:0;z-index:1;width:220px;min-width:220px}.dsh-sdd-matrix th:first-child{z-index:3}.dsh-sdd-matrix tr:last-child td{border-bottom:0}.dsh-sdd-matrix th:last-child,.dsh-sdd-matrix td:last-child{border-right:0}.dsh-sdd-matrix-work{display:block;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.dsh-sdd-matrix-cell{box-sizing:border-box;width:100%;min-width:92px;padding:7px 6px;border:1px solid var(--dsw-alias-border-l2,#bbb);border-radius:5px;background:transparent;color:inherit;font-size:11px;cursor:pointer}.dsh-sdd-matrix-cell[data-status="not-started"]{cursor:default;color:var(--dsw-alias-label-tertiary,#999)}.dsh-sdd-matrix-cell[data-status="in-progress"]{background:var(--dsw-alias-interactive-bg-hover,#e5e5e5)}.dsh-sdd-matrix-cell[data-status="ready-for-review"]{background:repeating-linear-gradient(90deg,var(--dsw-alias-interactive-bg-hover,#ddd) 0 3px,transparent 3px 6px)}.dsh-sdd-matrix-cell[data-status="completed"]{background:var(--dsw-alias-label-primary,#222);border-color:var(--dsw-alias-label-primary,#222);color:var(--dsw-alias-bg-base,#fff)}.dsh-sdd-matrix-cell[data-status="blocked"]{border:2px solid var(--dsw-alias-label-primary,#222);background:repeating-linear-gradient(135deg,var(--dsw-alias-interactive-bg-hover,#ddd) 0 3px,transparent 3px 7px)}@media(max-width:900px){.dsh-sdd-chart-grid{grid-template-columns:minmax(0,1fr)}}
-.dsh-sdd-modal-backdrop{position:fixed;inset:0;z-index:200;display:flex;align-items:center;justify-content:center;padding:20px;background:#0008}.dsh-sdd-modal{box-sizing:border-box;width:min(520px,100%);max-height:min(760px,calc(100vh - 40px));overflow:auto;border:1px solid var(--dsw-alias-border-l1,#ddd);border-radius:14px;background:var(--dsw-alias-bg-base,#fff);box-shadow:0 20px 60px #0005}.dsh-sdd-modal-header{padding:18px 20px 10px}.dsh-sdd-modal-header h2{margin:0 0 6px;font-size:18px}.dsh-sdd-modal-body{display:flex;flex-direction:column;gap:14px;padding:8px 20px 18px}.dsh-sdd-field{display:flex;flex-direction:column;gap:6px}.dsh-sdd-field>label{font-size:13px;font-weight:600}.dsh-sdd-field textarea{min-height:88px;resize:vertical}.dsh-sdd-field[hidden]{display:none}.dsh-sdd-checkbox{display:grid;grid-template-columns:auto 1fr;align-items:start;gap:9px;padding:10px;border:1px solid var(--dsw-alias-border-l1,#ddd);border-radius:9px}.dsh-sdd-checkbox input{margin-top:2px}.dsh-sdd-modal-footer{display:flex;justify-content:flex-end;gap:8px;padding:14px 20px;border-top:1px solid var(--dsw-alias-border-l1,#ddd);background:var(--dsw-alias-bg-layer-2,#fafafa)}
+.dsh-sdd-modal-backdrop{position:fixed;inset:0;z-index:200;display:flex;align-items:center;justify-content:center;padding:20px;background:#0008}.dsh-sdd-modal{box-sizing:border-box;width:min(520px,100%);max-height:min(760px,calc(100vh - 40px));overflow:auto;border:1px solid var(--dsw-alias-border-l1,#ddd);border-radius:14px;background:var(--dsw-alias-bg-base,#fff);box-shadow:0 20px 60px #0005}.dsh-sdd-modal-header{padding:18px 20px 10px}.dsh-sdd-modal-header h2{margin:0 0 6px;font-size:18px}.dsh-sdd-modal-body{display:flex;flex-direction:column;gap:14px;padding:8px 20px 18px}.dsh-sdd-field{display:flex;flex-direction:column;gap:6px}.dsh-sdd-field>label{font-size:13px;font-weight:600}.dsh-sdd-field textarea{min-height:88px;resize:vertical}.dsh-sdd-field[hidden]{display:none}.dsh-sdd-checkbox{display:grid;grid-template-columns:auto 1fr;align-items:start;gap:9px;padding:10px;border:1px solid var(--dsw-alias-border-l1,#ddd);border-radius:9px}.dsh-sdd-checkbox input{margin-top:2px}.dsh-sdd-modal-footer{display:flex;justify-content:flex-end;gap:8px;padding:14px 20px;border-top:1px solid var(--dsw-alias-border-l1,#ddd);background:var(--dsw-alias-bg-layer-2,#fafafa)}.dsh-sdd-checkbox-detail{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:start;gap:8px}.dsh-sdd-checkbox-detail .dsh-sdd-checkbox{height:100%;box-sizing:border-box}.dsh-sdd-source-detail{width:min(960px,100%)}.dsh-sdd-source-detail-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.dsh-sdd-source-detail-grid>section{min-width:0}.dsh-sdd-source-detail pre{max-height:52vh;white-space:pre-wrap;overflow:auto;overflow-wrap:anywhere}@media(max-width:720px){.dsh-sdd-source-detail-grid{grid-template-columns:1fr}.dsh-sdd-checkbox-detail{grid-template-columns:1fr}.dsh-sdd-checkbox-detail button{justify-self:start}}
 .dsh-sdd-template-modal{width:min(900px,100%)}.dsh-sdd-template-preview{display:block;box-sizing:border-box;width:100%;margin:0;padding:16px;max-height:60vh;overflow:auto;border:1px solid var(--dsw-alias-border-l1,#ddd);border-radius:9px;background:var(--dsw-alias-bg-layer-2,#fafafa);color:inherit;font:12px/1.65 ui-monospace,SFMono-Regular,Consolas,"Liberation Mono",monospace;text-align:left;white-space:pre;word-break:normal;overflow-wrap:normal;tab-size:2;direction:ltr}
 .dsh-sdd-manual-items{display:flex;flex-direction:column;gap:10px}.dsh-sdd-manual-item{display:grid;grid-template-columns:minmax(120px,.35fr) minmax(180px,.65fr) auto;gap:8px;padding:10px;border:1px solid var(--dsw-alias-border-l1,#ddd);border-radius:9px;background:var(--dsw-alias-bg-layer-2,#fafafa)}.dsh-sdd-manual-item textarea{grid-column:1/-1;min-height:100px}.dsh-sdd-manual-item button{align-self:start}@media(max-width:650px){.dsh-sdd-manual-item{grid-template-columns:1fr}.dsh-sdd-manual-item textarea{grid-column:1}.dsh-sdd-manual-item button{justify-self:end}}
 .dsh-sdd-package-modal{width:min(1120px,100%)}.dsh-sdd-package{display:grid;grid-template-columns:minmax(230px,.32fr) minmax(0,1fr);gap:12px;min-height:480px}.dsh-sdd-file-tree{max-height:62vh;overflow:auto;border:1px solid var(--dsw-alias-border-l1,#ddd);border-radius:9px;padding:6px;background:var(--dsw-alias-bg-layer-2,#fafafa)}.dsh-sdd-file-row{display:flex;align-items:center;width:100%;gap:6px;padding:7px 8px;border:0;border-radius:6px;background:transparent;color:inherit;text-align:left;cursor:pointer;font:12px ui-monospace,SFMono-Regular,Consolas,monospace}.dsh-sdd-file-row:hover,.dsh-sdd-file-row[data-selected]{background:var(--dsw-alias-interactive-bg-hover,#e8e8e8)}.dsh-sdd-preview-pane{min-width:0}.dsh-sdd-preview-toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px}.dsh-sdd-preview-toolbar strong{margin-right:auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.dsh-sdd-markdown{box-sizing:border-box;max-height:56vh;overflow:auto;padding:18px;border:1px solid var(--dsw-alias-border-l1,#ddd);border-radius:9px;background:var(--dsw-alias-bg-base,#fff);line-height:1.65}.dsh-sdd-markdown h1,.dsh-sdd-markdown h2,.dsh-sdd-markdown h3{margin-top:1.3em}.dsh-sdd-markdown pre,.dsh-sdd-markdown code{font-family:ui-monospace,SFMono-Regular,Consolas,monospace}.dsh-sdd-markdown pre{overflow:auto;padding:12px;border-radius:7px;background:var(--dsw-alias-bg-layer-2,#f5f5f5)}.dsh-sdd-markdown table{border-collapse:collapse;max-width:100%;display:block;overflow:auto}.dsh-sdd-markdown th,.dsh-sdd-markdown td{border:1px solid var(--dsw-alias-border-l1,#ddd);padding:6px 9px}.dsh-sdd-image-preview{display:flex;align-items:center;justify-content:center;min-height:360px;border:1px solid var(--dsw-alias-border-l1,#ddd);border-radius:9px;background:var(--dsw-alias-bg-layer-2,#fafafa)}.dsh-sdd-image-preview img{max-width:100%;max-height:56vh}.dsh-sdd-file-note{padding:30px;text-align:center;border:1px dashed var(--dsw-alias-border-l1,#ddd);border-radius:9px;color:var(--dsw-alias-label-secondary,#666)}@media(max-width:760px){.dsh-sdd-package{grid-template-columns:1fr}.dsh-sdd-file-tree{max-height:220px}}
@@ -38,6 +38,7 @@ interface DialogField {
   required?: boolean
   options?: DialogOption[]
   showWhen?: { field: string; value: string }
+  detail?: () => void
 }
 interface DialogConfig { title: string; description?: string; submitLabel: string; fields: DialogField[] }
 type DialogValues = Record<string, string | boolean>
@@ -54,7 +55,8 @@ interface RuntimeState {
 }
 
 async function call(action: SddAction): Promise<SddResponse> {
-  const timeout = action.kind === 'development-install-openspec' ? 330_000
+  const timeout = action.kind === 'bind-session' || action.kind === 'context' ? 330_000
+    : action.kind === 'development-install-openspec' ? 330_000
     : action.kind === 'development-initialize-openspec' ? 210_000
       : action.kind === 'development-fork-openspec-schema' || action.kind === 'development-create-openspec-change' || action.kind === 'development-inspect-openspec-templates' ? 75_000
       : action.kind === 'project-git-fetch' || action.kind === 'project-git-sync' || action.kind === 'project-git-push' ? 210_000
@@ -149,10 +151,11 @@ class SddWorkbench {
   }
 
   private reconcileSelection(snapshot: ProjectSnapshot): void {
-      if (this.state.workItemUid === undefined || !snapshot.workItems.some(item => item.uid === this.state.workItemUid)) {
-        const workItem = snapshot.workItems.find(item => item.status !== 'completed')
+      const deliveryWorkItems = snapshot.workItems.filter(item => item.executionMode !== 'attached')
+      if (this.state.workItemUid === undefined || !deliveryWorkItems.some(item => item.uid === this.state.workItemUid)) {
+        const workItem = deliveryWorkItems.find(item => item.status !== 'completed')
         this.state.workItemUid = workItem?.uid
-        this.state.selected = new Set([workItem?.sourceUid, workItem?.bundleSourceUid].filter((uid): uid is string => uid !== undefined))
+        this.state.selected = workItem === undefined ? new Set() : this.workItemSourceUids(snapshot, workItem.uid, stageMenu(this.state.menu) ? this.state.menu : undefined)
         this.state.targetArtifactUid = undefined
       }
       if (stageMenu(this.state.menu)) {
@@ -168,7 +171,7 @@ class SddWorkbench {
 
   private defaultInputs(snapshot: ProjectSnapshot, stage: StageId): Set<string> {
     const workItem = snapshot.workItems.find(item => item.uid === this.state.workItemUid)
-    const selected = new Set([workItem?.sourceUid, workItem?.bundleSourceUid].filter((uid): uid is string => uid !== undefined))
+    const selected = workItem === undefined ? new Set<string>() : this.workItemSourceUids(snapshot, workItem.uid, stage)
     const stageIndex = STAGES.findIndex(item => item.id === stage)
     for (const upstream of STAGES.slice(0, stageIndex)) {
       const latest = snapshot.artifacts.filter(item => item.workItemUid === workItem?.uid && item.stage === upstream.id && item.status === 'accepted').sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0]
@@ -177,14 +180,21 @@ class SddWorkbench {
     return selected
   }
 
+  private workItemSourceUids(snapshot: ProjectSnapshot, workItemUid: string, stage?: StageId): Set<string> {
+    const includeAttached = stage === undefined || stage === 'specification' || stage === 'development'
+    const owned = snapshot.workItems.filter(item => item.uid === workItemUid || (includeAttached && item.status !== 'completed' && item.executionMode === 'attached' && item.parentWorkItemUid === workItemUid))
+    return new Set(owned.flatMap(item => [item.sourceUid, item.bundleSourceUid]).filter((uid): uid is string => uid !== undefined))
+  }
+
   private render(): void {
     if (this.container === undefined) return
     const workspaceState = this.workspaces.list.getSnapshot(); const options = workspaceState.items.map(item => `<option value="${escapeHtml(item.workspaceId as string)}"${item.workspaceId === this.state.workspaceId ? ' selected' : ''}>${escapeHtml(item.title || item.path)}</option>`).join('')
     const title = this.state.menu === 'dashboard' ? '项目看板' : this.state.menu === 'settings' ? '项目设置' : STAGES.find(item => item.id === this.state.menu)!.label
     if (this.state.workspaceId === undefined) { this.container.innerHTML = '<div class="dsh-sdd-page"><div class="dsh-sdd-empty">请先在 DSH 中打开一个 Workspace。</div></div>'; return }
     const snapshot = this.state.snapshot
-    const workItemOptions = snapshot?.workItems.map(item => `<option value="${escapeHtml(item.uid)}"${item.uid === this.state.workItemUid ? ' selected' : ''}>${escapeHtml(item.key)} · ${escapeHtml(item.title)}${item.status === 'change-pending' ? ' · 有变更' : item.status === 'removed-pending' ? ' · 已移除' : ''}</option>`).join('') ?? ''
-    const workItemSelect = snapshot !== undefined && snapshot.workItems.length > 0 && this.state.menu !== 'settings' ? `<select class="dsh-sdd-select" data-action="work-item" title="当前需求工作单元">${workItemOptions}</select>` : ''
+    const deliveryWorkItems = snapshot?.workItems.filter(item => item.executionMode !== 'attached') ?? []
+    const workItemOptions = deliveryWorkItems.map(item => `<option value="${escapeHtml(item.uid)}"${item.uid === this.state.workItemUid ? ' selected' : ''}>${escapeHtml(item.key)} · ${escapeHtml(item.title)}${item.status === 'change-pending' ? ' · 有变更' : item.status === 'removed-pending' ? ' · 已移除' : ''}</option>`).join('')
+    const workItemSelect = snapshot !== undefined && deliveryWorkItems.length > 0 && this.state.menu !== 'settings' ? `<select class="dsh-sdd-select" data-action="work-item" title="当前交付工作单元">${workItemOptions}</select>` : ''
     let body = ''
     if (this.state.loading) body = '<div class="dsh-sdd-empty">正在读取 SDD 项目…</div>'
     else if (snapshot?.configuration.status === 'missing') body = this.initializationHtml()
@@ -207,12 +217,14 @@ class SddWorkbench {
       ? stat('工作量', '未配置', '由业务数据适配器提供估算')
       : `<div class="dsh-sdd-stat"><span class="dsh-sdd-muted">工作量</span><div class="dsh-sdd-workload-list">${dashboard.workload.map(item => `<div class="dsh-sdd-workload-row" title="${escapeHtml(item.unit)} · 已完成 ${item.completed} / 总计 ${item.total}"><span>${escapeHtml(item.unit)}</span><strong>${item.completed} / ${item.total}</strong></div>`).join('')}</div></div>`
     const pendingChanges = snapshot.workItems.filter(item => item.status === 'change-pending' || item.status === 'removed-pending').length
+    const deliveryWorkItems = snapshot.workItems.filter(item => item.executionMode !== 'attached')
+    const attachedDefects = snapshot.workItems.filter(item => item.executionMode === 'attached' && item.status !== 'completed')
     const repositoryCount = snapshot.project?.development.repositories.length ?? 0
     const projectGit = snapshot.projectRepository
     const gitNote = projectGit?.isRepository !== true ? '当前工作空间尚未初始化 Git 仓库'
       : !projectGit.exactWorkspaceRoot ? '当前工作空间不是 Git 仓库根目录'
         : `${projectGit.branch ?? 'detached HEAD'} · ${projectGit.changedFiles} 个本地变更 · ahead ${projectGit.ahead} / behind ${projectGit.behind}${projectGit.keyConflicts.length ? ` · 编号冲突 ${projectGit.keyConflicts.length}` : ''}`
-    return `<div class="dsh-sdd-grid" style="margin-bottom:14px"><section class="dsh-sdd-card"><h2>需求与缺陷管理</h2><p class="dsh-sdd-muted">统一从业务系统导入或再次同步需求包、缺陷和问题；阶段页面只处理各自的交付流程。</p><div class="dsh-sdd-actions"><button class="dsh-sdd-button primary" data-action="import-source">导入或同步需求/缺陷</button></div></section><section class="dsh-sdd-card"><h2>项目仓库与设置</h2><p class="dsh-sdd-muted">${escapeHtml(gitNote)}。已登记 ${repositoryCount} 个目标代码仓库；协作远程、同步和仓库规则统一在项目设置维护。</p><div class="dsh-sdd-actions"><button class="dsh-sdd-button" data-action="open-settings">打开项目设置</button></div></section></div><div class="dsh-sdd-stats">${stat('总体完成度', `${dashboard.overallCompletion}%`, '实际采用阶段的质量状态')}${stat('需求工作单元', String(snapshot.workItems.length), `待处理变更 ${pendingChanges}`)}${stat('需求', String(dashboard.requirements.total), `已追踪 ${dashboard.requirements.traced}`)}${stat('缺陷', String(dashboard.defects.total), `待处理 ${dashboard.defects.open} · 已解决 ${dashboard.defects.resolved}`)}${stat('交付件', String(dashboard.artifacts.total), `草稿 ${dashboard.artifacts.drafts} · 已接受 ${dashboard.artifacts.accepted}`)}${stat('代码空间', String(dashboard.development.workspaces), `变更文件 ${dashboard.development.changedFiles}`)}${stat('测试', String(dashboard.development.passingTests + dashboard.development.failingTests), `通过 ${dashboard.development.passingTests} · 失败 ${dashboard.development.failingTests}`)}${workload}</div>
+    return `<div class="dsh-sdd-grid" style="margin-bottom:14px"><section class="dsh-sdd-card"><h2>需求与缺陷管理</h2><p class="dsh-sdd-muted">从这里导入需求包或需要独立推进的缺陷；开发中的需求缺陷请进入对应需求后添加。</p><div class="dsh-sdd-actions"><button class="dsh-sdd-button primary" data-action="import-requirement">获取并预览需求包</button><button class="dsh-sdd-button" data-action="import-standalone-defect">获取并预览独立缺陷</button></div></section><section class="dsh-sdd-card"><h2>项目仓库与设置</h2><p class="dsh-sdd-muted">${escapeHtml(gitNote)}。已登记 ${repositoryCount} 个目标代码仓库；协作远程、同步和仓库规则统一在项目设置维护。</p><div class="dsh-sdd-actions"><button class="dsh-sdd-button" data-action="open-settings">打开项目设置</button></div></section></div><div class="dsh-sdd-stats">${stat('总体完成度', `${dashboard.overallCompletion}%`, '实际采用阶段的质量状态')}${stat('交付工作单元', String(deliveryWorkItems.length), `待处理变更 ${pendingChanges}`)}${stat('需求', String(dashboard.requirements.total), `已追踪 ${dashboard.requirements.traced}`)}${stat('缺陷', String(dashboard.defects.total), `独立 ${deliveryWorkItems.filter(item => item.kind === 'defect' && item.status !== 'completed').length} · 需求内 ${attachedDefects.length}`)}${stat('交付件', String(dashboard.artifacts.total), `草稿 ${dashboard.artifacts.drafts} · 已接受 ${dashboard.artifacts.accepted}`)}${stat('代码空间', String(dashboard.development.workspaces), `变更文件 ${dashboard.development.changedFiles}`)}${stat('测试', String(dashboard.development.passingTests + dashboard.development.failingTests), `通过 ${dashboard.development.passingTests} · 失败 ${dashboard.development.failingTests}`)}${workload}</div>
       <div class="dsh-sdd-chart-grid">${this.stageFlowHtml(snapshot)}${this.burnupHtml(dashboard.burnup)}</div>
       ${this.deliveryMatrixHtml(snapshot)}
       <div class="dsh-sdd-grid dsh-sdd-dashboard-columns" style="margin-top:14px"><section class="dsh-sdd-card"><h2>质量与追踪</h2><p>来源追踪覆盖率：<strong>${dashboard.traceability}%</strong></p>${dashboard.blockers.length === 0 ? '<div class="dsh-sdd-empty">当前没有结构化阻塞项</div>' : `<ul class="dsh-sdd-checks">${dashboard.blockers.map(item => `<li data-fail>${escapeHtml(item)}</li>`).join('')}</ul>`}</section><section class="dsh-sdd-card"><h2>最近活动</h2>${dashboard.recentEvents.length === 0 ? '<div class="dsh-sdd-empty">暂无事件</div>' : `<div class="dsh-sdd-list dsh-sdd-scroll-list">${dashboard.recentEvents.slice(0, 10).map(event => `<div class="dsh-sdd-row"><span></span><span><strong>${escapeHtml(event.subject)}</strong><span class="dsh-sdd-muted">${escapeHtml(event.type)} · ${escapeHtml(event.time)}</span></span></div>`).join('')}</div>`}</section></div>${this.traceabilityHtml(snapshot)}`
@@ -282,11 +294,13 @@ class SddWorkbench {
     const stageIndex = STAGES.findIndex(item => item.id === stage)
     const accepted = snapshot.artifacts.filter(item => item.status === 'accepted' && STAGES.findIndex(stageItem => stageItem.id === item.stage) < stageIndex && item.workItemUid === this.state.workItemUid)
     const current = snapshot.artifacts.filter(item => item.stage === stage && item.workItemUid === this.state.workItemUid)
-    const sourceUids = new Set([workItem?.sourceUid, workItem?.bundleSourceUid].filter((uid): uid is string => uid !== undefined))
+    const sourceUids = workItem === undefined ? new Set<string>() : this.workItemSourceUids(snapshot, workItem.uid, stage)
     const sources = workItem === undefined ? snapshot.sources.filter(item => snapshot.workItems.length === 0) : snapshot.sources.filter(item => sourceUids.has(item.uid))
-    const importAction = stage === 'requirements' ? '<button class="dsh-sdd-button" data-action="import-requirement">导入或同步需求包</button>' : stage === 'development' ? '<button class="dsh-sdd-button" data-action="import-defect">导入或同步缺陷/问题</button>' : ''
-    const change = workItem?.change === undefined ? '' : `<div class="dsh-sdd-error"><strong>${workItem.status === 'removed-pending' ? '外部需求已被移除' : '检测到需求变更'}</strong><br>${escapeHtml(workItem.change.changedPaths.join('、') || '外部状态变化')}<br>需要重新评审：${escapeHtml(workItem.change.reviewRequiredStages.map(id => STAGES.find(stageItem => stageItem.id === id)?.label ?? id).join('、') || '无')}${workItem.status === 'removed-pending' ? '<div class="dsh-sdd-actions"><button class="dsh-sdd-button" data-resolve-removal>处理外部移除</button></div>' : ''}</div>`
-    const noWorkItem = snapshot.workItems.length > 0 && workItem === undefined ? '<div class="dsh-sdd-error">请先选择一个需求工作单元。</div>' : ''
+    const importAction = stage === 'requirements' ? '<button class="dsh-sdd-button" data-action="import-requirement">获取并预览需求包</button>' : ''
+    const attachedDefects = workItem === undefined ? [] : snapshot.workItems.filter(item => item.executionMode === 'attached' && item.parentWorkItemUid === workItem.uid)
+    const attachedDefectsHtml = workItem?.kind !== 'requirement' ? '' : `<section class="dsh-sdd-card" style="margin-bottom:14px"><h2>本需求缺陷（${attachedDefects.filter(item => item.status !== 'completed').length}）</h2><p class="dsh-sdd-muted">这些缺陷保留独立业务编号和来源，但代码、测试与交付件归入当前需求，不单独展开五阶段流程。</p><div class="dsh-sdd-list dsh-sdd-bounded-list">${attachedDefects.map(item => `<div class="dsh-sdd-row"><span></span><span><strong>${escapeHtml(item.key)} · ${escapeHtml(item.title)}</strong><span class="dsh-sdd-muted">${escapeHtml(item.provider)} · ${escapeHtml(item.status)}</span></span><span><span class="dsh-sdd-badge">需求内缺陷</span>${item.status === 'removed-pending' ? `<button class="dsh-sdd-button" data-resolve-attached-removal="${escapeHtml(item.uid)}">处理移除</button>` : ''}</span></div>`).join('') || '<div class="dsh-sdd-empty">尚未关联缺陷</div>'}</div><div class="dsh-sdd-actions"><button class="dsh-sdd-button" data-action="import-attached-defect">获取并预览本需求缺陷</button></div></section>`
+    const change = workItem?.change === undefined ? '' : `<div class="dsh-sdd-error"><strong>${workItem.status === 'removed-pending' ? '外部需求已被移除' : '检测到需求或关联缺陷变更'}</strong><br>${escapeHtml(workItem.change.changedPaths.join('、') || '外部状态变化')}<br>需要重新评审：${escapeHtml(workItem.change.reviewRequiredStages.map(id => STAGES.find(stageItem => stageItem.id === id)?.label ?? id).join('、') || '无')}${workItem.status === 'removed-pending' ? '<div class="dsh-sdd-actions"><button class="dsh-sdd-button" data-resolve-removal>处理外部移除</button></div>' : ''}</div>`
+    const noWorkItem = snapshot.workItems.some(item => item.executionMode !== 'attached') && workItem === undefined ? '<div class="dsh-sdd-error">请先选择一个交付工作单元。</div>' : ''
     const deliverableName = STAGE_ARTIFACT_TEMPLATES[stage].documentName
     const target = current.find(item => item.uid === this.state.targetArtifactUid && (item.status === 'draft' || item.status === 'in-review'))
     const nextStep = current.every(item => item.status !== 'draft' && item.status !== 'in-review')
@@ -299,13 +313,18 @@ class SddWorkbench {
     const selectedArtifacts = accepted.filter(item => this.state.selected.has(item.uid))
     const selectedSources = sources.filter(item => this.state.selected.has(item.uid))
     const selectedRows = selectedArtifacts.map(item => this.inputSummaryRow(item)).join('') + selectedSources.map(item => this.sourceSummaryRow(item)).join('')
+    const configuredRepositories = snapshot.project?.development.repositories ?? []
+    const codeRun = target === undefined ? undefined : snapshot.runs.find(item => item.artifactUid === target.uid && item.status !== 'completed')
+    const codeReferenceHtml = stage === 'development' || configuredRepositories.length === 0 ? '' : codeRun?.codeReferences === undefined
+      ? `<div class="dsh-sdd-muted" style="margin-top:12px"><strong>代码参考：</strong>项目已关联 ${configuredRepositories.length} 个仓库；开始对话时自动准备为只读辅助输入，无需逐阶段选择。</div>`
+      : `<div class="dsh-sdd-muted" style="margin-top:12px"><strong>代码参考：</strong>${codeRun.codeReferences.map(reference => reference.available && reference.baseCommit !== undefined ? `${reference.repositoryId} @ ${reference.baseCommit.slice(0, 8)}` : `${reference.repositoryId}（暂不可用）`).join('、') || '无'}</div>`
     const actionable = current.filter(item => item.status === 'draft' || item.status === 'in-review')
     const acceptedCurrent = current.filter(item => item.status === 'accepted').sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
     const visibleUids = new Set([...actionable, ...acceptedCurrent.slice(0, 3)].map(item => item.uid))
     const visible = current.filter(item => visibleUids.has(item.uid))
     const history = current.filter(item => !visibleUids.has(item.uid)).sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
     const outputList = current.length === 0 ? `<div class="dsh-sdd-empty">尚未创建${escapeHtml(deliverableName)}</div>` : `<div class="dsh-sdd-list dsh-sdd-bounded-list">${visible.map(item => this.outputRow(item, snapshot)).join('')}</div>${history.length === 0 ? '' : `<details class="dsh-sdd-history"><summary>历史版本（${history.length}）</summary><div class="dsh-sdd-list dsh-sdd-bounded-list">${history.map(item => this.outputRow(item, snapshot)).join('')}</div></details>`}`
-    return `${change}${noWorkItem}${applicabilityHtml}${this.stageSettingsHtml(snapshot, stage)}<div class="dsh-sdd-grid"><section class="dsh-sdd-card"><h2>本阶段输入材料（${selectedArtifacts.length + selectedSources.length}）</h2><p class="dsh-sdd-muted">${target === undefined ? '创建草稿前选择输入；默认推荐当前来源和每个上游阶段的最新已验收版本。' : `输入已固定在 ${target.key} v${target.version} 的 manifest.yaml 中，调整上游输入需要创建修订。`}</p><div class="dsh-sdd-list dsh-sdd-bounded-list dsh-sdd-input-summary">${selectedRows || '<div class="dsh-sdd-empty">尚未选择输入材料</div>'}</div><div class="dsh-sdd-actions"><button class="dsh-sdd-button" data-action="select-inputs"${target === undefined ? '' : ' disabled'}>${target === undefined ? '选择/调整输入' : '输入已固定'}</button>${importAction}</div></section><section class="dsh-sdd-card"><h2>${escapeHtml(deliverableName)}</h2><p class="dsh-sdd-muted">当前处理中和最近已验收版本优先展示，其余版本收纳到历史记录。</p>${outputList}<div class="dsh-sdd-muted" style="margin-top:12px">${escapeHtml(nextStep)}</div><div class="dsh-sdd-actions"><button class="dsh-sdd-button" data-action="view-template">查看${escapeHtml(deliverableName)}模板</button><button class="dsh-sdd-button${target === undefined ? ' primary' : ''}" data-action="draft"${snapshot.workItems.length > 0 && (workItem === undefined || applicability?.status === 'not-applicable') ? ' disabled' : ''}>创建${escapeHtml(deliverableName)}草稿</button><button class="dsh-sdd-button primary" data-action="conversation"${target === undefined ? ' disabled title="请先创建或选择本阶段交付件草稿"' : ''}>开始阶段对话</button></div></section>${stage === 'development' ? this.developmentHtml(snapshot) : ''}</div>`
+    return `${change}${noWorkItem}${attachedDefectsHtml}${applicabilityHtml}${this.stageSettingsHtml(snapshot, stage)}<div class="dsh-sdd-grid"><section class="dsh-sdd-card"><h2>本阶段输入材料（${selectedArtifacts.length + selectedSources.length}）</h2><p class="dsh-sdd-muted">${target === undefined ? '创建草稿前选择输入；默认推荐当前来源、需求内缺陷和每个上游阶段的最新已验收版本。' : `输入已固定在 ${target.key} v${target.version} 的 manifest.yaml 中，调整上游输入需要创建修订。`}</p><div class="dsh-sdd-list dsh-sdd-bounded-list dsh-sdd-input-summary">${selectedRows || '<div class="dsh-sdd-empty">尚未选择输入材料</div>'}</div>${codeReferenceHtml}<div class="dsh-sdd-actions"><button class="dsh-sdd-button" data-action="select-inputs"${target === undefined ? '' : ' disabled'}>${target === undefined ? '选择/调整输入' : '输入已固定'}</button>${importAction}</div></section><section class="dsh-sdd-card"><h2>${escapeHtml(deliverableName)}</h2><p class="dsh-sdd-muted">当前处理中和最近已验收版本优先展示，其余版本收纳到历史记录。</p>${outputList}<div class="dsh-sdd-muted" style="margin-top:12px">${escapeHtml(nextStep)}</div><div class="dsh-sdd-actions"><button class="dsh-sdd-button" data-action="view-template">查看${escapeHtml(deliverableName)}模板</button><button class="dsh-sdd-button${target === undefined ? ' primary' : ''}" data-action="draft"${snapshot.workItems.some(item => item.executionMode !== 'attached') && (workItem === undefined || applicability?.status === 'not-applicable') ? ' disabled' : ''}>创建${escapeHtml(deliverableName)}草稿</button><button class="dsh-sdd-button primary" data-action="conversation"${target === undefined ? ' disabled title="请先创建或选择本阶段交付件草稿"' : ''}>开始阶段对话</button></div></section>${stage === 'development' ? this.developmentHtml(snapshot) : ''}</div>`
   }
 
   private stageSettingsHtml(snapshot: ProjectSnapshot, stage: StageId): string {
@@ -374,7 +393,7 @@ class SddWorkbench {
     root.querySelector<HTMLElement>('[data-action="close"]')?.addEventListener('click', () => this.close()); root.querySelectorAll<HTMLElement>('[data-action="refresh"]').forEach(button => button.addEventListener('click', () => { void this.refresh() }))
     root.querySelector<HTMLSelectElement>('[data-action="workspace"]')?.addEventListener('change', event => { this.state.workspaceId = (event.currentTarget as HTMLSelectElement).value; this.state.workItemUid = undefined; this.state.selected.clear(); this.state.targetArtifactUid = undefined; void this.refresh() })
     root.querySelector<HTMLSelectElement>('[data-action="work-item"]')?.addEventListener('change', event => { this.state.workItemUid = (event.currentTarget as HTMLSelectElement).value; this.state.targetArtifactUid = undefined; this.state.selected = this.state.snapshot !== undefined && stageMenu(this.state.menu) ? this.defaultInputs(this.state.snapshot, this.state.menu) : new Set(); this.render() })
-    root.querySelector<HTMLElement>('[data-action="initialize"]')?.addEventListener('click', () => { void this.mutate({ kind: 'initialize', workspaceId: this.state.workspaceId! }) }); root.querySelector<HTMLElement>('[data-action="draft"]')?.addEventListener('click', () => { void this.createDraft() }); root.querySelector<HTMLElement>('[data-action="import-source"]')?.addEventListener('click', () => { void this.importSource() }); root.querySelector<HTMLElement>('[data-action="import-requirement"]')?.addEventListener('click', () => { void this.importSource('requirement') }); root.querySelector<HTMLElement>('[data-action="import-defect"]')?.addEventListener('click', () => { void this.importSource('defect') }); root.querySelector<HTMLElement>('[data-action="conversation"]')?.addEventListener('click', () => { void this.startConversation() })
+    root.querySelector<HTMLElement>('[data-action="initialize"]')?.addEventListener('click', () => { void this.mutate({ kind: 'initialize', workspaceId: this.state.workspaceId! }) }); root.querySelector<HTMLElement>('[data-action="draft"]')?.addEventListener('click', () => { void this.createDraft() }); root.querySelector<HTMLElement>('[data-action="import-requirement"]')?.addEventListener('click', () => { void this.importSource('requirement') }); root.querySelector<HTMLElement>('[data-action="import-standalone-defect"]')?.addEventListener('click', () => { void this.importSource('defect') }); root.querySelector<HTMLElement>('[data-action="import-attached-defect"]')?.addEventListener('click', () => { void this.importSource('defect', this.state.workItemUid) }); root.querySelector<HTMLElement>('[data-action="conversation"]')?.addEventListener('click', () => { void this.startConversation() })
     root.querySelector<HTMLElement>('[data-action="open-settings"]')?.addEventListener('click', () => this.open('settings'))
     root.querySelector<HTMLElement>('[data-action="select-inputs"]')?.addEventListener('click', () => { void this.chooseInputs() })
     root.querySelector<HTMLElement>('[data-action="view-template"]')?.addEventListener('click', () => this.showTemplate())
@@ -411,6 +430,7 @@ class SddWorkbench {
     root.querySelector<HTMLElement>('[data-action="development-create"]')?.addEventListener('click', () => { void this.createDevelopment() }); root.querySelector<HTMLElement>('[data-action="development-status"]')?.addEventListener('click', () => { if (this.state.targetArtifactUid) void this.mutate({ kind: 'development-status', workspaceId: this.state.workspaceId!, artifactUid: this.state.targetArtifactUid }) })
     root.querySelectorAll<HTMLButtonElement>('[data-dev-test]').forEach(button => button.addEventListener('click', () => { void this.runTest(button.dataset.devTest!) })); root.querySelectorAll<HTMLButtonElement>('[data-dev-skip-test]').forEach(button => button.addEventListener('click', () => { void this.skipTest(button.dataset.devSkipTest!) })); root.querySelectorAll<HTMLButtonElement>('[data-dev-commit]').forEach(button => button.addEventListener('click', () => { void this.commit(button.dataset.devCommit!) }))
     root.querySelector<HTMLButtonElement>('[data-resolve-removal]')?.addEventListener('click', () => { void this.resolveRemoval() })
+    root.querySelectorAll<HTMLButtonElement>('[data-resolve-attached-removal]').forEach(button => button.addEventListener('click', () => { void this.resolveRemoval(button.dataset.resolveAttachedRemoval) }))
     root.querySelectorAll<HTMLButtonElement>('[data-matrix-work-item]').forEach(button => button.addEventListener('click', () => {
       this.state.workItemUid = button.dataset.matrixWorkItem; this.state.menu = button.dataset.matrixStage as StageId; this.state.targetArtifactUid = button.dataset.matrixArtifact
       const artifact = this.state.snapshot?.artifacts.find(item => item.uid === this.state.targetArtifactUid)
@@ -701,7 +721,10 @@ class SddWorkbench {
         const show = field.showWhen === undefined ? '' : ` data-show-field="${escapeHtml(field.showWhen.field)}" data-show-value="${escapeHtml(field.showWhen.value)}"`
         const help = field.help === undefined ? '' : `<span class="dsh-sdd-muted">${escapeHtml(field.help)}</span>`
         if (field.type === 'manual-items') return `<div class="dsh-sdd-field"${show}><label>${escapeHtml(field.label)}</label>${help}<div class="dsh-sdd-manual-items" data-manual-items="${escapeHtml(field.name)}"></div><button class="dsh-sdd-button" type="button" data-add-manual-item="${escapeHtml(field.name)}">＋ 添加子需求</button></div>`
-        if (field.type === 'checkbox') return `<div class="dsh-sdd-field"${show}><label class="dsh-sdd-checkbox"><input type="checkbox" name="${escapeHtml(field.name)}"${field.value === true ? ' checked' : ''}${required}><span>${escapeHtml(field.label)}${help}</span></label></div>`
+        if (field.type === 'checkbox') {
+          const checkbox = `<label class="dsh-sdd-checkbox"><input type="checkbox" name="${escapeHtml(field.name)}"${field.value === true ? ' checked' : ''}${required}><span>${escapeHtml(field.label)}${help}</span></label>`
+          return `<div class="dsh-sdd-field"${show}>${field.detail === undefined ? checkbox : `<div class="dsh-sdd-checkbox-detail">${checkbox}<button class="dsh-sdd-button" type="button" data-dialog-detail="${escapeHtml(field.name)}">查看详情</button></div>`}</div>`
+        }
         const control = field.type === 'select'
           ? `<select class="dsh-sdd-select" name="${escapeHtml(field.name)}"${required}>${(field.options ?? []).map(option => `<option value="${escapeHtml(option.value)}"${option.value === field.value ? ' selected' : ''}>${escapeHtml(option.label)}</option>`).join('')}</select>`
           : field.type === 'textarea'
@@ -722,8 +745,9 @@ class SddWorkbench {
         const list = backdrop.querySelector<HTMLElement>(`[data-manual-items="${name}"]`)
         if (list === null) return
         const row = document.createElement('div')
+        const noun = config.fields.find(field => field.name === name)?.label.includes('缺陷') === true ? '缺陷' : '子需求'
         row.className = 'dsh-sdd-manual-item'
-        row.innerHTML = `<input class="dsh-sdd-input" data-manual-key placeholder="子需求编号（可留空）"><input class="dsh-sdd-input" data-manual-title placeholder="子需求标题"><button class="dsh-sdd-button" type="button" data-remove-manual-item>删除</button><textarea class="dsh-sdd-input" data-manual-description placeholder="详细描述业务背景、场景、规则、边界、异常、验收想法等；可以输入多行长文本。"></textarea>`
+        row.innerHTML = `<input class="dsh-sdd-input" data-manual-key placeholder="${noun}编号（可留空）"><input class="dsh-sdd-input" data-manual-title placeholder="${noun}标题"><button class="dsh-sdd-button" type="button" data-remove-manual-item>删除</button><textarea class="dsh-sdd-input" data-manual-description placeholder="详细描述业务背景、场景、规则、边界、异常、验收想法等；可以输入多行长文本。"></textarea>`
         list.appendChild(row)
         row.querySelector<HTMLElement>('[data-remove-manual-item]')!.addEventListener('click', () => row.remove())
         row.querySelector<HTMLInputElement>('[data-manual-title]')!.focus()
@@ -738,6 +762,7 @@ class SddWorkbench {
         })
       }
       form.addEventListener('change', updateVisibility)
+      config.fields.filter(field => field.detail !== undefined).forEach(field => backdrop.querySelector<HTMLButtonElement>(`[data-dialog-detail="${field.name}"]`)?.addEventListener('click', () => field.detail!()))
       backdrop.querySelectorAll<HTMLButtonElement>('[data-add-manual-item]').forEach(button => button.addEventListener('click', () => addManualItem(button.dataset.addManualItem!)))
       form.addEventListener('submit', event => {
         event.preventDefault()
@@ -753,7 +778,7 @@ class SddWorkbench {
               title: row.querySelector<HTMLInputElement>('[data-manual-title]')!.value.trim(),
               description: row.querySelector<HTMLTextAreaElement>('[data-manual-description]')!.value.trim() || undefined,
             })).filter(item => item.key !== undefined || item.title !== '' || item.description !== undefined)
-            if (items.some(item => item.title === '')) { rowError(group, '每个子需求都必须填写标题'); return }
+            if (items.some(item => item.title === '')) { rowError(group, `每个${field.label.includes('缺陷') ? '缺陷' : '子需求'}都必须填写标题`); return }
             values[field.name] = JSON.stringify(items)
             continue
           }
@@ -896,10 +921,12 @@ class SddWorkbench {
     }
   }
 
-  private async importSource(forcedKind?: string): Promise<void> {
+  private async importSource(forcedKind?: string, attachToWorkItemUid?: string): Promise<void> {
     const snapshot = this.state.snapshot; const providers = snapshot?.sourceProviders ?? []
     if (providers.length === 0) { this.state.error = '当前没有可用的业务数据获取方式'; return this.render() }
     const defaultKind = forcedKind ?? 'requirement'
+    const parent = attachToWorkItemUid === undefined ? undefined : snapshot?.workItems.find(item => item.uid === attachToWorkItemUid)
+    if (attachToWorkItemUid !== undefined && parent === undefined) { this.state.error = '当前需求工作单元不存在，请刷新后重试'; return this.render() }
     const kinds = [...new Set([defaultKind, 'requirement', 'defect', ...Object.keys(snapshot?.project?.sources ?? {})])]
     const kindLabels: Record<string, string> = { requirement: '需求', defect: '缺陷', issue: '问题' }
     const configured = snapshot?.project?.sources[defaultKind]
@@ -907,7 +934,8 @@ class SddWorkbench {
     const connectors = snapshot?.connectors ?? []
     const manualKey = `MANUAL-${new Date().toISOString().replace(/[-:TZ.]/g, '').slice(0, 14)}`
     const values = await this.openForm({
-      title: '导入外部业务内容', description: '插件会读取外部系统中的原始事实并保存快照，AI 随后把它整合进当前阶段交付件。', submitLabel: '导入',
+      title: parent === undefined ? `获取并预览${defaultKind === 'defect' ? '独立缺陷' : '外部业务内容'}` : `获取并预览本需求缺陷 · ${parent.key}`,
+      description: parent === undefined ? '插件先读取外部事实并展示完整内容，确认后才保存快照和创建独立工作单元。' : `确认导入后，缺陷会归入 ${parent.key} · ${parent.title}，不会创建另一套五阶段交付空间。`, submitLabel: '获取并预览',
       fields: [
         ...(forcedKind === undefined ? [{ name: 'kind', label: '导入内容', type: 'select' as const, required: true, value: defaultKind, options: kinds.map(value => ({ value, label: kindLabels[value] ?? value })), help: '用于区分需求、缺陷或企业自定义事项类型。' }] : []),
         { name: 'provider', label: '获取方式', type: 'select', required: true, value: defaultProvider, options: providers.map(value => ({ value, label: value === 'manual' ? '手工录入（无需适配器）' : value === 'command' ? '业务适配器（command）' : `已安装适配器：${value}` })), help: '手工录入开箱即用；业务适配器可由插件源码统一提供，也可由当前项目自定义。两者都会生成相同的标准来源和工作单元。' },
@@ -915,7 +943,7 @@ class SddWorkbench {
         { name: 'key', label: '主编号', type: 'text', required: true, value: defaultProvider === 'manual' ? manualKey : '', placeholder: defaultKind === 'defect' ? '例如：BUG-1024' : '例如：PAY-381', help: '手工录入会预生成编号，也可以换成团队自己的编号。' },
         { name: 'manualTitle', label: '标题', type: 'text', required: true, placeholder: '例如：订单部分退款', help: '只需填写当前已知的最小信息，后续由需求讨论阶段的 AI 继续追问。', showWhen: { field: 'provider', value: 'manual' } },
         { name: 'manualDescription', label: '初始描述', type: 'textarea', placeholder: '例如：一笔订单需要支持分多次退款，具体次数和金额规则尚未确认。', showWhen: { field: 'provider', value: 'manual' } },
-        { name: 'manualItems', label: '子需求（可选）', type: 'manual-items', help: '每个子需求分别填写编号、标题和不限行数的详细内容。留空时主需求本身形成一个工作单元。', showWhen: { field: 'provider', value: 'manual' } },
+        { name: 'manualItems', label: defaultKind === 'defect' ? '更多缺陷（可选）' : '子需求（可选）', type: 'manual-items', help: defaultKind === 'defect' ? '可以一次录入多条缺陷；每条分别填写编号、标题和不限行数的完整内容。' : '每个子需求分别填写编号、标题和不限行数的详细内容。留空时主需求本身形成一个工作单元。', showWhen: { field: 'provider', value: 'manual' } },
       ],
     })
     if (values === undefined) return
@@ -925,32 +953,59 @@ class SddWorkbench {
     try {
       const manualItems = JSON.parse(String(values.manualItems ?? '[]')) as Array<{ key?: string; title: string; description?: string }>
       const input = provider === 'manual' ? { title: String(values.manualTitle), description: String(values.manualDescription ?? ''), ...(manualItems.length === 0 ? {} : { items: manualItems }) } : undefined
-      const response = await call({ kind: 'preview-source-import', workspaceId: this.state.workspaceId!, provider, sourceKind: forcedKind ?? String(values.kind), key: String(values.key), ...(connector ? { connector } : {}), ...(input === undefined ? {} : { input }) })
+      const response = await call({ kind: 'preview-source-import', workspaceId: this.state.workspaceId!, provider, sourceKind: forcedKind ?? String(values.kind), key: String(values.key), ...(connector ? { connector } : {}), ...(input === undefined ? {} : { input }), ...(attachToWorkItemUid === undefined ? {} : { attachToWorkItemUid }) })
       if (!response.ok) throw new Error(response.error)
       if (!('preview' in response)) throw new Error('业务适配器未返回导入预览')
       this.state.loading = false; this.render()
       const preview = response.preview
       const actionable = preview.items.filter(item => item.change !== 'unchanged')
       const counts = Object.fromEntries(['added', 'modified', 'removed', 'unchanged'].map(kind => [kind, preview.items.filter(item => item.change === kind).length]))
-      const changeLabels: Record<string, string> = { added: '新增', modified: '有变更', removed: '外部已移除' }
+      const changeLabels: Record<string, string> = { added: '新增', modified: '有变更', removed: '外部已移除', unchanged: '无变化' }
+      const ownership = preview.executionMode === 'attached' ? `所选缺陷将归入 ${preview.parentWorkItemKey} · ${preview.parentWorkItemTitle}` : '所选内容将创建或同步独立交付工作单元'
       const selected = await this.openForm({
         title: `同步预览 · ${preview.bundleKey}`,
-        description: `${preview.bundleTitle}：新增 ${counts.added}，变更 ${counts.modified}，移除 ${counts.removed}，无变化 ${counts.unchanged}。只会应用勾选项。`,
+        description: `${preview.bundleTitle}：新增 ${counts.added}，变更 ${counts.modified}，移除 ${counts.removed}，无变化 ${counts.unchanged}。${ownership}；查看完整内容后再确认，只会应用勾选项。`,
         submitLabel: actionable.length === 0 ? '关闭' : '应用所选变更',
-        fields: actionable.map((item, index) => ({ name: `change-${index}`, label: `${changeLabels[item.change]} · ${item.externalKey} · ${item.title}`, type: 'checkbox' as const, value: true, help: item.changedPaths.length === 0 ? '创建独立需求工作单元' : `变化位置：${item.changedPaths.join('、')}` })),
+        fields: preview.items.map((item, index) => ({
+          name: `change-${index}`, label: `${changeLabels[item.change]} · ${item.externalKey} · ${item.title}`, type: 'checkbox' as const, value: item.change !== 'unchanged',
+          help: item.change === 'unchanged' ? '本次内容与当前已导入版本一致，仅供查看' : item.changedPaths.length === 0 ? (preview.executionMode === 'attached' ? `关联到 ${preview.parentWorkItemKey}` : '创建独立交付工作单元') : `变化位置：${item.changedPaths.join('、')}`,
+          detail: () => { void this.showSourceImportDetail(preview.uid, item.identity) },
+        })),
       })
       if (selected === undefined || actionable.length === 0) return
-      const identities = actionable.filter((_item, index) => selected[`change-${index}`] === true).map(item => item.identity)
+      const identities = preview.items.filter((item, index) => item.change !== 'unchanged' && selected[`change-${index}`] === true).map(item => item.identity)
       if (identities.length === 0) return
       this.state.loading = true; this.render()
       const applied = await call({ kind: 'apply-source-import', workspaceId: this.state.workspaceId!, previewUid: preview.uid, identities })
       if (!applied.ok) throw new Error(applied.error)
       if (!('snapshot' in applied)) throw new Error('应用变更后未返回项目状态')
       this.state.snapshot = applied.snapshot
-      const first = applied.snapshot.workItems.find(item => identities.includes(`${item.provider}:${item.kind}:${item.key}`))
-      if (first !== undefined) { this.state.workItemUid = first.uid; this.state.selected = new Set([first.sourceUid, first.bundleSourceUid].filter((uid): uid is string => uid !== undefined)); this.state.targetArtifactUid = undefined }
+      if (preview.executionMode === 'attached' && preview.parentWorkItemUid !== undefined) {
+        this.state.workItemUid = preview.parentWorkItemUid; this.state.targetArtifactUid = undefined
+        this.state.selected = this.workItemSourceUids(applied.snapshot, preview.parentWorkItemUid, stageMenu(this.state.menu) ? this.state.menu : undefined)
+      } else {
+        const first = applied.snapshot.workItems.find(item => identities.includes(`${item.provider}:${item.kind}:${item.key}`))
+        if (first !== undefined) { this.state.workItemUid = first.uid; this.state.selected = this.workItemSourceUids(applied.snapshot, first.uid); this.state.targetArtifactUid = undefined }
+      }
     } catch (error) { this.state.error = error instanceof Error ? error.message : String(error) }
     finally { this.state.loading = false; this.render() }
+  }
+
+  private async showSourceImportDetail(previewUid: string, identity: string): Promise<void> {
+    try {
+      const response = await call({ kind: 'read-source-import-detail', workspaceId: this.state.workspaceId!, previewUid, identity })
+      if (!response.ok) throw new Error(response.error)
+      if (!('sourceImportDetail' in response)) throw new Error('Host returned an unexpected source detail')
+      const detail: SourceImportDetail = response.sourceImportDetail
+      const sourceText = JSON.stringify(detail.source, null, 2)
+      const previousText = detail.previous === undefined ? undefined : JSON.stringify(detail.previous, null, 2)
+      const rootText = detail.root === undefined ? '' : `<section><h3>主事项背景</h3><pre class="dsh-sdd-template-preview">${escapeHtml(JSON.stringify(detail.root, null, 2))}</pre></section>`
+      const relations = detail.relations.length === 0 ? '无' : detail.relations.map(item => `${item.from} → ${item.to}（${item.type}）`).join('\n')
+      const backdrop = document.createElement('div'); backdrop.className = 'dsh-sdd-modal-backdrop'
+      backdrop.innerHTML = `<section class="dsh-sdd-modal dsh-sdd-source-detail" role="dialog" aria-modal="true"><header class="dsh-sdd-modal-header"><h2>${escapeHtml(detail.source.externalKey ?? detail.source.uid)} · ${escapeHtml(detail.source.title)}</h2><p class="dsh-sdd-muted">${escapeHtml(detail.source.kind)} · ${escapeHtml(detail.source.provider)} · 获取时间 ${escapeHtml(detail.source.fetchedAt)}</p></header><div class="dsh-sdd-modal-body"><div class="dsh-sdd-source-detail-grid"><section><h3>本次获取的完整内容</h3><pre class="dsh-sdd-template-preview">${escapeHtml(sourceText)}</pre></section>${previousText === undefined ? '' : `<section><h3>当前已导入版本</h3><pre class="dsh-sdd-template-preview">${escapeHtml(previousText)}</pre></section>`}${rootText}</div><section><h3>业务关系</h3><pre class="dsh-sdd-template-preview">${escapeHtml(relations)}</pre></section></div><footer class="dsh-sdd-modal-footer"><button class="dsh-sdd-button primary" type="button" data-source-detail-close>关闭</button></footer></section>`
+      this.container!.appendChild(backdrop)
+      const close = () => backdrop.remove(); backdrop.querySelector<HTMLElement>('[data-source-detail-close]')!.addEventListener('click', close); backdrop.addEventListener('click', event => { if (event.target === backdrop) close() })
+    } catch (error) { this.state.error = error instanceof Error ? error.message : String(error); this.render() }
   }
 
   private selectedInputs(): { artifacts: string[]; sources: string[] } { const artifacts = this.state.snapshot?.artifacts ?? []; const sources = this.state.snapshot?.sources ?? []; return { artifacts: [...this.state.selected].filter(uid => artifacts.some(item => item.uid === uid)), sources: [...this.state.selected].filter(uid => sources.some(item => item.uid === uid)) } }
@@ -960,7 +1015,7 @@ class SddWorkbench {
     const snapshot = this.state.snapshot
     const workItem = snapshot?.workItems.find(item => item.uid === this.state.workItemUid)
     if (snapshot === undefined) return
-    const sourceUids = new Set([workItem?.sourceUid, workItem?.bundleSourceUid].filter((uid): uid is string => uid !== undefined))
+    const sourceUids = workItem === undefined ? new Set<string>() : this.workItemSourceUids(snapshot, workItem.uid, this.state.menu as StageId)
     const sources = (workItem === undefined ? snapshot.sources : snapshot.sources.filter(item => sourceUids.has(item.uid))).filter(item => item.validationErrors.length === 0)
     const currentStageIndex = STAGES.findIndex(item => item.id === this.state.menu)
     const artifacts = snapshot.artifacts.filter(item => item.workItemUid === this.state.workItemUid && STAGES.findIndex(stage => stage.id === item.stage) < currentStageIndex && item.status === 'accepted')
@@ -1157,14 +1212,15 @@ class SddWorkbench {
     await this.mutate({ kind: 'development-commit', workspaceId: this.state.workspaceId!, artifactUid: this.state.targetArtifactUid, repositoryId, message: String(values.message) })
   }
 
-  private async resolveRemoval(): Promise<void> {
-    if (this.state.workItemUid === undefined) return
+  private async resolveRemoval(workItemUid = this.state.workItemUid): Promise<void> {
+    if (workItemUid === undefined) return
+    const workItem = this.state.snapshot?.workItems.find(item => item.uid === workItemUid)
     const values = await this.openForm({
-      title: '处理外部需求移除', description: '历史来源、交付件和代码不会被删除。请选择这个工作单元后续在本项目中的状态。', submitLabel: '确认处理',
+      title: `处理外部${workItem?.kind === 'defect' ? '缺陷' : '需求'}移除`, description: '历史来源、交付件和代码不会被删除。请选择这个工作单元后续在本项目中的状态。', submitLabel: '确认处理',
       fields: [{ name: 'decision', label: '处理方式', type: 'select', required: true, value: 'keep', options: [{ value: 'keep', label: '保留本地并继续推进' }, { value: 'archive', label: '归档工作单元' }] }],
     })
     if (values === undefined) return
-    await this.mutate({ kind: 'resolve-work-item-removal', workspaceId: this.state.workspaceId!, workItemUid: this.state.workItemUid, decision: String(values.decision) as 'keep' | 'archive' })
+    await this.mutate({ kind: 'resolve-work-item-removal', workspaceId: this.state.workspaceId!, workItemUid, decision: String(values.decision) as 'keep' | 'archive' })
   }
 }
 

@@ -1,5 +1,5 @@
 import type { Context } from '@deepseek-ai/cordis';
-import type { StageId } from './protocol.ts';
+import type { CodeRepositoryReference, StageId } from './protocol.ts';
 interface SessionBindingSpec {
     sessionId: string;
     stage: StageId;
@@ -12,6 +12,7 @@ interface SessionBindingSpec {
         id: string;
         path: string;
     }>;
+    codeReferences?: CodeRepositoryReference[];
     artifactTemplateReference: string;
     artifactTemplateConfigReference?: string;
     requiredSections: string[];

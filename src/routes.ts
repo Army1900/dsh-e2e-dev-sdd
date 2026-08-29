@@ -51,6 +51,7 @@ export function makeSddRoute(service: SddProjectService): WebRoute {
         const result = await service.execute(action)
         if ('prompt' in result) return writeJson(res, 200, { ok: true, prompt: result.prompt, ...(result.run === undefined ? {} : { run: result.run }) })
         if ('artifactFile' in result) return writeJson(res, 200, { ok: true, artifactFile: result.artifactFile })
+        if ('identity' in result && 'source' in result && 'relations' in result) return writeJson(res, 200, { ok: true, sourceImportDetail: result })
         if ('contentPath' in result) return writeJson(res, 200, { ok: true, template: result })
         if ('sourceKind' in result && 'branches' in result) return writeJson(res, 200, { ok: true, repositoryInspection: result })
         if ('revisionPreview' in result) return writeJson(res, 200, { ok: true, revisionPreview: result.revisionPreview })

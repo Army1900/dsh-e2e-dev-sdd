@@ -173,6 +173,8 @@ export interface ImportPreviewItem {
   change: ImportChangeKind
   changedPaths: string[]
   workItemUid?: string
+  currentExecutionMode?: WorkItemExecutionMode
+  currentParentWorkItemUid?: string
 }
 
 export interface ImportPreview {
@@ -182,7 +184,20 @@ export interface ImportPreview {
   bundleTitle: string
   provider: string
   fetchedAt: string
+  executionMode: WorkItemExecutionMode
+  parentWorkItemUid?: string
+  parentWorkItemKey?: string
+  parentWorkItemTitle?: string
   items: ImportPreviewItem[]
+}
+
+export interface SourceImportDetail {
+  previewUid: string
+  identity: string
+  source: SourceEnvelope
+  previous?: SourceEnvelope
+  root?: SourceEnvelope
+  relations: SourceBundleRelation[]
 }
 
 export interface WorkItemChange {
@@ -192,6 +207,8 @@ export interface WorkItemChange {
   previousSourceUid?: string
   reviewRequiredStages: StageId[]
 }
+
+export type WorkItemExecutionMode = 'standalone' | 'attached'
 
 export interface WorkItem {
   schema: 'dsh-sdd/work-item@1'
@@ -203,6 +220,10 @@ export interface WorkItem {
   bundleKey: string
   sourceUid?: string
   bundleSourceUid?: string
+  /** Missing in legacy files means standalone. */
+  executionMode?: WorkItemExecutionMode
+  /** Set only for a defect whose delivery is owned by an existing requirement work item. */
+  parentWorkItemUid?: string
   relations: SourceBundleRelation[]
   status: 'active' | 'change-pending' | 'removed-pending' | 'completed'
   createdAt: string
@@ -330,7 +351,20 @@ export interface StageRun {
   lastSyncedAt?: string
   inputArtifactUids: string[]
   sourceUids: string[]
+  /** Project repositories automatically exposed as read-only references for non-development stages. */
+  codeReferences?: CodeRepositoryReference[]
   previousRunUid?: string
+}
+
+export interface CodeRepositoryReference {
+  repositoryId: string
+  source: string
+  sourceKind: 'local' | 'remote'
+  baseBranch: string
+  baseCommit?: string
+  path?: string
+  available: boolean
+  error?: string
 }
 
 export interface DevelopmentRepositoryConfig {
@@ -624,8 +658,9 @@ export type SddAction =
   | { kind: 'development-status'; workspaceId: string; artifactUid: string }
   | { kind: 'development-skip-test'; workspaceId: string; artifactUid: string; repositoryId: string; reason: string }
   | { kind: 'development-commit'; workspaceId: string; artifactUid: string; repositoryId: string; message: string }
-  | { kind: 'import-source'; workspaceId: string; provider: string; sourceKind: string; key: string; connector?: string; input?: ManualSourceInput }
-  | { kind: 'preview-source-import'; workspaceId: string; provider: string; sourceKind: string; key: string; connector?: string; input?: ManualSourceInput }
+  | { kind: 'import-source'; workspaceId: string; provider: string; sourceKind: string; key: string; connector?: string; input?: ManualSourceInput; attachToWorkItemUid?: string }
+  | { kind: 'preview-source-import'; workspaceId: string; provider: string; sourceKind: string; key: string; connector?: string; input?: ManualSourceInput; attachToWorkItemUid?: string }
+  | { kind: 'read-source-import-detail'; workspaceId: string; previewUid: string; identity: string }
   | { kind: 'apply-source-import'; workspaceId: string; previewUid: string; identities: string[] }
   | { kind: 'resolve-work-item-removal'; workspaceId: string; workItemUid: string; decision: 'keep' | 'archive' }
 
@@ -633,6 +668,7 @@ export type SddResponse =
   | { ok: true; snapshot: ProjectSnapshot }
   | { ok: true; prompt: string; run?: StageRun }
   | { ok: true; preview: ImportPreview }
+  | { ok: true; sourceImportDetail: SourceImportDetail }
   | { ok: true; artifactFile: { artifactUid: string; path: string; kind: ArtifactFileSummary['kind'] | 'manifest'; content?: string; dataUrl?: string } }
   | { ok: true; template: StageTemplatePreview }
   | { ok: true; repositoryInspection: RepositoryInspection }
@@ -699,9 +735,11 @@ export function parseAction(value: unknown): SddAction | undefined {
     && typeof action.message === 'string' && action.message.trim() !== '') return action as unknown as SddAction
   if ((action.kind === 'import-source' || action.kind === 'preview-source-import') && typeof action.provider === 'string' && typeof action.sourceKind === 'string'
     && typeof action.key === 'string' && (action.connector === undefined || typeof action.connector === 'string')
+    && (action.attachToWorkItemUid === undefined || typeof action.attachToWorkItemUid === 'string')
     && (action.input === undefined || (typeof action.input === 'object' && action.input !== null && !Array.isArray(action.input)))) {
     return action as unknown as SddAction
   }
+  if (action.kind === 'read-source-import-detail' && typeof action.previewUid === 'string' && typeof action.identity === 'string') return action as unknown as SddAction
   if (action.kind === 'apply-source-import' && typeof action.previewUid === 'string' && stringArray(action.identities)) return action as unknown as SddAction
   if (action.kind === 'resolve-work-item-removal' && typeof action.workItemUid === 'string' && (action.decision === 'keep' || action.decision === 'archive')) return action as unknown as SddAction
   if (action.kind === 'create-draft' && isStageId(action.stage) && typeof action.title === 'string'

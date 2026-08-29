@@ -1,5 +1,5 @@
 import type { ApiProxy } from '@deepseek-ai/dsh-host-apiproxy';
-import { type ArtifactFileSummary, type ImportPreview, type OpenSpecTemplatesPreview, type ProjectSnapshot, type RepositoryInspection, type RevisionPreview, type SddAction, type StageRun, type StageTemplatePreview } from './protocol.ts';
+import { type ArtifactFileSummary, type ImportPreview, type OpenSpecTemplatesPreview, type ProjectSnapshot, type RepositoryInspection, type RevisionPreview, type SddAction, type SourceImportDetail, type StageRun, type StageTemplatePreview } from './protocol.ts';
 import { type SddSourceRegistry } from './extensions.ts';
 import { ConnectorCatalog } from './connector-catalog.ts';
 import { GitDevelopmentService, ProjectGitService } from './git-service.ts';
@@ -15,7 +15,7 @@ export declare class SddProjectService {
     constructor(api: ApiProxy, sourceRegistry?: SddSourceRegistry | undefined, sessionController?: StageSessionController | undefined, git?: GitDevelopmentService, projectGit?: ProjectGitService, connectors?: ConnectorCatalog);
     private openSpecCli;
     private workspace;
-    execute(action: SddAction): Promise<ProjectSnapshot | ImportPreview | StageTemplatePreview | RepositoryInspection | {
+    execute(action: SddAction): Promise<ProjectSnapshot | ImportPreview | SourceImportDetail | StageTemplatePreview | RepositoryInspection | {
         openSpecTemplates: OpenSpecTemplatesPreview;
     } | {
         revisionPreview: RevisionPreview;
@@ -38,6 +38,7 @@ export declare class SddProjectService {
     snapshot(workspaceId: string): Promise<ProjectSnapshot>;
     private validateOpenSpecSettings;
     private listWorkItems;
+    private currentSourceUids;
     private createDraft;
     private revisionPlan;
     private previewRevision;
@@ -63,6 +64,8 @@ export declare class SddProjectService {
     private nextKey;
     private listSources;
     private previewSourceImport;
+    private readStagedImport;
+    private readSourceImportDetail;
     private writeSourceSnapshot;
     private applySourceImport;
     private resolveWorkItemRemoval;

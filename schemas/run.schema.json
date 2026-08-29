@@ -11,6 +11,19 @@
     "status": { "enum": ["active", "syncing", "ready-for-review", "completed"] },
     "startedAt": { "type": "string", "format": "date-time" }, "updatedAt": { "type": "string", "format": "date-time" }, "lastSyncedAt": { "type": "string", "format": "date-time" },
     "inputArtifactUids": { "type": "array", "items": { "type": "string" } }, "sourceUids": { "type": "array", "items": { "type": "string" } },
+    "codeReferences": { "type": "array", "items": { "$ref": "#/$defs/codeReference" } },
     "previousRunUid": { "type": "string" }
+  },
+  "$defs": {
+    "codeReference": {
+      "type": "object", "additionalProperties": false,
+      "required": ["repositoryId", "source", "sourceKind", "baseBranch", "available"],
+      "properties": {
+        "repositoryId": { "type": "string" }, "source": { "type": "string" },
+        "sourceKind": { "enum": ["local", "remote"] }, "baseBranch": { "type": "string" },
+        "baseCommit": { "type": "string" }, "path": { "type": "string" },
+        "available": { "type": "boolean" }, "error": { "type": "string" }
+      }
+    }
   }
 }

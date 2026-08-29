@@ -3,7 +3,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { access, lstat, mkdir, readFile, readlink, realpath, unlink, writeFile } from 'node:fs/promises'
 import { isAbsolute, join, relative, resolve } from 'node:path'
 import { parse, stringify } from 'yaml'
-import type { ArtifactSummary, DevelopmentRepositoryConfig, DevelopmentRepositoryState, DevelopmentTestEvidence, DevelopmentWorkspace, ProjectConfig, ProjectRepositoryState, RepositoryInspection } from './protocol.ts'
+import type { ArtifactSummary, CodeRepositoryReference, DevelopmentRepositoryConfig, DevelopmentRepositoryState, DevelopmentTestEvidence, DevelopmentWorkspace, ProjectConfig, ProjectRepositoryState, RepositoryInspection } from './protocol.ts'
 
 const ID = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
 const MAX_OUTPUT = 1024 * 1024
@@ -247,6 +247,100 @@ export class ProjectGitService {
 }
 
 export class GitDevelopmentService {
+  /**
+   * Makes every project repository available to non-development stages without changing the existing development worktree layout.
+   * Local clean repositories are read directly. Remote repositories share one mirror under .sdd-workspaces/.repositories
+   * and one detached checkout per referenced commit under .sdd-workspaces/.references.
+   */
+  async prepareCodeReferences(
+    projectPath: string,
+    project: ProjectConfig,
+    previous: readonly CodeRepositoryReference[] = [],
+  ): Promise<CodeRepositoryReference[]> {
+    const previousById = new Map(previous.map(reference => [reference.repositoryId, reference]))
+    return Promise.all(project.development.repositories.map(async config => {
+      try { return await this.prepareCodeReference(projectPath, project, config, previousById.get(config.id)) }
+      catch (error) {
+        const localSource = isAbsolute(config.source) ? config.source : resolve(projectPath, config.source)
+        return {
+          repositoryId: config.id, source: config.source, sourceKind: await exists(localSource) ? 'local' : 'remote',
+          baseBranch: config.baseBranch, available: false,
+          error: error instanceof Error ? error.message : String(error),
+        }
+      }
+    }))
+  }
+
+  private workspaceRoot(projectPath: string, project: ProjectConfig): string {
+    const root = resolve(projectPath, project.development.workspaceRoot)
+    if (relative(projectPath, root).startsWith('..')) throw new Error('development workspace root escapes the SDD project')
+    return root
+  }
+
+  private async remoteMirror(projectPath: string, project: ProjectConfig, config: DevelopmentRepositoryConfig, refresh: boolean): Promise<string> {
+    const root = this.workspaceRoot(projectPath, project)
+    const cache = resolve(root, '.repositories', `${config.id}.git`)
+    await mkdir(resolve(root, '.repositories'), { recursive: true })
+    if (!(await exists(cache))) {
+      await run(['git', 'clone', '--bare', config.source, cache], projectPath, 300_000)
+      await run(['git', '--git-dir', cache, 'config', 'remote.origin.fetch', '+refs/heads/*:refs/remotes/origin/*'], projectPath)
+      await run(['git', '--git-dir', cache, 'fetch', '--prune', 'origin'], projectPath, 300_000)
+    } else {
+      const remote = (await run(['git', '--git-dir', cache, 'remote', 'get-url', 'origin'], projectPath)).stdout.trim()
+      if (remote !== config.source) throw new Error(`repository cache origin differs from project configuration: ${config.id}`)
+      if (refresh) await run(['git', '--git-dir', cache, 'fetch', '--prune', 'origin'], projectPath, 300_000)
+    }
+    return cache
+  }
+
+  private async remoteBaseCommit(projectPath: string, mirror: string, branch: string): Promise<string> {
+    for (const ref of [`refs/remotes/origin/${branch}`, `refs/heads/${branch}`]) {
+      const result = await run(['git', '--git-dir', mirror, 'rev-parse', '--verify', `${ref}^{commit}`], projectPath, 30_000, true)
+      if (result.exitCode === 0) return result.stdout.trim()
+    }
+    throw new Error(`base branch does not exist in remote repository: ${branch}`)
+  }
+
+  private async detachedReference(sourceRepository: string, root: string, config: DevelopmentRepositoryConfig, commit: string): Promise<string> {
+    const target = resolve(root, '.references', config.id, commit.slice(0, 12))
+    if (relative(root, target).startsWith('..')) throw new Error('code reference path escapes configured workspace root')
+    if (await exists(target)) {
+      const current = (await run(['git', 'rev-parse', 'HEAD'], target)).stdout.trim()
+      if (current !== commit) throw new Error(`existing code reference points to another commit: ${target}`)
+      return target
+    }
+    await mkdir(resolve(root, '.references', config.id), { recursive: true })
+    await run(['git', 'worktree', 'prune'], sourceRepository, 30_000, true)
+    await run(['git', 'worktree', 'add', '--detach', target, commit], sourceRepository, 300_000)
+    return target
+  }
+
+  private async prepareCodeReference(
+    projectPath: string,
+    project: ProjectConfig,
+    config: DevelopmentRepositoryConfig,
+    previous?: CodeRepositoryReference,
+  ): Promise<CodeRepositoryReference> {
+    if (!ID.test(config.id)) throw new Error(`invalid development repository id: ${config.id}`)
+    const root = this.workspaceRoot(projectPath, project)
+    const localSource = isAbsolute(config.source) ? config.source : resolve(projectPath, config.source)
+    if (await exists(localSource)) {
+      const commit = previous?.baseCommit ?? await localBaseCommit(localSource, config.baseBranch)
+      const valid = await run(['git', 'cat-file', '-e', `${commit}^{commit}`], localSource, 30_000, true)
+      if (valid.exitCode !== 0) throw new Error(`recorded code baseline is missing: ${config.id}@${commit}`)
+      const head = (await run(['git', 'rev-parse', 'HEAD'], localSource)).stdout.trim()
+      const dirty = (await run(['git', 'status', '--porcelain'], localSource)).stdout.trim() !== ''
+      const path = head === commit && !dirty ? localSource : await this.detachedReference(localSource, root, config, commit)
+      return { repositoryId: config.id, source: config.source, sourceKind: 'local', baseBranch: config.baseBranch, baseCommit: commit, path, available: true }
+    }
+    const mirror = await this.remoteMirror(projectPath, project, config, previous?.baseCommit === undefined)
+    const commit = previous?.baseCommit ?? await this.remoteBaseCommit(projectPath, mirror, config.baseBranch)
+    const valid = await run(['git', '--git-dir', mirror, 'cat-file', '-e', `${commit}^{commit}`], projectPath, 30_000, true)
+    if (valid.exitCode !== 0) throw new Error(`recorded remote code baseline is missing: ${config.id}@${commit}`)
+    const path = await this.detachedReference(mirror, root, config, commit)
+    return { repositoryId: config.id, source: config.source, sourceKind: 'remote', baseBranch: config.baseBranch, baseCommit: commit, path, available: true }
+  }
+
   async inheritRevision(projectPath: string, previousArtifactUid: string, artifact: ArtifactSummary): Promise<DevelopmentWorkspace | undefined> {
     if (artifact.stage !== 'development') return undefined
     const current = await readDevelopmentWorkspace(projectPath, artifact.uid)
@@ -333,7 +427,7 @@ export class GitDevelopmentService {
     const config = repositoryConfig(project, repositoryId)
     const existing = await readDevelopmentWorkspace(projectPath, artifact.uid)
     if (existing?.repositories.some(item => item.id === repositoryId)) return existing
-    const root = resolve(projectPath, project.development.workspaceRoot)
+    const root = this.workspaceRoot(projectPath, project)
     const target = resolve(root, artifact.key, repositoryId)
     if (relative(root, target).startsWith('..')) throw new Error('development workspace path escapes configured root')
     await mkdir(resolve(root, artifact.key), { recursive: true })
@@ -350,9 +444,10 @@ export class GitDevelopmentService {
       baseCommit = await localBaseCommit(localSource, config.baseBranch)
       await run(['git', 'worktree', 'add', '-b', branch, target, baseCommit], localSource)
     } else {
-      await run(['git', 'clone', '--branch', config.baseBranch, '--single-branch', config.source, target], projectPath, 300_000)
-      baseCommit = (await run(['git', 'rev-parse', 'HEAD'], target)).stdout.trim()
-      await run(['git', 'switch', '-c', branch], target)
+      const mirror = await this.remoteMirror(projectPath, project, config, true)
+      baseCommit = await this.remoteBaseCommit(projectPath, mirror, config.baseBranch)
+      await run(['git', 'worktree', 'prune'], mirror, 30_000, true)
+      await run(['git', 'worktree', 'add', '-b', branch, target, baseCommit], mirror, 300_000)
     }
     const now = new Date().toISOString()
     const state: DevelopmentRepositoryState = {

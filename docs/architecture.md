@@ -76,6 +76,8 @@ Connector 只提供来源，不直接创建 accepted 交付件。命令型 Conne
 
 再次导入同一需求包即为同步。核心按 `provider + kind + externalKey` 匹配工作单元，比较来源内容、标题、状态和版本，预览新增、修改、移除、无变化四类结果。应用变更会新增来源快照而不覆盖历史版本；已有 accepted 交付件保持冻结，工作单元进入 `change-pending`，相关阶段必须使用最新来源和重新接受的上游交付件完成评审。外部移除进入 `removed-pending`，负责人可以保留本地继续推进或归档工作单元；两种操作都不会删除历史文件。
 
+导入预览正文按条目从 `.sdd/imports/pending/` 延迟读取，避免大需求包一次性进入浏览器响应。缺陷执行归属不由 Provider 推断：项目看板入口写入 `executionMode: standalone`；需求内入口写入 `executionMode: attached` 和 `parentWorkItemUid`。旧工作单元没有 `executionMode` 时按 `standalone` 读取，因此旧项目和旧适配器无需迁移。需求内缺陷仍拥有独立 Source 和 Work Item，用于外部编号、状态与再次同步，但不进入五阶段交付矩阵；其当前来源会自动加入父需求的候选输入和修订差异。
+
 企业通用业务代码和配置统一位于插件 `business/`，项目专用代码和配置统一位于 `.sdd/business/`。两处都把 Connector YAML 放入 `connectors/`，被调用的脚本及其内部模块放入 `adapters/`；Connector 中的 `.sdd/business/adapters/` 是逻辑路径，运行时映射到实际生效范围。项目代码不得再散落到 `.sdd/scripts/`、仓库根目录或其他 SDD 状态目录。
 
 ## 阶段对话
@@ -94,10 +96,13 @@ Agent 可以创建和修改 draft；接受动作必须由用户从阶段页面�
 
 ## 需求开发空间
 
-开发测试阶段在 `.sdd-workspaces/<artifact-key>/` 创建隔离 checkout，该目录加入 `.gitignore`：
+阶段代码目录统一收束在已加入 `.gitignore` 的 `.sdd-workspaces/`：
 
-- 当前代码仓库使用 Git Worktree。
-- 外部代码仓库使用独立 clone。
+- `.repositories/<repository-id>.git` 保存远程仓库唯一一份 bare 对象缓存；本地仓库不复制对象。
+- `.references/<repository-id>/<commit>/` 保存非开发阶段按需复用的 Detached 只读参考。
+- `<artifact-key>/<repository-id>/` 保持现有开发目录，使用特性分支 Worktree。
+
+需求、原型、系统设计和规格设计会话默认获得项目登记的全部仓库，不再逐阶段选择。每次运行在 `.sdd/runs` 固定记录仓库、基线 Commit、实际路径和可用状态；无仓库时不生成 `codeReferences`，旧项目运行逻辑不变。远程参考准备失败不会阻止非开发阶段，开发目标仓库不可用仍按开发门禁阻止。
 - 一个开发单元可以包含多个仓库。
 - Agent Session 保持项目空间 cwd；代码工具的 `workdir` 被 Guard 限定到绑定的隔离 checkout。
 - 开发会话显式获得每个仓库的根目录和开发目标，并在修改前读取仓库内 `AGENTS.md`、构建/CI 配置及匹配的 `.agents/skills/*/SKILL.md`；嵌套 Skill 不依赖自动出现在外层会话目录。

@@ -116,6 +116,8 @@ export interface ImportPreviewItem {
     change: ImportChangeKind;
     changedPaths: string[];
     workItemUid?: string;
+    currentExecutionMode?: WorkItemExecutionMode;
+    currentParentWorkItemUid?: string;
 }
 export interface ImportPreview {
     schema: 'dsh-sdd/import-preview@1';
@@ -124,7 +126,19 @@ export interface ImportPreview {
     bundleTitle: string;
     provider: string;
     fetchedAt: string;
+    executionMode: WorkItemExecutionMode;
+    parentWorkItemUid?: string;
+    parentWorkItemKey?: string;
+    parentWorkItemTitle?: string;
     items: ImportPreviewItem[];
+}
+export interface SourceImportDetail {
+    previewUid: string;
+    identity: string;
+    source: SourceEnvelope;
+    previous?: SourceEnvelope;
+    root?: SourceEnvelope;
+    relations: SourceBundleRelation[];
 }
 export interface WorkItemChange {
     kind: Exclude<ImportChangeKind, 'unchanged'>;
@@ -133,6 +147,7 @@ export interface WorkItemChange {
     previousSourceUid?: string;
     reviewRequiredStages: StageId[];
 }
+export type WorkItemExecutionMode = 'standalone' | 'attached';
 export interface WorkItem {
     schema: 'dsh-sdd/work-item@1';
     uid: string;
@@ -143,6 +158,10 @@ export interface WorkItem {
     bundleKey: string;
     sourceUid?: string;
     bundleSourceUid?: string;
+    /** Missing in legacy files means standalone. */
+    executionMode?: WorkItemExecutionMode;
+    /** Set only for a defect whose delivery is owned by an existing requirement work item. */
+    parentWorkItemUid?: string;
     relations: SourceBundleRelation[];
     status: 'active' | 'change-pending' | 'removed-pending' | 'completed';
     createdAt: string;
@@ -277,7 +296,19 @@ export interface StageRun {
     lastSyncedAt?: string;
     inputArtifactUids: string[];
     sourceUids: string[];
+    /** Project repositories automatically exposed as read-only references for non-development stages. */
+    codeReferences?: CodeRepositoryReference[];
     previousRunUid?: string;
+}
+export interface CodeRepositoryReference {
+    repositoryId: string;
+    source: string;
+    sourceKind: 'local' | 'remote';
+    baseBranch: string;
+    baseCommit?: string;
+    path?: string;
+    available: boolean;
+    error?: string;
 }
 export interface DevelopmentRepositoryConfig {
     id: string;
@@ -763,6 +794,7 @@ export type SddAction = {
     key: string;
     connector?: string;
     input?: ManualSourceInput;
+    attachToWorkItemUid?: string;
 } | {
     kind: 'preview-source-import';
     workspaceId: string;
@@ -771,6 +803,12 @@ export type SddAction = {
     key: string;
     connector?: string;
     input?: ManualSourceInput;
+    attachToWorkItemUid?: string;
+} | {
+    kind: 'read-source-import-detail';
+    workspaceId: string;
+    previewUid: string;
+    identity: string;
 } | {
     kind: 'apply-source-import';
     workspaceId: string;
@@ -792,6 +830,9 @@ export type SddResponse = {
 } | {
     ok: true;
     preview: ImportPreview;
+} | {
+    ok: true;
+    sourceImportDetail: SourceImportDetail;
 } | {
     ok: true;
     artifactFile: {

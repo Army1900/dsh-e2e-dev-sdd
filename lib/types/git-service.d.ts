@@ -1,4 +1,4 @@
-import type { ArtifactSummary, DevelopmentWorkspace, ProjectConfig, ProjectRepositoryState, RepositoryInspection } from './protocol.ts';
+import type { ArtifactSummary, CodeRepositoryReference, DevelopmentWorkspace, ProjectConfig, ProjectRepositoryState, RepositoryInspection } from './protocol.ts';
 export declare function readDevelopmentWorkspace(projectPath: string, artifactUid: string): Promise<DevelopmentWorkspace | undefined>;
 export declare function listDevelopmentWorkspaces(projectPath: string, artifacts: readonly ArtifactSummary[]): Promise<DevelopmentWorkspace[]>;
 export declare class ProjectGitService {
@@ -10,6 +10,17 @@ export declare class ProjectGitService {
     push(projectPath: string, project: ProjectConfig): Promise<void>;
 }
 export declare class GitDevelopmentService {
+    /**
+     * Makes every project repository available to non-development stages without changing the existing development worktree layout.
+     * Local clean repositories are read directly. Remote repositories share one mirror under .sdd-workspaces/.repositories
+     * and one detached checkout per referenced commit under .sdd-workspaces/.references.
+     */
+    prepareCodeReferences(projectPath: string, project: ProjectConfig, previous?: readonly CodeRepositoryReference[]): Promise<CodeRepositoryReference[]>;
+    private workspaceRoot;
+    private remoteMirror;
+    private remoteBaseCommit;
+    private detachedReference;
+    private prepareCodeReference;
     inheritRevision(projectPath: string, previousArtifactUid: string, artifact: ArtifactSummary): Promise<DevelopmentWorkspace | undefined>;
     discardInheritedRevision(projectPath: string, artifactUid: string, previousArtifactUid: string): Promise<boolean>;
     inspectSource(projectPath: string, source: string): Promise<RepositoryInspection>;

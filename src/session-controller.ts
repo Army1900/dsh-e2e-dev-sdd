@@ -4,7 +4,7 @@ import type {} from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-system-prompt'
 import type { ToolExecution } from '@deepseek-ai/dsh-tools'
-import type { StageId } from './protocol.ts'
+import type { CodeRepositoryReference, StageId } from './protocol.ts'
 import { runtimeDefinition } from './stage-definitions.ts'
 
 interface SessionBindingSpec {
@@ -16,6 +16,7 @@ interface SessionBindingSpec {
   artifactDirectory: string
   developmentDirectories: string[]
   developmentRepositories?: Array<{ id: string; path: string }>
+  codeReferences?: CodeRepositoryReference[]
   artifactTemplateReference: string
   artifactTemplateConfigReference?: string
   requiredSections: string[]
@@ -87,7 +88,7 @@ export class StageSessionController {
     try {
       disposers.push(agent.ctx.systemPrompt.section({
         name: 'sdd:stage-runtime', order: 20,
-        text: `${definition.systemPrompt}\n\n交付件输出必须遵循创建草稿时固定绑定的 Markdown 模板快照：\n${promptLiteral(spec.artifactTemplateReference)}\n${spec.artifactTemplateConfigReference === undefined ? '' : `模板配置：\n${promptLiteral(spec.artifactTemplateConfigReference)}\n`}首次回答和恢复会话后必须先使用 read 工具读取该模板、绑定交付件及输入索引中列出的必要文件；文件引用本身不代表已经读取。不得删除、改名或打乱以下必填二级章节：${spec.requiredSections.map(promptLiteral).join('、')}。可以增加三级章节和附件引用。交付件是整个绑定目录，可在其中维护图表、原型、样例和附件，并从主文档使用相对路径引用。写入前删除已完成章节中的“待补充。”占位符；没有内容的待决或遗留问题要明确写“无”。不得仅凭路径、文件名、清单或哈希推断文件内容。\n\n${promptLiteral(spec.systemPrompt)}`,
+        text: `${definition.systemPrompt}\n\n交付件输出必须遵循创建草稿时固定绑定的 Markdown 模板快照：\n${promptLiteral(spec.artifactTemplateReference)}\n${spec.artifactTemplateConfigReference === undefined ? '' : `模板配置：\n${promptLiteral(spec.artifactTemplateConfigReference)}\n`}首次回答和恢复会话后必须先使用 read 工具读取该模板、绑定交付件及输入索引中列出的必要文件；文件引用本身不代表已经读取。不得删除、改名或打乱以下必填二级章节：${spec.requiredSections.map(promptLiteral).join('、')}。可以增加三级章节和附件引用。交付件是整个绑定目录，可在其中维护图表、原型、样例和附件，并从主文档使用相对路径引用。写入前删除已完成章节中的“待补充。”占位符；没有内容的待决或遗留问题要明确写“无”。不得仅凭路径、文件名、清单或哈希推断文件内容。${spec.codeReferences?.some(item => item.available) === true ? '\n非开发阶段提供的项目代码仓库全部是辅助只读输入；只在当前问题需要时按需读取，禁止通过任何工具修改、提交、切换或清理这些仓库。' : ''}\n\n${promptLiteral(spec.systemPrompt)}`,
       }))
       disposers.push(agent.ctx.tools.guard((execution: Readonly<ToolExecution>) => {
         if (definition.toolPolicy.forbiddenTools.includes(execution.name)) {

@@ -100,6 +100,47 @@ process.exit(1)\n`)
     expect(snapshot.sources).toEqual([expect.objectContaining({ content: expect.objectContaining({ description: '规则待讨论' }) })])
   })
 
+  it('attaches imported defects to an existing requirement without creating another delivery flow', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-sdd-attached-defect-'))
+    const provider = new ManualSourceProvider()
+    const sources = { names: () => ['manual'], fetch: async (_name: string, request: any) => provider.get({ ...request, signal: request.signal ?? AbortSignal.timeout(1000) }) } as unknown as SddSourceRegistry
+    const service = new SddProjectService(api(root), sources)
+    await service.execute({ kind: 'import-source', workspaceId: 'w1', provider: 'manual', sourceKind: 'requirement', key: 'REQ-1', input: { title: '支付升级', description: '支持新的支付流程' } })
+    let snapshot = await service.snapshot('w1')
+    const requirement = snapshot.workItems[0]!
+    const preview = await service.execute({ kind: 'preview-source-import', workspaceId: 'w1', provider: 'manual', sourceKind: 'defect', key: 'BUG-1', input: { title: '重复回调', description: '支付回调被重复消费，需要在本需求内修复。' }, attachToWorkItemUid: requirement.uid })
+    if (!('schema' in preview)) throw new Error('expected import preview')
+    expect(preview).toMatchObject({ executionMode: 'attached', parentWorkItemUid: requirement.uid, parentWorkItemKey: 'REQ-1' })
+    const detail = await service.execute({ kind: 'read-source-import-detail', workspaceId: 'w1', previewUid: preview.uid, identity: preview.items[0]!.identity })
+    expect(detail).toMatchObject({ source: { externalKey: 'BUG-1', content: { description: expect.stringContaining('重复消费') } } })
+    await service.execute({ kind: 'apply-source-import', workspaceId: 'w1', previewUid: preview.uid, identities: preview.items.map(item => item.identity) })
+    snapshot = await service.snapshot('w1')
+    const defect = snapshot.workItems.find(item => item.key === 'BUG-1')!
+    expect(defect).toMatchObject({ kind: 'defect', executionMode: 'attached', parentWorkItemUid: requirement.uid })
+    expect(snapshot.workItems.find(item => item.uid === requirement.uid)).toMatchObject({ status: 'change-pending', change: { reviewRequiredStages: ['development'] } })
+    expect(snapshot.dashboard.deliveryMatrix.map(item => item.key)).toEqual(['REQ-1'])
+    await service.execute({ kind: 'create-draft', workspaceId: 'w1', stage: 'development', title: '支付升级开发', basedOn: [], sourceUids: [requirement.sourceUid!, defect.sourceUid!], workItemUid: requirement.uid })
+    expect((await service.snapshot('w1')).artifacts[0]?.derivedFrom.map(item => item.externalKey)).toEqual(['REQ-1', 'BUG-1'])
+  })
+
+  it('treats legacy work items without execution ownership as standalone', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-sdd-legacy-work-item-'))
+    const provider = new ManualSourceProvider()
+    const sources = { names: () => ['manual'], fetch: async (_name: string, request: any) => provider.get({ ...request, signal: request.signal ?? AbortSignal.timeout(1000) }) } as unknown as SddSourceRegistry
+    const service = new SddProjectService(api(root), sources)
+    await service.execute({ kind: 'import-source', workspaceId: 'w1', provider: 'manual', sourceKind: 'defect', key: 'OLD-BUG-1', input: { title: '历史独立缺陷' } })
+    let snapshot = await service.snapshot('w1')
+    const workItem = snapshot.workItems[0]!
+    const path = join(root, '.sdd', 'work-items', workItem.uid, 'work-item.yaml')
+    const legacy = parse(await readFile(path, 'utf8'))
+    delete legacy.executionMode
+    delete legacy.parentWorkItemUid
+    await writeFile(path, stringify(legacy), 'utf8')
+    snapshot = await service.snapshot('w1')
+    expect(snapshot.workItems[0]).toMatchObject({ key: 'OLD-BUG-1', executionMode: 'standalone' })
+    expect(snapshot.dashboard.deliveryMatrix.map(item => item.key)).toEqual(['OLD-BUG-1'])
+  })
+
   it('detects duplicate display keys by UID lineage and safely renumbers an unbound draft', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-sdd-key-conflict-'))
     const provider = new ManualSourceProvider()
@@ -391,6 +432,7 @@ process.exit(1)\n`)
     const artifact = (await service.snapshot('w1')).artifacts[0]!
     const started = await service.execute({ kind: 'bind-session', workspaceId: 'w1', stage: 'requirements', artifactUid: artifact.uid, sessionId: 'session-1', artifactUids: [] })
     expect(started).toMatchObject({ run: { artifactUid: artifact.uid, sessionId: 'session-1' } })
+    expect((started as { run: { codeReferences?: unknown[] } }).run.codeReferences).toBeUndefined()
     const run = (await service.snapshot('w1')).runs[0]!
     const resumed = await service.execute({ kind: 'bind-session', workspaceId: 'w1', runUid: run.uid, stage: 'requirements', artifactUid: artifact.uid, sessionId: 'session-2', artifactUids: [] })
     expect(resumed).toMatchObject({ run: { uid: run.uid, sessionId: 'session-2' } })
@@ -406,5 +448,23 @@ process.exit(1)\n`)
     expect(revision.revision?.previousRunUid).toBe(run.uid)
     const changed = await service.execute({ kind: 'bind-session', workspaceId: 'w1', stage: 'requirements', artifactUid: revision.uid, sessionId: 'session-3', artifactUids: [] })
     expect(changed).toMatchObject({ run: { previousRunUid: run.uid }, prompt: expect.stringContaining(`历史阶段运行：${run.uid}`) })
+  })
+
+  it('automatically binds every configured repository as read-only code context for non-development stages', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-sdd-stage-code-')); const source = join(root, 'source'); const bindings: any[] = []
+    await mkdir(source); execFileSync('git', ['init', '-b', 'main'], { cwd: source }); execFileSync('git', ['config', 'user.email', 'sdd@example.test'], { cwd: source }); execFileSync('git', ['config', 'user.name', 'SDD Test'], { cwd: source })
+    await writeFile(join(source, 'README.md'), '# Existing system\n'); execFileSync('git', ['add', 'README.md'], { cwd: source }); execFileSync('git', ['commit', '-m', 'initial'], { cwd: source })
+    const sessions = { bind: (binding: unknown) => { bindings.push(binding) }, unbind: () => {} } as unknown as StageSessionController
+    const service = new SddProjectService(api(root), undefined, sessions)
+    await service.initialize('w1')
+    await service.execute({ kind: 'add-project-repository', workspaceId: 'w1', id: 'existing-system', source, baseBranch: 'main' })
+    await service.execute({ kind: 'create-draft', workspaceId: 'w1', stage: 'architecture', title: '存量系统设计', basedOn: [] })
+    const artifact = (await service.snapshot('w1')).artifacts[0]!
+    const started = await service.execute({ kind: 'bind-session', workspaceId: 'w1', stage: 'architecture', artifactUid: artifact.uid, sessionId: 'session-code', artifactUids: [] })
+    expect(started).toMatchObject({
+      prompt: expect.stringContaining('项目代码仓库只读参考'),
+      run: { codeReferences: [{ repositoryId: 'existing-system', sourceKind: 'local', available: true, path: source }] },
+    })
+    expect(bindings.at(-1)).toMatchObject({ codeReferences: [{ repositoryId: 'existing-system', available: true, path: source }] })
   })
 })

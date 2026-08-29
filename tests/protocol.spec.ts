@@ -68,6 +68,10 @@ describe('parseAction', () => {
   it('accepts requirement bundle preview and apply actions', () => {
     expect(parseAction({ kind: 'preview-source-import', workspaceId: 'w1', provider: 'command', sourceKind: 'requirement', key: 'EPIC-1', connector: 'company-alm' }))
       .toMatchObject({ kind: 'preview-source-import', key: 'EPIC-1' })
+    expect(parseAction({ kind: 'preview-source-import', workspaceId: 'w1', provider: 'command', sourceKind: 'defect', key: 'BUG-1', connector: 'company-alm', attachToWorkItemUid: 'requirement-uid' }))
+      .toMatchObject({ sourceKind: 'defect', attachToWorkItemUid: 'requirement-uid' })
+    expect(parseAction({ kind: 'read-source-import-detail', workspaceId: 'w1', previewUid: 'preview-1', identity: 'company:defect:BUG-1' }))
+      .toMatchObject({ kind: 'read-source-import-detail', identity: 'company:defect:BUG-1' })
     expect(parseAction({ kind: 'apply-source-import', workspaceId: 'w1', previewUid: 'preview-1', identities: ['company:requirement:REQ-1'] }))
       .toMatchObject({ kind: 'apply-source-import', identities: ['company:requirement:REQ-1'] })
     expect(parseAction({ kind: 'apply-source-import', workspaceId: 'w1', previewUid: 'preview-1', identities: [1] })).toBeUndefined()

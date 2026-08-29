@@ -58,7 +58,7 @@ sources:
 
 ## 企业编号的处理方式
 
-企业需求号、子需求号、缺陷号由 Source Provider 填入 `externalKey`，并在 `relations` 中返回父子或其他业务关系。核心会把这些编号保存到 Source/Work Item，并与 SDD 交付件建立追踪关系。企业适配器不分配或改写插件的 `REQ/UX/ARCH/SPEC/DEV` 交付件编号。
+企业需求号、子需求号、缺陷号由 Source Provider 填入 `externalKey`。Provider 可以在确有外部事实时通过 `relations` 返回父子或其他业务关系，但不负责决定 SDD 执行归属：用户从项目看板导入缺陷时创建独立工作单元，从某个需求页面导入时由插件记录为该需求的内置缺陷。核心会保存企业编号并与 SDD 交付件建立追踪关系。企业适配器不分配或改写插件的 `REQ/UX/ARCH/SPEC/DEV` 交付件编号。
 
 ## 统一命令型 Connector
 

@@ -9,6 +9,48 @@ import type { ArtifactSummary, ProjectConfig } from '../src/protocol.ts'
 function git(cwd: string, ...args: string[]): string { return execFileSync('git', args, { cwd, encoding: 'utf8' }).trim() }
 
 describe('GitDevelopmentService', () => {
+  it('keeps non-development repository references empty when the project has no repositories', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-sdd-no-code-'))
+    const project = { development: { workspaceRoot: '.sdd-workspaces', branchPattern: 'sdd/{artifactKey}', mergeStrategy: 'manual', repositories: [] } } as unknown as ProjectConfig
+    await expect(new GitDevelopmentService().prepareCodeReferences(root, project)).resolves.toEqual([])
+  })
+
+  it('reads a clean local repository directly and creates a detached reference only when the source is dirty', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-sdd-code-reference-')); const source = join(root, 'source'); const projectPath = join(root, 'project')
+    await mkdir(source); await mkdir(projectPath); git(source, 'init', '-b', 'main'); git(source, 'config', 'user.email', 'sdd@example.test'); git(source, 'config', 'user.name', 'SDD Test')
+    await writeFile(join(source, 'app.txt'), 'clean\n'); git(source, 'add', 'app.txt'); git(source, 'commit', '-m', 'initial')
+    const project = { development: { workspaceRoot: '.sdd-workspaces', branchPattern: 'sdd/{artifactKey}', mergeStrategy: 'manual', repositories: [{ id: 'app', source, baseBranch: 'main' }] } } as unknown as ProjectConfig
+    const service = new GitDevelopmentService()
+    const clean = await service.prepareCodeReferences(projectPath, project)
+    expect(clean).toEqual([expect.objectContaining({ repositoryId: 'app', sourceKind: 'local', path: source, available: true, baseCommit: git(source, 'rev-parse', 'HEAD') })])
+    await writeFile(join(source, 'app.txt'), 'dirty\n')
+    const isolated = await service.prepareCodeReferences(projectPath, project)
+    expect(isolated[0]).toMatchObject({ repositoryId: 'app', sourceKind: 'local', available: true })
+    expect(isolated[0]!.path).not.toBe(source)
+    expect(await readFile(join(isolated[0]!.path!, 'app.txt'), 'utf8')).toBe('clean\n')
+  })
+
+  it('shares one remote mirror between read-only references and the existing development worktree layout', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-sdd-shared-remote-')); const source = join(root, 'source'); const projectPath = join(root, 'project'); const bare = join(root, 'remote.git')
+    await mkdir(source); await mkdir(projectPath); git(source, 'init', '-b', 'main'); git(source, 'config', 'user.email', 'sdd@example.test'); git(source, 'config', 'user.name', 'SDD Test')
+    await writeFile(join(source, 'app.txt'), 'remote\n'); git(source, 'add', 'app.txt'); git(source, 'commit', '-m', 'initial'); git(root, 'clone', '--bare', source, bare)
+    const remote = `file://${bare}`
+    const project = { development: { workspaceRoot: '.sdd-workspaces', branchPattern: 'sdd/{artifactKey}/{repositoryId}', mergeStrategy: 'manual', repositories: [{ id: 'app', source: remote, baseBranch: 'main' }] } } as unknown as ProjectConfig
+    const service = new GitDevelopmentService()
+    const references = await service.prepareCodeReferences(projectPath, project)
+    expect(references[0]).toMatchObject({ repositoryId: 'app', sourceKind: 'remote', available: true })
+    expect(await readFile(join(references[0]!.path!, 'app.txt'), 'utf8')).toBe('remote\n')
+    const artifact = { uid: 'artifact-remote', key: 'DEV-REMOTE', stage: 'development', basedOn: [] } as unknown as ArtifactSummary
+    const workspace = await service.create(projectPath, project, artifact, 'app')
+    expect(workspace.repositories[0]!.path).toBe(join(projectPath, '.sdd-workspaces', 'DEV-REMOTE', 'app'))
+    const common = git(workspace.repositories[0]!.path, 'rev-parse', '--git-common-dir')
+    expect(common).toContain(join('.sdd-workspaces', '.repositories', 'app.git'))
+    await writeFile(join(source, 'app.txt'), 'remote updated\n'); git(source, 'add', 'app.txt'); git(source, 'commit', '-m', 'remote update'); git(source, 'push', bare, 'main')
+    const refreshed = await service.prepareCodeReferences(projectPath, project)
+    expect(refreshed[0]!.baseCommit).toBe(git(source, 'rev-parse', 'HEAD'))
+    expect(git(workspace.repositories[0]!.path, 'branch', '--show-current')).toBe('sdd/DEV-REMOTE/app')
+  })
+
   it('creates an isolated worktree, records current AI test evidence and commits changes', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-sdd-git-')); const source = join(root, 'source'); const projectPath = join(root, 'project')
     await mkdir(source); await mkdir(projectPath); git(source, 'init', '-b', 'main'); git(source, 'config', 'user.email', 'sdd@example.test'); git(source, 'config', 'user.name', 'SDD Test')
