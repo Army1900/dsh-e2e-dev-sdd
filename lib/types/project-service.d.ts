@@ -15,6 +15,8 @@ export declare class SddProjectService {
     constructor(api: ApiProxy, sourceRegistry?: SddSourceRegistry | undefined, sessionController?: StageSessionController | undefined, git?: GitDevelopmentService, projectGit?: ProjectGitService, connectors?: ConnectorCatalog);
     private openSpecCli;
     private workspace;
+    /** Import preview only needs source ownership and lightweight artifact state, not Git/OpenSpec/quality/dashboard inspection. */
+    private importProjectContext;
     execute(action: SddAction): Promise<ProjectSnapshot | ImportPreview | SourceImportDetail | StageTemplatePreview | RepositoryInspection | {
         openSpecTemplates: OpenSpecTemplatesPreview;
     } | {

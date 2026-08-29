@@ -38,6 +38,7 @@ import {
   type StageTemplatePreview,
   type StageId,
   type WorkItem,
+  type WorkspaceSummary,
   stageDefinition,
 } from './protocol.ts'
 import { type SddSourceRegistry, validateSourceEnvelope } from './extensions.ts'
@@ -51,6 +52,14 @@ import { ensureProjectTemplates, loadStageTemplate, renderStageTemplate, snapsho
 
 const PROJECT_FILE = '.sdd/project.yaml'
 interface StagedImport { preview: ImportPreview; bundle: SourceBundle }
+interface ImportArtifactState { workItemUid?: string; stage: StageId; status: ArtifactManifest['status'] }
+interface ImportProjectContext {
+  workspace: WorkspaceSummary
+  project: ProjectConfig
+  sources: SourceSummary[]
+  workItems: WorkItem[]
+  artifacts: ImportArtifactState[]
+}
 const BUSINESS_GUIDE = `# 项目业务扩展
 
 本目录保存仅供当前 SDD 项目使用的业务自定义。企业通用适配器也可以使用相同格式放在 dsh-e2e-dev-sdd 插件的 \`business/\` 目录，安装一次后供所有项目使用；同名时当前项目配置覆盖插件配置。
@@ -323,6 +332,15 @@ function validateProject(value: unknown): { project?: ProjectConfig; errors: str
   return errors.length === 0 ? { project: value as unknown as ProjectConfig, errors } : { errors }
 }
 
+function normalizeProject(project: ProjectConfig): ProjectConfig {
+  return {
+    ...project,
+    sources: project.sources ?? {},
+    development: { ...project.development, repositories: project.development?.repositories ?? [] },
+    collaboration: project.collaboration ?? { remote: 'origin', baseBranch: 'main', syncStrategy: 'ff-only', commitScope: 'sdd' },
+  }
+}
+
 function artifactKeyConflicts(artifacts: ArtifactSummary[], runs: StageRun[], developmentWorkspaces: DevelopmentWorkspace[]) {
   const byUid = new Map(artifacts.map(item => [item.uid, item]))
   const rootUid = (artifact: ArtifactSummary): string => {
@@ -375,6 +393,31 @@ export class SddProjectService {
     const item = response.result.value.items.find(row => row.workspaceId === workspaceId)
     if (item === undefined) throw new Error(`workspace not found: ${workspaceId}`)
     return { workspaceId, title: item.title, path: await realpath(item.path) }
+  }
+
+  /** Import preview only needs source ownership and lightweight artifact state, not Git/OpenSpec/quality/dashboard inspection. */
+  private async importProjectContext(workspace: WorkspaceSummary, includeArtifacts: boolean): Promise<ImportProjectContext> {
+    const projectPath = join(workspace.path, PROJECT_FILE)
+    if (!(await exists(projectPath))) throw new Error('SDD project is not initialized')
+    let parsedProject: unknown
+    try { parsedProject = parse(await readFile(projectPath, 'utf8')) }
+    catch (error) { throw new Error(`project.yaml YAML parse failed: ${error instanceof Error ? error.message : String(error)}`) }
+    const validation = validateProject(parsedProject)
+    if (validation.project === undefined) throw new Error(`invalid SDD project configuration: ${validation.errors.join('; ')}`)
+    const artifactStates = async (): Promise<ImportArtifactState[]> => {
+      if (!includeArtifacts) return []
+      const paths = [...new Set([...await walkForManifest(join(workspace.path, '.sdd', 'artifacts')), ...await walkForManifest(join(workspace.path, '.sdd', 'work-items'))])]
+      const states = await Promise.all(paths.map(async path => {
+        try {
+          const manifest = parse(await readFile(path, 'utf8')) as Partial<ArtifactManifest>
+          if (manifest.schema !== 'dsh-sdd/artifact@1' || !STAGES.some(stage => stage.id === manifest.stage) || !['draft', 'in-review', 'accepted', 'superseded'].includes(String(manifest.status))) return undefined
+          return { stage: manifest.stage!, status: manifest.status!, ...(manifest.workItemUid === undefined ? {} : { workItemUid: manifest.workItemUid }) } satisfies ImportArtifactState
+        } catch { return undefined }
+      }))
+      return states.filter((state): state is ImportArtifactState => state !== undefined)
+    }
+    const [sources, workItems, artifacts] = await Promise.all([this.listSources(workspace.path), this.listWorkItems(workspace.path), artifactStates()])
+    return { workspace, project: normalizeProject(validation.project), sources, workItems, artifacts }
   }
 
   async execute(action: SddAction): Promise<ProjectSnapshot | ImportPreview | SourceImportDetail | StageTemplatePreview | RepositoryInspection | { openSpecTemplates: OpenSpecTemplatesPreview } | { revisionPreview: RevisionPreview } | { prompt: string; run?: StageRun } | { artifactFile: { artifactUid: string; path: string; kind: ArtifactFileSummary['kind'] | 'manifest'; content?: string; dataUrl?: string } } | { opened: true }> {
@@ -576,13 +619,7 @@ export class SddProjectService {
       workspace, initialized: true, configuration: { status: 'invalid', path: PROJECT_FILE, errors: validation.errors },
       artifacts: [], sources: [], sourceProviders: this.sourceRegistry?.names() ?? [], connectors: [], workItems: [], runs: [], quality: {}, developmentWorkspaces: [], openSpecValidation: {}, dashboard: this.emptyDashboard(),
     }
-    const parsed = validation.project
-    const project: ProjectConfig = {
-      ...parsed,
-      sources: parsed.sources ?? {},
-      development: { ...parsed.development, repositories: parsed.development?.repositories ?? [] },
-      collaboration: parsed.collaboration ?? { remote: 'origin', baseBranch: 'main', syncStrategy: 'ff-only', commitScope: 'sdd' },
-    }
+    const project = normalizeProject(validation.project)
     const artifacts: ArtifactSummary[] = []
     const artifactManifests = [...await walkForManifest(join(workspace.path, '.sdd', 'artifacts')), ...await walkForManifest(join(workspace.path, '.sdd', 'work-items'))]
     for (const manifestPath of [...new Set(artifactManifests)].sort()) {
@@ -1311,9 +1348,9 @@ export class SddProjectService {
     attachToWorkItemUid: string | undefined,
   ): Promise<ImportPreview> {
     if (kind.trim() === '' || key.trim() === '') throw new Error('source kind and key are required')
-    await this.initialize(workspaceId)
-    const snapshot = await this.snapshot(workspaceId)
-    if (snapshot.project === undefined) throw new Error('SDD project is not initialized')
+    let workspace = await this.workspace(workspaceId)
+    if (!(await exists(join(workspace.path, PROJECT_FILE)))) { await this.initialize(workspaceId); workspace = await this.workspace(workspaceId) }
+    const snapshot = await this.importProjectContext(workspace, false)
     if (this.sourceRegistry === undefined) throw new Error('source registry is unavailable')
     const parent = attachToWorkItemUid === undefined ? undefined : snapshot.workItems.find(item => item.uid === attachToWorkItemUid)
     if (attachToWorkItemUid !== undefined && parent === undefined) throw new Error(`parent work item not found: ${attachToWorkItemUid}`)
@@ -1368,9 +1405,9 @@ export class SddProjectService {
     return preview
   }
 
-  private async readStagedImport(workspaceId: string, previewUid: string): Promise<{ snapshot: ProjectSnapshot & { project: ProjectConfig }; path: string; staged: StagedImport }> {
+  private async readStagedImport(workspaceId: string, previewUid: string, includeArtifacts = false): Promise<{ snapshot: ImportProjectContext; path: string; staged: StagedImport }> {
     if (!/^[0-9a-f-]{36}$/i.test(previewUid)) throw new Error('invalid import preview id')
-    const snapshot = await this.requireSnapshot(workspaceId)
+    const snapshot = await this.importProjectContext(await this.workspace(workspaceId), includeArtifacts)
     const path = join(snapshot.workspace.path, '.sdd', 'imports', 'pending', `${previewUid}.yaml`)
     if (!(await exists(path))) throw new Error('import preview not found or expired')
     const staged = parse(await readFile(path, 'utf8')) as StagedImport
@@ -1408,7 +1445,7 @@ export class SddProjectService {
   }
 
   private async applySourceImport(workspaceId: string, previewUid: string, identities: string[]): Promise<void> {
-    const { snapshot, path, staged } = await this.readStagedImport(workspaceId, previewUid)
+    const { snapshot, path, staged } = await this.readStagedImport(workspaceId, previewUid, true)
     const executionMode = staged.preview.executionMode ?? 'standalone'
     const parent = staged.preview.parentWorkItemUid === undefined ? undefined : snapshot.workItems.find(item => item.uid === staged.preview.parentWorkItemUid)
     if (executionMode === 'attached' && parent === undefined) throw new Error('attached defect target no longer exists')

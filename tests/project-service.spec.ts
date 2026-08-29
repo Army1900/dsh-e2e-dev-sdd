@@ -3,7 +3,7 @@ import { chmod, mkdir, mkdtemp, readFile, readdir, writeFile } from 'node:fs/pro
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { ApiProxy } from '@deepseek-ai/dsh-host-apiproxy'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { parse, stringify } from 'yaml'
 import { SddProjectService } from '../src/project-service.ts'
 import type { SddSourceRegistry } from '../src/extensions.ts'
@@ -94,10 +94,26 @@ process.exit(1)\n`)
     const service = new SddProjectService(api(root), sources)
     const preview = await service.execute({ kind: 'preview-source-import', workspaceId: 'w1', provider: 'manual', sourceKind: 'requirement', key: 'MANUAL-1', input: { title: '订单部分退款', description: '规则待讨论' } })
     if (!('schema' in preview)) throw new Error('expected import preview')
+    const snapshotCalls = vi.spyOn(service, 'snapshot')
     await service.execute({ kind: 'apply-source-import', workspaceId: 'w1', previewUid: preview.uid, identities: preview.items.map(item => item.identity) })
+    expect(snapshotCalls).toHaveBeenCalledTimes(1)
     const snapshot = await service.snapshot('w1')
     expect(snapshot.workItems).toEqual([expect.objectContaining({ key: 'MANUAL-1', title: '订单部分退款', provider: 'manual' })])
     expect(snapshot.sources).toEqual([expect.objectContaining({ content: expect.objectContaining({ description: '规则待讨论' }) })])
+  })
+
+  it('builds import previews and item details without generating the full project snapshot', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-sdd-light-preview-'))
+    const provider = new ManualSourceProvider()
+    const sources = { names: () => ['manual'], fetch: async (_name: string, request: any) => provider.get({ ...request, signal: request.signal ?? AbortSignal.timeout(1000) }) } as unknown as SddSourceRegistry
+    const service = new SddProjectService(api(root), sources)
+    await service.initialize('w1')
+    const snapshot = vi.spyOn(service, 'snapshot').mockRejectedValue(new Error('full snapshot should not run'))
+    const preview = await service.execute({ kind: 'preview-source-import', workspaceId: 'w1', provider: 'manual', sourceKind: 'requirement', key: 'FAST-1', input: { title: '快速预览', description: '无需 Git、OpenSpec 和质量统计。' } })
+    if (!('schema' in preview)) throw new Error('expected import preview')
+    const detail = await service.execute({ kind: 'read-source-import-detail', workspaceId: 'w1', previewUid: preview.uid, identity: preview.items[0]!.identity })
+    expect(detail).toMatchObject({ source: { externalKey: 'FAST-1', title: '快速预览' } })
+    expect(snapshot).not.toHaveBeenCalled()
   })
 
   it('attaches imported defects to an existing requirement without creating another delivery flow', async () => {
