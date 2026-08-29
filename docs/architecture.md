@@ -70,13 +70,13 @@ Git-only 的并行分支无法安全分配全局连续序号，所以模板序�
 manual/CLI/MCP provider -> Source/Bundle -> change preview -> work item -> AI synthesis -> draft artifact -> human acceptance
 ```
 
-Connector 只提供来源，不直接创建 accepted 交付件。命令型 Connector 使用 stdin JSON / stdout JSON，命令以 argv 数组存储，凭证只从声明的环境变量读取。
+Connector 只提供来源，不直接创建 accepted 交付件。命令型 Connector 使用 stdin JSON / stdout JSON，命令以 argv 数组存储，凭证只从声明的环境变量读取。统一目录解析器合并插件 `business/` 与项目 `.sdd/business/`，两处使用相同 Connector 和 Adapter 文件格式；项目同名配置覆盖插件配置，并在页面标明来源。
 
 内置 `manual` Provider 不需要 Connector。用户只填写标题、初始描述和可选的多行子项，Provider 将其归一化为同一个 `source-bundle@1` 协议；信息不完整是允许的，需求讨论阶段的 Agent 负责追问并把确认结论写入正式交付件。
 
 再次导入同一需求包即为同步。核心按 `provider + kind + externalKey` 匹配工作单元，比较来源内容、标题、状态和版本，预览新增、修改、移除、无变化四类结果。应用变更会新增来源快照而不覆盖历史版本；已有 accepted 交付件保持冻结，工作单元进入 `change-pending`，相关阶段必须使用最新来源和重新接受的上游交付件完成评审。外部移除进入 `removed-pending`，负责人可以保留本地继续推进或归档工作单元；两种操作都不会删除历史文件。
 
-项目级业务代码和配置统一位于 `.sdd/business/`。Connector 配置放入 `connectors/`，被调用的脚本及其项目内模块放入 `adapters/`；不得再散落到 `.sdd/scripts/`、仓库根目录或其他 SDD 状态目录。
+企业通用业务代码和配置统一位于插件 `business/`，项目专用代码和配置统一位于 `.sdd/business/`。两处都把 Connector YAML 放入 `connectors/`，被调用的脚本及其内部模块放入 `adapters/`；Connector 中的 `.sdd/business/adapters/` 是逻辑路径，运行时映射到实际生效范围。项目代码不得再散落到 `.sdd/scripts/`、仓库根目录或其他 SDD 状态目录。
 
 ## 阶段对话
 

@@ -134,7 +134,7 @@ dsh --profile web --dump-config
 企业系统 -> Connector/Adapter -> Source Bundle -> 变更预览 -> 工作单元
 ```
 
-项目业务代码统一放在 `.sdd/business/`，避免脚本散落在仓库根目录：
+企业通用业务代码放在插件 `business/`，安装一次后供所有项目使用；项目专用业务代码放在 `.sdd/business/`。两处使用完全相同的目录和协议，同名时项目配置覆盖插件配置。项目目录示例：
 
 ```text
 .sdd/business/

@@ -39,6 +39,7 @@ import {
   stageDefinition,
 } from './protocol.ts'
 import { type SddSourceRegistry, validateSourceEnvelope } from './extensions.ts'
+import { ConnectorCatalog } from './connector-catalog.ts'
 import { appendEvent, readRecentEvents } from './event-log.ts'
 import { GitDevelopmentService, listDevelopmentWorkspaces, ProjectGitService } from './git-service.ts'
 import { evaluateQuality } from './quality.ts'
@@ -50,7 +51,7 @@ const PROJECT_FILE = '.sdd/project.yaml'
 interface StagedImport { preview: ImportPreview; bundle: SourceBundle }
 const BUSINESS_GUIDE = `# 项目业务扩展
 
-本目录是当前 SDD 项目唯一的项目级业务自定义目录。
+本目录保存仅供当前 SDD 项目使用的业务自定义。企业通用适配器也可以使用相同格式放在 dsh-e2e-dev-sdd 插件的 \`business/\` 目录，安装一次后供所有项目使用；同名时当前项目配置覆盖插件配置。
 
 - \`connectors/\`：命令型 Connector 配置。
 - \`adapters/\`：Connector 调用的业务适配器脚本和脚本自己的模块。
@@ -356,6 +357,7 @@ export class SddProjectService {
     private readonly sessionController?: StageSessionController,
     private readonly git = new GitDevelopmentService(),
     private readonly projectGit = new ProjectGitService(),
+    private readonly connectors = new ConnectorCatalog(resolve(process.cwd(), 'business')),
   ) {}
 
   private async openSpecCli(cwd: string, refresh = false): Promise<{ installed: boolean; version?: string }> {
@@ -624,7 +626,7 @@ export class SddProjectService {
     }
     const sources = await this.listSources(workspace.path)
     const workItems = await this.listWorkItems(workspace.path)
-    const connectors = await this.listConnectors(workspace.path)
+    const connectors = await this.connectors.list(workspace.path)
     const runs = await this.listRuns(workspace.path)
     const developmentWorkspaces = await listDevelopmentWorkspaces(workspace.path, artifacts)
     const openSpecValidation = await this.validateOpenSpecSettings(workspace.path, project, workItems, artifacts, developmentWorkspaces)
@@ -709,16 +711,6 @@ export class SddProjectService {
       }
     }
     return result
-  }
-
-  private async listConnectors(workspacePath: string): Promise<string[]> {
-    const root = join(workspacePath, '.sdd', 'business', 'connectors')
-    if (!(await exists(root))) return []
-    return (await readdir(root, { withFileTypes: true }))
-      .filter(item => item.isFile() && (item.name.endsWith('.yaml') || item.name.endsWith('.yml')))
-      .map(item => item.name.replace(/\.ya?ml$/, ''))
-      .filter(id => /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(id))
-      .sort()
   }
 
   private async listWorkItems(workspacePath: string): Promise<WorkItem[]> {

@@ -1,4 +1,6 @@
-# Provider 扩展开发
+# 高级 Provider 扩展开发
+
+企业基于本插件源码维护适配时，优先使用 `business/connectors/` 与 `business/adapters/`；它们和项目 `.sdd/business/` 的格式完全一致，可以原样移动，不需要改写 Provider Class。本页的 Cordis Provider API 保留给确实需要进程内服务、搜索或其他深度扩展的 DSH 插件开发者。
 
 插件公开 Cordis 服务 `ctx.dshSddSources`，用于管理企业需求、缺陷和问题来源。第三方插件只依赖 `dsh-e2e-dev-sdd/extensions` 的接口，不需要修改核心包。
 
@@ -58,9 +60,9 @@ sources:
 
 企业需求号、子需求号、缺陷号由 Source Provider 填入 `externalKey`，并在 `relations` 中返回父子或其他业务关系。核心会把这些编号保存到 Source/Work Item，并与 SDD 交付件建立追踪关系。企业适配器不分配或改写插件的 `REQ/UX/ARCH/SPEC/DEV` 交付件编号。
 
-## 命令型 Connector
+## 统一命令型 Connector
 
-无需发布 Cordis 插件时，可以在项目中提供命令适配器：
+企业通用适配器放在插件 `business/`，项目专用适配器放在 `.sdd/business/`；两处使用相同配置。以下文件既可以位于 `business/connectors/company-alm.yaml`，也可以位于 `.sdd/business/connectors/company-alm.yaml`：
 
 ```yaml
 # .sdd/business/connectors/company-alm.yaml

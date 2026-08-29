@@ -1,0 +1,49 @@
+let input = ''
+for await (const chunk of process.stdin) input += chunk
+
+const request = JSON.parse(input)
+if (request.operation !== 'get') throw new Error('unsupported operation')
+
+const baseUrl = process.env.COMPANY_ALM_URL
+const token = process.env.COMPANY_ALM_TOKEN
+if (!baseUrl || !token) throw new Error('missing COMPANY_ALM_URL or COMPANY_ALM_TOKEN')
+
+// Replace this endpoint and mapping with the enterprise ALM contract.
+const response = await fetch(`${baseUrl}/api/items/${encodeURIComponent(request.key)}`, {
+  headers: { authorization: `Bearer ${token}` },
+})
+if (!response.ok) throw new Error(`ALM returned ${response.status}`)
+const raw = await response.json()
+const fetchedAt = new Date().toISOString()
+const hasChildren = Array.isArray(raw.children) && raw.children.length > 0
+const children = hasChildren ? raw.children : [raw]
+
+const source = item => ({
+  schema: 'dsh-sdd/source@1',
+  uid: `company-alm:${request.kind}:${item.key}`,
+  provider: 'company-alm',
+  kind: request.kind,
+  externalKey: item.key,
+  title: item.title,
+  status: item.status,
+  revision: String(item.version ?? item.updatedAt ?? ''),
+  fetchedAt,
+  content: {
+    description: item.description,
+    acceptanceCriteria: item.acceptanceCriteria,
+  },
+})
+const items = children.map(source)
+
+process.stdout.write(JSON.stringify({
+  schema: 'dsh-sdd/source-bundle@1',
+  uid: `company-alm:bundle:${request.kind}:${raw.key}`,
+  provider: 'company-alm',
+  kind: request.kind,
+  externalKey: raw.key,
+  title: raw.title,
+  fetchedAt,
+  ...(hasChildren ? { root: source(raw) } : {}),
+  items,
+  relations: hasChildren ? children.map(item => ({ from: item.key, to: raw.key, type: 'child-of' })) : [],
+}))

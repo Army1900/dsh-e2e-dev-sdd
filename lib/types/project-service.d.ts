@@ -1,6 +1,7 @@
 import type { ApiProxy } from '@deepseek-ai/dsh-host-apiproxy';
 import { type ArtifactFileSummary, type ImportPreview, type OpenSpecTemplatesPreview, type ProjectSnapshot, type RepositoryInspection, type RevisionPreview, type SddAction, type StageRun, type StageTemplatePreview } from './protocol.ts';
 import { type SddSourceRegistry } from './extensions.ts';
+import { ConnectorCatalog } from './connector-catalog.ts';
 import { GitDevelopmentService, ProjectGitService } from './git-service.ts';
 import type { StageSessionController } from './session-controller.ts';
 export declare class SddProjectService {
@@ -9,8 +10,9 @@ export declare class SddProjectService {
     private readonly sessionController?;
     private readonly git;
     private readonly projectGit;
+    private readonly connectors;
     private openSpecCliCache?;
-    constructor(api: ApiProxy, sourceRegistry?: SddSourceRegistry | undefined, sessionController?: StageSessionController | undefined, git?: GitDevelopmentService, projectGit?: ProjectGitService);
+    constructor(api: ApiProxy, sourceRegistry?: SddSourceRegistry | undefined, sessionController?: StageSessionController | undefined, git?: GitDevelopmentService, projectGit?: ProjectGitService, connectors?: ConnectorCatalog);
     private openSpecCli;
     private workspace;
     execute(action: SddAction): Promise<ProjectSnapshot | ImportPreview | StageTemplatePreview | RepositoryInspection | {
@@ -35,7 +37,6 @@ export declare class SddProjectService {
     private reinitialize;
     snapshot(workspaceId: string): Promise<ProjectSnapshot>;
     private validateOpenSpecSettings;
-    private listConnectors;
     private listWorkItems;
     private createDraft;
     private revisionPlan;

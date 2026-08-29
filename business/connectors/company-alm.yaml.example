@@ -1,0 +1,10 @@
+schema: dsh-sdd/connector@1
+id: company-alm
+type: command
+command:
+  - node
+  - .sdd/business/adapters/fetch-company-alm.mjs
+timeoutMs: 30000
+environment:
+  - COMPANY_ALM_URL
+  - COMPANY_ALM_TOKEN

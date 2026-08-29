@@ -2,13 +2,25 @@
 
 本文面向需要把企业需求、缺陷或问题系统接入 DSH SDD 项目的业务开发人员。目标是让业务代码只负责“读取外部事实并归一化”，由 SDD 阶段 Agent 负责把事实整合成当前架构要求的交付件。
 
-企业适配不是插件运行的前置条件。未开发适配器的项目可直接使用内置“手工录入”来源，填写标题、描述和可选子项；只有需要自动读取企业系统时才需要本指南中的 Connector 或 Provider。
+企业适配不是插件运行的前置条件。未开发适配器的项目可直接使用内置“手工录入”来源，填写标题、描述和可选子项；只有需要自动读取企业系统时才需要本指南中的 Connector 和 Adapter。
 
 ## 目录边界
 
-项目级业务自定义文件必须统一放在 `.sdd/business/`：
+Connector 和 Adapter 只有一套文件格式，可以按复用范围放在两个位置：
 
 ```text
+# 插件源码级：随插件安装一次，所有项目可用
+business/
+├── connectors/
+│   └── company-alm.yaml
+└── adapters/
+    ├── fetch-company-alm.mjs
+    └── lib/
+        └── status-map.mjs
+```
+
+```text
+# 项目级：只供当前项目使用
 .sdd/business/
 ├── README.md
 ├── connectors/
@@ -20,22 +32,23 @@
 ```
 
 - `connectors/` 只放 Connector YAML 配置。
-- `adapters/` 放可执行适配器及其项目内模块。
+- `adapters/` 放可执行适配器及其内部模块。
+- 项目存在同名 Connector 时覆盖插件 Connector，页面会显示“项目覆盖”。
 - Token、Cookie、私钥和本地凭证不得放入该目录或提交到 Git。
 - `.sdd/sources/` 是插件生成的只读来源快照，不放业务代码。
-- 通用的 Cordis Provider 应开发为独立 DSH 插件，不复制到项目目录。
 
 ## 最小接入流程
 
-1. 在 `adapters/` 编写读取企业系统的脚本。
-2. 在 `connectors/` 声明启动命令、超时和允许继承的环境变量。
-3. 在 `.sdd/project.yaml` 为 `requirement`、`defect` 等来源类型配置默认 Connector。
-4. 在命令行完成协议测试。
-5. 启动 DSH，在阶段页面按主业务编号导入，检查变更预览和生成的工作单元。
+1. 决定复用范围：企业通用适配放插件 `business/`，项目专用适配放 `.sdd/business/`。
+2. 在对应 `adapters/` 编写读取企业系统的脚本。
+3. 在同一范围的 `connectors/` 声明启动命令、超时和允许继承的环境变量。
+4. 在 `.sdd/project.yaml` 为 `requirement`、`defect` 等来源类型配置默认 Connector。
+5. 在命令行完成协议测试。
+6. 启动 DSH，在阶段页面按主业务编号导入，检查变更预览和生成的工作单元。
 
 ## Connector 配置
 
-`.sdd/business/connectors/company-alm.yaml`：
+`business/connectors/company-alm.yaml` 或 `.sdd/business/connectors/company-alm.yaml`：
 
 ```yaml
 schema: dsh-sdd/connector@1
@@ -54,7 +67,8 @@ environment:
 
 - `id` 使用 kebab-case，并与文件名一致。
 - `command` 是 argv 数组，不经过 shell。
-- 相对路径以项目 Workspace 根目录为基准。
+- `.sdd/business/adapters/` 是统一逻辑路径：插件 Connector 映射到插件 `business/adapters/`，项目 Connector 映射到项目 `.sdd/business/adapters/`。
+- Adapter 子进程仍以项目 Workspace 根目录为工作目录。
 - 子进程只继承基础启动变量和 `environment` 显式声明的变量。
 - 默认超时 30 秒，可配置范围为 100 毫秒到 5 分钟。
 - stdout 最大 2 MiB。
@@ -154,7 +168,7 @@ environment:
 
 ## Node.js 示例
 
-`.sdd/business/adapters/fetch-company-alm.mjs`：
+`business/adapters/fetch-company-alm.mjs` 或 `.sdd/business/adapters/fetch-company-alm.mjs`：
 
 ```js
 let input = ''
@@ -239,7 +253,7 @@ sources:
     connector: company-alm
 ```
 
-Provider 使用内置的 `command`，Connector 指向 `.sdd/business/connectors/company-alm.yaml`。
+Provider 使用内置的 `command`。核心按 Connector ID 合并插件和项目目录，同名时选择项目版本，因此项目配置不需要记录物理路径或部署范围。
 
 ## 本地调试
 
@@ -282,13 +296,8 @@ Windows PowerShell：
 - `content` 中如包含个人信息或密钥，必须在适配器中脱敏。
 - 业务适配器默认只读；创建、修改、关闭外部单据应设计成另一套需要用户确认的写能力。
 
-## 何时开发独立 Provider 插件
+## 从项目适配提升为源码适配
 
-项目内命令适配器适合单项目接入和快速试用。出现以下情况时，应按照 `docs/extensions.md` 开发独立 Cordis Provider：
+项目验证完成后，可以把 `.sdd/business/connectors/<id>.yaml` 和对应 Adapter 原样移动到插件 `business/`。不需要改写 Class、输入协议或输出协议；重新构建并安装企业维护的插件版本后，所有项目都能选择该 Connector。项目需要特殊行为时，可在自己的 `.sdd/business/` 放置同名文件覆盖。
 
-- 多个项目复用同一系统接入。
-- 需要统一认证、连接池、缓存或审计。
-- 需要搜索、批量读取或父子项查询。
-- 需要由平台团队统一升级和治理。
-
-无论采用哪种方式，外部数据都必须先转换为 Source Envelope，不能由适配器直接创建 accepted 交付件。
+无论放在哪个范围，外部数据都必须先转换为 Source Envelope，不能由适配器直接创建 accepted 交付件。

@@ -465,6 +465,13 @@ export interface WorkspaceSummary {
   path: string
 }
 
+export interface ConnectorSummary {
+  id: string
+  scope: 'plugin' | 'project'
+  /** True when a project Connector with this id overrides an installed plugin Connector. */
+  overridden: boolean
+}
+
 export interface ProjectSnapshot {
   workspace: WorkspaceSummary
   initialized: boolean
@@ -477,7 +484,7 @@ export interface ProjectSnapshot {
   artifacts: ArtifactSummary[]
   sources: SourceSummary[]
   sourceProviders: string[]
-  connectors: string[]
+  connectors: ConnectorSummary[]
   workItems: WorkItem[]
   runs: StageRun[]
   quality: Record<string, QualityReport>

@@ -1,7 +1,8 @@
 import { spawn } from 'node:child_process'
 import { readFile } from 'node:fs/promises'
-import { isAbsolute, join, relative, resolve } from 'node:path'
+import { isAbsolute, relative, resolve, sep } from 'node:path'
 import { parse } from 'yaml'
+import { ConnectorCatalog, type ConnectorDescriptor } from '../connector-catalog.ts'
 import type { SddSourceProvider, SourceGetRequest } from '../extensions.ts'
 import { validateSourceBundle } from '../extensions.ts'
 import type { SourceBundle } from '../protocol.ts'
@@ -51,17 +52,35 @@ function childEnvironment(names: readonly string[]): NodeJS.ProcessEnv {
   return environment
 }
 
-async function execute(config: CommandConnectorConfig, request: SourceGetRequest): Promise<unknown> {
+function inside(root: string, candidate: string): boolean {
+  const path = relative(root, candidate)
+  return path === '' || (!path.startsWith(`..${sep}`) && path !== '..' && !isAbsolute(path))
+}
+
+function commandArguments(config: CommandConnectorConfig, connector: ConnectorDescriptor, request: SourceGetRequest): string[] {
   const workspaceRoot = resolve(request.workspace.path)
-  const adapterRoot = resolve(workspaceRoot, '.sdd', 'business', 'adapters')
-  for (const argument of config.command) {
-    if (!isAbsolute(argument) && !argument.startsWith('.') && !argument.includes('/')) continue
+  const adapterRoot = resolve(connector.adapterRoot)
+  return config.command.map((argument, index) => {
+    const normalized = argument.replaceAll('\\', '/')
+    const logicalPrefix = '.sdd/business/adapters/'
+    const logicalPath = normalized.startsWith('./') ? normalized.slice(2) : normalized
+    if (logicalPath.startsWith(logicalPrefix)) {
+      const candidate = resolve(adapterRoot, logicalPath.slice(logicalPrefix.length))
+      if (!inside(adapterRoot, candidate)) throw new Error(`connector adapter path escapes its adapter directory: ${argument}`)
+      return candidate
+    }
+    if (!isAbsolute(argument) && !argument.startsWith('.') && !argument.includes('/') && !argument.includes('\\')) return argument
     const candidate = resolve(workspaceRoot, argument)
-    const inWorkspace = relative(workspaceRoot, candidate) === '' || !relative(workspaceRoot, candidate).startsWith('..')
-    const inAdapters = relative(adapterRoot, candidate) === '' || !relative(adapterRoot, candidate).startsWith('..')
-    if (inWorkspace && !inAdapters) throw new Error(`connector project file must be under .sdd/business/adapters: ${argument}`)
-  }
-  const [file, ...args] = config.command
+    if (inside(workspaceRoot, candidate) && !inside(adapterRoot, candidate)) {
+      throw new Error(`connector project file must be under its business/adapters directory: ${argument}`)
+    }
+    if (isAbsolute(argument) && index > 0 && inside(adapterRoot, argument)) return argument
+    return argument
+  })
+}
+
+async function execute(config: CommandConnectorConfig, connector: ConnectorDescriptor, request: SourceGetRequest): Promise<unknown> {
+  const [file, ...args] = commandArguments(config, connector, request)
   const timeout = AbortSignal.timeout(config.timeoutMs ?? DEFAULT_TIMEOUT_MS)
   const signal = AbortSignal.any([request.signal, timeout])
   return await new Promise((resolve, reject) => {
@@ -99,19 +118,21 @@ async function execute(config: CommandConnectorConfig, request: SourceGetRequest
   })
 }
 
-/** Built-in adapter for project-owned CLI scripts. It never invokes a shell. */
+/** Built-in adapter for plugin-installed and project-owned CLI scripts. It never invokes a shell. */
 export class CommandSourceProvider implements SddSourceProvider {
   readonly name = 'command'
   readonly kinds = ['*'] as const
+
+  constructor(private readonly connectors = new ConnectorCatalog(resolve(process.cwd(), 'business'))) {}
 
   async get(request: SourceGetRequest): Promise<SourceBundle> {
     const connectorId = request.connector
     if (connectorId === undefined || !CONNECTOR_ID.test(connectorId)) {
       throw new Error('command source provider needs a kebab-case connector id')
     }
-    const configPath = join(request.workspace.path, '.sdd', 'business', 'connectors', `${connectorId}.yaml`)
-    const config = parseConfig(parse(await readFile(configPath, 'utf8')), connectorId)
-    const source = validateSourceBundle(await execute(config, request))
+    const connector = await this.connectors.resolve(request.workspace.path, connectorId)
+    const config = parseConfig(parse(await readFile(connector.configPath, 'utf8')), connectorId)
+    const source = validateSourceBundle(await execute(config, connector, request))
     if (source.provider !== connectorId && source.provider !== this.name) {
       throw new Error(`source.provider must be "${connectorId}" or "command"`)
     }

@@ -5,6 +5,7 @@ import { Context } from '@deepseek-ai/cordis'
 import { describe, expect, it } from 'vitest'
 import { stringify } from 'yaml'
 import { SddSourceRegistry, validateSourceBundle } from '../src/extensions.ts'
+import { ConnectorCatalog } from '../src/connector-catalog.ts'
 import { CommandSourceProvider } from '../src/providers/command-source.ts'
 import { ManualSourceProvider } from '../src/providers/manual-source.ts'
 import type { ProjectConfig } from '../src/protocol.ts'
@@ -75,7 +76,7 @@ describe('CommandSourceProvider', () => {
     const script = join(root, '.sdd', 'business', 'adapters', 'connector.mjs')
     await writeFile(script, `let input=''; for await (const chunk of process.stdin) input += chunk; const request=JSON.parse(input); const item={schema:'dsh-sdd/source@1',uid:'source-1',provider:'demo-cli',kind:request.kind,externalKey:request.key,title:'Imported '+request.key,fetchedAt:new Date(0).toISOString(),content:{body:'from cli'}}; process.stdout.write(JSON.stringify({schema:'dsh-sdd/source-bundle@1',uid:'bundle-1',provider:'demo-cli',kind:request.kind,externalKey:request.key,title:item.title,fetchedAt:item.fetchedAt,items:[item],relations:[]}));`)
     await writeFile(join(root, '.sdd', 'business', 'connectors', 'demo-cli.yaml'), stringify({
-      schema: 'dsh-sdd/connector@1', id: 'demo-cli', type: 'command', command: [process.execPath, script], timeoutMs: 5000,
+      schema: 'dsh-sdd/connector@1', id: 'demo-cli', type: 'command', command: [process.execPath, '.sdd/business/adapters/connector.mjs'], timeoutMs: 5000,
     }))
     const provider = new CommandSourceProvider()
     const source = await provider.get({
@@ -83,6 +84,52 @@ describe('CommandSourceProvider', () => {
       workspace: { workspaceId: 'w1', path: root, project }, signal: AbortSignal.timeout(5000),
     })
     expect(source).toMatchObject({ provider: 'demo-cli', kind: 'defect', externalKey: 'BUG-9', items: [{ externalKey: 'BUG-9' }] })
+  })
+
+  it('runs the same Connector and Adapter format from the installed plugin directory', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-sdd-command-workspace-'))
+    const pluginBusiness = await mkdtemp(join(tmpdir(), 'dsh-sdd-command-plugin-'))
+    await mkdir(join(pluginBusiness, 'connectors'), { recursive: true })
+    await mkdir(join(pluginBusiness, 'adapters'), { recursive: true })
+    await writeFile(join(pluginBusiness, 'adapters', 'connector.mjs'), `let input=''; for await (const chunk of process.stdin) input += chunk; const request=JSON.parse(input); const item={schema:'dsh-sdd/source@1',uid:'plugin-source',provider:'company-alm',kind:request.kind,externalKey:request.key,title:'Plugin '+request.key,fetchedAt:new Date(0).toISOString(),content:{scope:'plugin'}}; process.stdout.write(JSON.stringify({schema:'dsh-sdd/source-bundle@1',uid:'plugin-bundle',provider:'company-alm',kind:request.kind,externalKey:request.key,title:item.title,fetchedAt:item.fetchedAt,items:[item],relations:[]}));`)
+    await writeFile(join(pluginBusiness, 'connectors', 'company-alm.yaml'), stringify({
+      schema: 'dsh-sdd/connector@1', id: 'company-alm', type: 'command', command: [process.execPath, '.sdd\\business\\adapters\\connector.mjs'], timeoutMs: 5000,
+    }))
+    const catalog = new ConnectorCatalog(pluginBusiness)
+    expect(await catalog.list(root)).toEqual([{ id: 'company-alm', scope: 'plugin', overridden: false }])
+    const source = await new CommandSourceProvider(catalog).get({
+      kind: 'requirement', key: 'REQ-8', connector: 'company-alm',
+      workspace: { workspaceId: 'w1', path: root, project }, signal: AbortSignal.timeout(5000),
+    })
+    expect(source).toMatchObject({ provider: 'company-alm', title: 'Plugin REQ-8', items: [{ content: { scope: 'plugin' } }] })
+  })
+
+  it('lets a project Connector override an installed Connector with the same id', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-sdd-command-override-'))
+    const pluginBusiness = await mkdtemp(join(tmpdir(), 'dsh-sdd-command-plugin-'))
+    const bundleScript = (scope: string) => `let input=''; for await (const chunk of process.stdin) input += chunk; const request=JSON.parse(input); const item={schema:'dsh-sdd/source@1',uid:'${scope}-source',provider:'company-alm',kind:request.kind,externalKey:request.key,title:'${scope}',fetchedAt:new Date(0).toISOString(),content:{scope:'${scope}'}}; process.stdout.write(JSON.stringify({schema:'dsh-sdd/source-bundle@1',uid:'${scope}-bundle',provider:'company-alm',kind:request.kind,externalKey:request.key,title:item.title,fetchedAt:item.fetchedAt,items:[item],relations:[]}));`
+    for (const business of [pluginBusiness, join(root, '.sdd', 'business')]) {
+      await mkdir(join(business, 'connectors'), { recursive: true }); await mkdir(join(business, 'adapters'), { recursive: true })
+      await writeFile(join(business, 'connectors', 'company-alm.yaml'), stringify({ schema: 'dsh-sdd/connector@1', id: 'company-alm', type: 'command', command: [process.execPath, '.sdd/business/adapters/connector.mjs'] }))
+    }
+    await writeFile(join(pluginBusiness, 'adapters', 'connector.mjs'), bundleScript('plugin'))
+    await writeFile(join(root, '.sdd', 'business', 'adapters', 'connector.mjs'), bundleScript('project'))
+    const catalog = new ConnectorCatalog(pluginBusiness)
+    expect(await catalog.list(root)).toEqual([{ id: 'company-alm', scope: 'project', overridden: true }])
+    const source = await new CommandSourceProvider(catalog).get({ kind: 'requirement', key: 'REQ-9', connector: 'company-alm', workspace: { workspaceId: 'w1', path: root, project }, signal: AbortSignal.timeout(5000) })
+    expect(source.items[0]?.content).toEqual({ scope: 'project' })
+  })
+
+  it('rejects an Adapter path that escapes the selected business/adapters directory', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-sdd-command-escape-'))
+    const pluginBusiness = await mkdtemp(join(tmpdir(), 'dsh-sdd-command-plugin-'))
+    await mkdir(join(pluginBusiness, 'connectors'), { recursive: true })
+    await writeFile(join(pluginBusiness, 'connectors', 'unsafe.yaml'), stringify({
+      schema: 'dsh-sdd/connector@1', id: 'unsafe', type: 'command', command: [process.execPath, '.sdd/business/adapters/../outside.mjs'],
+    }))
+    const provider = new CommandSourceProvider(new ConnectorCatalog(pluginBusiness))
+    await expect(provider.get({ kind: 'requirement', key: 'REQ-10', connector: 'unsafe', workspace: { workspaceId: 'w1', path: root, project }, signal: AbortSignal.timeout(5000) }))
+      .rejects.toThrow('escapes its adapter directory')
   })
 })
 
