@@ -15,6 +15,7 @@ interface SessionBindingSpec {
   projectPath: string
   artifactDirectory: string
   developmentDirectories: string[]
+  openSpecDirectories?: string[]
   developmentRepositories?: Array<{ id: string; path: string }>
   codeReferences?: CodeRepositoryReference[]
   artifactTemplateReference: string
@@ -81,7 +82,7 @@ export class StageSessionController {
     const agent = this.ctx.agents.get(spec.sessionId as never)
     if (agent === undefined) return
     const definition = runtimeDefinition(spec.stage)
-    const allowedWriteRoots = [resolve(spec.artifactDirectory), ...spec.developmentDirectories.map(path => resolve(path))]
+    const allowedWriteRoots = [resolve(spec.artifactDirectory), ...spec.developmentDirectories.map(path => resolve(path)), ...(spec.openSpecDirectories ?? []).map(path => resolve(path))]
     const templateSnapshotRoot = resolve(spec.artifactDirectory, '.template')
     const developmentRoots = spec.developmentDirectories.map(path => resolve(path))
     const disposers: Array<() => void> = []
@@ -111,7 +112,7 @@ export class StageSessionController {
           if (filePath === undefined) return `${execution.name} 缺少可校验的 file_path`
           const resolved = resolve(spec.projectPath, filePath)
           if (contained(templateSnapshotRoot, resolved)) return '交付件模板快照不可修改；请编辑正文或项目级 .sdd/templates'
-          if (!allowedWriteRoots.some(root => contained(root, resolved))) return '当前阶段只能修改绑定交付件或绑定的隔离代码空间'
+          if (!allowedWriteRoots.some(root => contained(root, resolved))) return '当前阶段只能修改绑定交付件、当前需求的 OpenSpec 工作区或绑定的隔离代码空间'
         }
         if (execution.name === 'str_replace_editor') {
           const command = stringArgument(execution.arguments, 'command')
@@ -120,7 +121,7 @@ export class StageSessionController {
             if (filePath === undefined) return 'str_replace_editor 缺少可校验的 path'
             const resolved = resolve(spec.projectPath, filePath)
             if (contained(templateSnapshotRoot, resolved)) return '交付件模板快照不可修改；请编辑正文或项目级 .sdd/templates'
-            if (!allowedWriteRoots.some(root => contained(root, resolved))) return '当前阶段只能修改绑定交付件或绑定的隔离代码空间'
+            if (!allowedWriteRoots.some(root => contained(root, resolved))) return '当前阶段只能修改绑定交付件、当前需求的 OpenSpec 工作区或绑定的隔离代码空间'
           }
         }
         return undefined

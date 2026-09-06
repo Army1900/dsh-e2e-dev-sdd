@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { spawn } from 'node:child_process'
-import { access, copyFile, mkdir, readFile, readdir, realpath, rename, stat, unlink, writeFile } from 'node:fs/promises'
+import { access, copyFile, cp, mkdir, readFile, readdir, realpath, rename, stat, unlink, writeFile } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import type { ApiProxy, RpcId } from '@deepseek-ai/dsh-host-apiproxy'
 import { parse, stringify } from 'yaml'
@@ -13,6 +13,7 @@ import {
   type ArtifactSummary,
   type CodeRepositoryReference,
   type DashboardSnapshot,
+  type DeliveryArchive,
   type DeliveryCellStatus,
   type DeliveryMatrixCell,
   type DeliveryMatrixRow,
@@ -20,8 +21,11 @@ import {
   type ImportPreview,
   type ImportPreviewItem,
   type OpenSpecValidation,
+  type OpenSpecFilePreview,
   type OpenSpecTemplatesPreview,
   type ProjectConfig,
+  type ProductFeature,
+  type ProductKnowledgeSnapshot,
   type ProjectSnapshot,
   type QualityReport,
   type RepositoryInspection,
@@ -51,6 +55,8 @@ import type { StageSessionController } from './session-controller.ts'
 import { ensureProjectTemplates, loadStageTemplate, renderStageTemplate, snapshotStageTemplate } from './template-store.ts'
 
 const PROJECT_FILE = '.sdd/project.yaml'
+const OPEN_SPEC_FILE_LIMIT = 300
+const OPEN_SPEC_TEXT_LIMIT = 1024 * 1024
 interface StagedImport { preview: ImportPreview; bundle: SourceBundle }
 interface ImportArtifactState { workItemUid?: string; stage: StageId; status: ArtifactManifest['status'] }
 interface ImportProjectContext {
@@ -105,6 +111,27 @@ async function exists(path: string): Promise<boolean> {
   try { await access(path); return true } catch { return false }
 }
 
+function managedOpenSpecProject(workspacePath: string, workItemUid: string): string {
+  return join(workspacePath, '.sdd', 'openspec', workItemUid)
+}
+
+async function openSpecFiles(openSpecRoot: string): Promise<string[]> {
+  if (!(await exists(openSpecRoot))) return []
+  const files: string[] = []
+  const visit = async (directory: string): Promise<void> => {
+    if (files.length >= OPEN_SPEC_FILE_LIMIT) return
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      if (entry.name === 'node_modules' || entry.name === '.git') continue
+      const target = join(directory, entry.name)
+      if (entry.isDirectory()) await visit(target)
+      else if (entry.isFile()) files.push(relative(openSpecRoot, target).replaceAll('\\', '/'))
+      if (files.length >= OPEN_SPEC_FILE_LIMIT) return
+    }
+  }
+  await visit(openSpecRoot)
+  return files.sort()
+}
+
 function contained(root: string, target: string): boolean {
   const path = relative(root, target)
   return path === '' || (!path.startsWith('..') && !isAbsolute(path))
@@ -145,12 +172,6 @@ async function inspectOpenSpecCli(cwd: string): Promise<{ installed: boolean; ve
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { installed: false }
     return { installed: false }
   }
-}
-
-function openSpecDescription(workItem: WorkItem, validation?: OpenSpecValidation): string {
-  if (workItem.openSpec?.enabled !== true) return '本需求未配置'
-  const location = `${workItem.openSpec.repositoryId}:${workItem.openSpec.path}`
-  return validation === undefined ? location : `${location}（${validation.message}）`
 }
 
 async function walkForManifest(root: string): Promise<string[]> {
@@ -395,6 +416,74 @@ export class SddProjectService {
     return { workspaceId, title: item.title, path: await realpath(item.path) }
   }
 
+  /** Resolve the single OpenSpec working copy used by every SDD stage. Before development it lives in .sdd;
+   * once the configured isolated repository exists, that repository copy becomes authoritative. */
+  private async openSpecWorkspace(
+    snapshot: ProjectSnapshot & { project: ProjectConfig }, workItem: WorkItem, requireInitialized = false,
+  ): Promise<{ projectRoot: string; openSpecRoot: string; workspace: 'planning' | 'development'; repositoryPath?: string }> {
+    const configured = workItem.openSpec
+    if (configured?.enabled !== true) throw new Error('当前需求尚未启用 OpenSpec')
+    const developmentArtifactUids = new Set(snapshot.artifacts.filter(item => item.stage === 'development' && item.workItemUid === workItem.uid).map(item => item.uid))
+    const repository = configured.repositoryId === undefined ? undefined : snapshot.developmentWorkspaces
+      .filter(item => developmentArtifactUids.has(item.artifactUid)).flatMap(item => item.repositories)
+      .find(item => item.id === configured.repositoryId)
+    if (repository !== undefined) {
+      const projectRoot = resolve(repository.path)
+      const openSpecRoot = resolve(projectRoot, configured.path ?? 'openspec')
+      if (!contained(projectRoot, openSpecRoot)) throw new Error('OpenSpec 路径超出隔离代码仓库')
+      if (!requireInitialized || await exists(join(openSpecRoot, 'config.yaml')) || await exists(join(openSpecRoot, 'config.yml'))) {
+        return { projectRoot, openSpecRoot, workspace: 'development', repositoryPath: repository.path }
+      }
+    }
+    const projectRoot = managedOpenSpecProject(snapshot.workspace.path, workItem.uid)
+    const openSpecRoot = join(projectRoot, 'openspec')
+    if (requireInitialized && !(await exists(join(openSpecRoot, 'config.yaml'))) && !(await exists(join(openSpecRoot, 'config.yml')))) {
+      throw new Error('请先在插件中初始化当前需求的 OpenSpec 工作区')
+    }
+    return { projectRoot, openSpecRoot, workspace: 'planning' }
+  }
+
+  private async syncManagedOpenSpecToDevelopment(snapshot: ProjectSnapshot & { project: ProjectConfig }, workItem: WorkItem): Promise<void> {
+    const source = join(managedOpenSpecProject(snapshot.workspace.path, workItem.uid), 'openspec')
+    if (!(await exists(join(source, 'config.yaml'))) && !(await exists(join(source, 'config.yml')))) return
+    const target = await this.openSpecWorkspace(snapshot, workItem, false)
+    if (target.workspace !== 'development' || await exists(join(target.openSpecRoot, 'config.yaml')) || await exists(join(target.openSpecRoot, 'config.yml'))) return
+    await mkdir(dirname(target.openSpecRoot), { recursive: true })
+    await cp(source, target.openSpecRoot, { recursive: true, errorOnExist: true })
+    await appendEvent(snapshot.workspace.path, 'openspec.promoted-to-development', workItem.key, 'development', { repositoryId: workItem.openSpec?.repositoryId, path: workItem.openSpec?.path ?? 'openspec' })
+  }
+
+  /** Best-effort internal planning preparation. Normal users never need to enable or operate OpenSpec. */
+  private async prepareInternalPlanning(
+    workspaceId: string, snapshot: ProjectSnapshot & { project: ProjectConfig }, workItem: WorkItem,
+  ): Promise<ProjectSnapshot & { project: ProjectConfig }> {
+    if (workItem.openSpec?.enabled === false) return snapshot
+    const cli = await this.openSpecCli(snapshot.workspace.path)
+    if (!cli.installed) return snapshot
+    try {
+      if (workItem.openSpec === undefined) {
+        await this.updateOpenSpecSettings(workspaceId, workItem.uid, true, 'spec-driven')
+        snapshot = await this.requireSnapshot(workspaceId)
+        workItem = snapshot.workItems.find(item => item.uid === workItem.uid) ?? workItem
+      }
+      let validation = snapshot.openSpecValidation[workItem.uid]
+      if (validation?.canInitialize === true || validation === undefined) {
+        await this.initializeManagedOpenSpec(workspaceId, workItem.uid, 'none')
+        snapshot = await this.requireSnapshot(workspaceId)
+        workItem = snapshot.workItems.find(item => item.uid === workItem.uid) ?? workItem
+        validation = snapshot.openSpecValidation[workItem.uid]
+      }
+      if (validation?.status === 'valid' && validation.changeExists !== true) {
+        const changeId = workItem.key.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || `change-${workItem.uid.slice(0, 8)}`
+        await this.createManagedOpenSpecChange(workspaceId, workItem.uid, changeId, validation.schema ?? workItem.openSpec?.schema ?? 'spec-driven')
+        snapshot = await this.requireSnapshot(workspaceId)
+      }
+    } catch (error) {
+      await appendEvent(snapshot.workspace.path, 'planning.engine-fallback', workItem.key, undefined, { reason: error instanceof Error ? error.message : String(error) })
+    }
+    return snapshot
+  }
+
   /** Import preview only needs source ownership and lightweight artifact state, not Git/OpenSpec/quality/dashboard inspection. */
   private async importProjectContext(workspace: WorkspaceSummary, includeArtifacts: boolean): Promise<ImportProjectContext> {
     const projectPath = join(workspace.path, PROJECT_FILE)
@@ -420,7 +509,7 @@ export class SddProjectService {
     return { workspace, project: normalizeProject(validation.project), sources, workItems, artifacts }
   }
 
-  async execute(action: SddAction): Promise<ProjectSnapshot | ImportPreview | SourceImportDetail | StageTemplatePreview | RepositoryInspection | { openSpecTemplates: OpenSpecTemplatesPreview } | { revisionPreview: RevisionPreview } | { prompt: string; run?: StageRun } | { artifactFile: { artifactUid: string; path: string; kind: ArtifactFileSummary['kind'] | 'manifest'; content?: string; dataUrl?: string } } | { opened: true }> {
+  async execute(action: SddAction): Promise<ProjectSnapshot | ImportPreview | SourceImportDetail | StageTemplatePreview | RepositoryInspection | { openSpecTemplates: OpenSpecTemplatesPreview } | { openSpecFile: OpenSpecFilePreview } | { productFile: { path: string; content: string } } | { revisionPreview: RevisionPreview } | { prompt: string; run?: StageRun } | { artifactFile: { artifactUid: string; path: string; kind: ArtifactFileSummary['kind'] | 'manifest'; content?: string; dataUrl?: string } } | { opened: true }> {
     if (action.kind === 'snapshot') return this.snapshot(action.workspaceId)
     if (action.kind === 'initialize') { await this.initialize(action.workspaceId); return this.snapshot(action.workspaceId) }
     if (action.kind === 'reinitialize') { await this.reinitialize(action.workspaceId); return this.snapshot(action.workspaceId) }
@@ -508,6 +597,11 @@ export class SddProjectService {
       if (workItem !== undefined && !(workItem.developmentTargets ?? []).includes(action.repositoryId)) throw new Error(`repository ${action.repositoryId} is not a confirmed development target`)
       if (workItem !== undefined && (workItem.developmentTargetDetails?.[action.repositoryId] ?? '').trim() === '') throw new Error(`repository ${action.repositoryId} is missing its concrete development target`)
       await this.git.create(snapshot.workspace.path, snapshot.project, artifact, action.repositoryId)
+      if (workItem?.openSpec?.enabled === true && workItem.openSpec.repositoryId === action.repositoryId) {
+        const updated = await this.requireSnapshot(action.workspaceId)
+        const updatedWorkItem = updated.workItems.find(item => item.uid === workItem.uid)
+        if (updatedWorkItem !== undefined) await this.syncManagedOpenSpecToDevelopment(updated, updatedWorkItem)
+      }
       await appendEvent(snapshot.workspace.path, 'development.workspace-created', artifact.key, artifact.stage, { repositoryId: action.repositoryId })
       return this.snapshot(action.workspaceId)
     }
@@ -532,6 +626,35 @@ export class SddProjectService {
       await this.createOpenSpecChange(action.workspaceId, action.artifactUid, action.changeId, action.schema)
       return this.snapshot(action.workspaceId)
     }
+    if (action.kind === 'openspec-update-settings') {
+      await this.updateOpenSpecSettings(action.workspaceId, action.workItemUid, action.enabled, action.schema)
+      return this.snapshot(action.workspaceId)
+    }
+    if (action.kind === 'openspec-initialize') {
+      await this.initializeManagedOpenSpec(action.workspaceId, action.workItemUid, action.tools)
+      return this.snapshot(action.workspaceId)
+    }
+    if (action.kind === 'openspec-fork-schema') {
+      await this.forkManagedOpenSpecSchema(action.workspaceId, action.workItemUid, action.schema)
+      return this.snapshot(action.workspaceId)
+    }
+    if (action.kind === 'openspec-create-change') {
+      await this.createManagedOpenSpecChange(action.workspaceId, action.workItemUid, action.changeId, action.schema)
+      return this.snapshot(action.workspaceId)
+    }
+    if (action.kind === 'openspec-read-file') return { openSpecFile: await this.readOpenSpecFile(action.workspaceId, action.workItemUid, action.path) }
+    if (action.kind === 'openspec-write-file') {
+      await this.writeOpenSpecFile(action.workspaceId, action.workItemUid, action.path, action.content)
+      return this.snapshot(action.workspaceId)
+    }
+    if (action.kind === 'openspec-validate') {
+      await this.validateManagedOpenSpec(action.workspaceId, action.workItemUid)
+      return this.snapshot(action.workspaceId)
+    }
+    if (action.kind === 'openspec-open-path') {
+      await this.openManagedOpenSpecPath(action.workspaceId, action.workItemUid, action.path)
+      return { opened: true }
+    }
     if (action.kind === 'development-status') {
       const snapshot = await this.requireSnapshot(action.workspaceId)
       await this.git.status(snapshot.workspace.path, action.artifactUid)
@@ -552,6 +675,11 @@ export class SddProjectService {
       await appendEvent(snapshot.workspace.path, 'commit.created', artifact.key, artifact.stage, { repositoryId: action.repositoryId, headCommit })
       return this.snapshot(action.workspaceId)
     }
+    if (action.kind === 'close-delivery') {
+      await this.closeDelivery(action.workspaceId, action.workItemUid, action.featureUid, action.featureName, action.changeType, action.summary)
+      return this.snapshot(action.workspaceId)
+    }
+    if (action.kind === 'read-product-file') return { productFile: await this.readProductFile(action.workspaceId, action.path) }
     throw new Error(`unsupported SDD action: ${(action as { kind: string }).kind}`)
   }
 
@@ -568,6 +696,8 @@ export class SddProjectService {
     await mkdir(join(sddRoot, 'runs'), { recursive: true })
     await mkdir(join(sddRoot, 'events'), { recursive: true })
     await mkdir(join(sddRoot, 'development'), { recursive: true })
+    await mkdir(join(workspace.path, 'product', 'features'), { recursive: true })
+    await mkdir(join(workspace.path, 'deliveries'), { recursive: true })
     await ensureProjectTemplates(workspace.path)
     for (const stage of STAGES) await mkdir(join(sddRoot, 'artifacts', stage.id), { recursive: true })
     const businessGuidePath = join(sddRoot, 'business', 'README.md')
@@ -688,7 +818,8 @@ export class SddProjectService {
     const dashboard = this.dashboard(artifacts, sources, workItems, quality, developmentWorkspaces, recentEvents)
     const projectRepository = await this.projectGit.inspect(workspace.path, project)
     projectRepository.keyConflicts = artifactKeyConflicts(artifacts, runs, developmentWorkspaces)
-    return { workspace, initialized: true, configuration: { status: 'valid', path: PROJECT_FILE, errors: [] }, project, artifacts, sources, sourceProviders: this.sourceRegistry?.names() ?? [], connectors, workItems, runs, quality, developmentWorkspaces, openSpecValidation, dashboard, projectRepository }
+    const productKnowledge = await this.listProductKnowledge(workspace.path)
+    return { workspace, initialized: true, configuration: { status: 'valid', path: PROJECT_FILE, errors: [] }, project, artifacts, sources, sourceProviders: this.sourceRegistry?.names() ?? [], connectors, workItems, runs, quality, developmentWorkspaces, openSpecValidation, dashboard, projectRepository, productKnowledge }
   }
 
   private async validateOpenSpecSettings(
@@ -700,22 +831,47 @@ export class SddProjectService {
     for (const workItem of workItems) {
       const configured = workItem.openSpec
       if (configured?.enabled !== true) continue
-      if (configured.repositoryId === undefined || configured.path === undefined) {
-        result[workItem.uid] = { status: 'invalid', message: '配置缺少仓库或相对路径', code: 'invalid-settings', ...cliFields }
-        continue
-      }
-      if (!project.development.repositories.some(item => item.id === configured.repositoryId) || !(workItem.developmentTargets ?? []).includes(configured.repositoryId)) {
-        result[workItem.uid] = { status: 'invalid', message: '配置仓库不属于本需求的开发目标', code: 'invalid-settings', ...cliFields }
-        continue
-      }
       const developmentArtifactUids = new Set(artifacts.filter(item => item.stage === 'development' && item.workItemUid === workItem.uid).map(item => item.uid))
-      const repository = developmentWorkspaces.filter(item => developmentArtifactUids.has(item.artifactUid)).flatMap(item => item.repositories).find(item => item.id === configured.repositoryId)
+      const repository = configured.repositoryId === undefined ? undefined : developmentWorkspaces.filter(item => developmentArtifactUids.has(item.artifactUid)).flatMap(item => item.repositories).find(item => item.id === configured.repositoryId)
+      const managedProjectRoot = managedOpenSpecProject(workspacePath, workItem.uid)
+      const managedRoot = join(managedProjectRoot, 'openspec')
+      const managedReady = await exists(join(managedRoot, 'config.yaml')) || await exists(join(managedRoot, 'config.yml'))
+      if (repository === undefined && managedReady) {
+        const configPath = await exists(join(managedRoot, 'config.yaml')) ? join(managedRoot, 'config.yaml') : join(managedRoot, 'config.yml')
+        let configuredSchema = configured.schema ?? 'spec-driven'
+        try { const config = parse(await readFile(configPath, 'utf8')) as { schema?: unknown }; if (configured.schema === undefined && typeof config.schema === 'string' && config.schema.trim() !== '') configuredSchema = config.schema.trim() } catch { /* CLI validation reports details. */ }
+        const projectSchemas = await exists(join(managedRoot, 'schemas')) ? (await readdir(join(managedRoot, 'schemas'), { withFileTypes: true })).filter(item => item.isDirectory()).map(item => item.name) : []
+        const files = await openSpecFiles(managedRoot)
+        let openSpecArtifacts: Array<{ id: string; status: string }> = []
+        if (cli.installed && configured.changeId !== undefined && await exists(join(managedRoot, 'changes', configured.changeId))) {
+          const status = await runNative([nativeExecutable('openspec'), 'status', '--change', configured.changeId, '--json', '--no-color'], managedProjectRoot, 30_000)
+          if (status.exitCode === 0) try {
+            const parsed = JSON.parse(status.stdout) as { artifacts?: Array<{ id?: unknown; status?: unknown }> }
+            openSpecArtifacts = (parsed.artifacts ?? []).filter(item => typeof item.id === 'string').map(item => ({ id: String(item.id), status: String(item.status ?? 'pending') }))
+          } catch { /* Status remains optional for older CLI versions. */ }
+        }
+        result[workItem.uid] = {
+          status: 'valid', message: `规划工作区已就绪；Schema ${configuredSchema}${configured.changeId === undefined ? '；下一步创建当前需求 Change' : ''}`,
+          schema: configuredSchema, availableSchemas: [...new Set(['spec-driven', configuredSchema, ...projectSchemas])].sort(),
+          ...(configured.changeId === undefined ? {} : { changeId: configured.changeId, changeExists: await exists(join(managedRoot, 'changes', configured.changeId)) }),
+          workspace: 'planning', relativeRoot: relative(workspacePath, managedRoot).replaceAll('\\', '/'), files, artifacts: openSpecArtifacts, ...cliFields,
+        }
+        continue
+      }
+      if (repository === undefined && (configured.repositoryId === undefined || configured.path === undefined)) {
+        result[workItem.uid] = { status: 'pending', message: '已启用；下一步在插件中初始化规划工作区', canInitialize: cli.installed, workspace: 'planning', ...cliFields }
+        continue
+      }
+      if (repository === undefined && (!project.development.repositories.some(item => item.id === configured.repositoryId!) || !(workItem.developmentTargets ?? []).includes(configured.repositoryId!))) {
+        result[workItem.uid] = { status: 'pending', message: '规划阶段可先初始化；进入开发前再确认目标代码仓库', canInitialize: cli.installed, workspace: 'planning', ...cliFields }
+        continue
+      }
       if (repository === undefined) {
-        result[workItem.uid] = { status: 'pending', message: `已配置，创建开发空间后检查目录；${cli.installed ? `CLI ${cli.version ?? '已安装'}` : 'CLI 未安装'}`, ...cliFields }
+        result[workItem.uid] = { status: 'pending', message: `已配置，创建开发空间后迁移规划内容；${cli.installed ? `CLI ${cli.version ?? '已安装'}` : 'CLI 未安装'}`, canInitialize: cli.installed, workspace: 'planning', ...cliFields }
         continue
       }
       const root = resolve(repository.path)
-      const target = resolve(root, configured.path)
+      const target = resolve(root, configured.path ?? 'openspec')
       if (!contained(root, target)) {
         result[workItem.uid] = { status: 'invalid', message: 'OpenSpec 路径超出代码仓库', code: 'unsafe-path', ...cliFields }
         continue
@@ -743,9 +899,18 @@ export class SddProjectService {
           : []
         const availableSchemas = [...new Set(['spec-driven', configuredSchema, ...projectSchemas])].sort()
         const changeId = configured.changeId
+        const files = await openSpecFiles(target)
+        let openSpecArtifacts: Array<{ id: string; status: string }> = []
+        if (cli.installed && changeId !== undefined && await exists(join(target, 'changes', changeId))) {
+          const status = await runNative([nativeExecutable('openspec'), 'status', '--change', changeId, '--json', '--no-color'], dirname(target), 30_000)
+          if (status.exitCode === 0) try {
+            const parsedStatus = JSON.parse(status.stdout) as { artifacts?: Array<{ id?: unknown; status?: unknown }> }
+            openSpecArtifacts = (parsedStatus.artifacts ?? []).filter(item => typeof item.id === 'string').map(item => ({ id: String(item.id), status: String(item.status ?? 'pending') }))
+          } catch { /* Status remains optional for older CLI versions. */ }
+        }
         result[workItem.uid] = cli.installed
-          ? { status: 'valid', message: `已初始化；Schema ${configuredSchema}${changeId === undefined ? '；尚未创建当前需求 Change' : ''}`, schema: configuredSchema, availableSchemas, ...(changeId === undefined ? {} : { changeId, changeExists: await exists(join(target, 'changes', changeId)) }), ...cliFields }
-          : { status: 'pending', message: '配置目录有效；OpenSpec CLI 未安装，可安装或忽略继续', code: 'cli-missing', schema: configuredSchema, availableSchemas, ...(changeId === undefined ? {} : { changeId, changeExists: await exists(join(target, 'changes', changeId)) }), ...cliFields }
+          ? { status: 'valid', message: `开发工作区已就绪；Schema ${configuredSchema}${changeId === undefined ? '；尚未创建当前需求 Change' : ''}`, schema: configuredSchema, availableSchemas, ...(changeId === undefined ? {} : { changeId, changeExists: await exists(join(target, 'changes', changeId)) }), workspace: 'development', relativeRoot: relative(workspacePath, target).replaceAll('\\', '/'), files, artifacts: openSpecArtifacts, ...cliFields }
+          : { status: 'pending', message: '配置目录有效；OpenSpec CLI 未安装，可安装或忽略继续', code: 'cli-missing', schema: configuredSchema, availableSchemas, ...(changeId === undefined ? {} : { changeId, changeExists: await exists(join(target, 'changes', changeId)) }), workspace: 'development', relativeRoot: relative(workspacePath, target).replaceAll('\\', '/'), files, artifacts: openSpecArtifacts, ...cliFields }
       } catch {
         result[workItem.uid] = { status: 'invalid', message: `隔离代码空间中不存在配置目录；${cli.installed ? '可使用 CLI 初始化' : 'CLI 未安装'}`, code: 'missing-directory', canInitialize: cli.installed, ...cliFields }
       }
@@ -1161,6 +1326,129 @@ export class SddProjectService {
     return { schema: normalizedSchema, paths }
   }
 
+  private async updateOpenSpecSettings(workspaceId: string, workItemUid: string, enabled: boolean, schema?: string): Promise<void> {
+    const snapshot = await this.requireSnapshot(workspaceId)
+    const workItem = snapshot.workItems.find(item => item.uid === workItemUid)
+    if (workItem === undefined) throw new Error(`work item not found: ${workItemUid}`)
+    const normalizedSchema = (schema ?? workItem.openSpec?.schema ?? 'spec-driven').trim()
+    if (enabled && !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(normalizedSchema)) throw new Error('OpenSpec Schema 必须使用 kebab-case')
+    const openSpec = enabled ? {
+      enabled: true,
+      ...((workItem.openSpec?.repositoryId ?? workItem.developmentTargets?.[0]) === undefined ? {} : { repositoryId: workItem.openSpec?.repositoryId ?? workItem.developmentTargets?.[0] }),
+      path: workItem.openSpec?.path ?? 'openspec', schema: normalizedSchema,
+      ...(workItem.openSpec?.changeId === undefined ? {} : { changeId: workItem.openSpec.changeId }),
+    } : { enabled: false }
+    await writeFile(join(snapshot.workspace.path, '.sdd', 'work-items', workItem.uid, 'work-item.yaml'), stringify({ ...workItem, openSpec, updatedAt: new Date().toISOString() }), 'utf8')
+    await appendEvent(snapshot.workspace.path, enabled ? 'openspec.enabled' : 'openspec.disabled', workItem.key, undefined, { schema: normalizedSchema })
+  }
+
+  private async initializeManagedOpenSpec(workspaceId: string, workItemUid: string, tools: string): Promise<void> {
+    const snapshot = await this.requireSnapshot(workspaceId)
+    const workItem = snapshot.workItems.find(item => item.uid === workItemUid)
+    if (workItem === undefined) throw new Error(`work item not found: ${workItemUid}`)
+    const target = await this.openSpecWorkspace(snapshot, workItem, false)
+    if (await exists(join(target.openSpecRoot, 'config.yaml')) || await exists(join(target.openSpecRoot, 'config.yml'))) throw new Error('当前需求的 OpenSpec 工作区已经初始化')
+    const normalizedTools = tools.trim()
+    if (!/^(?:all|none|[a-z0-9]+(?:-[a-z0-9]+)*(?:,[a-z0-9]+(?:-[a-z0-9]+)*)*)$/.test(normalizedTools)) throw new Error('无效的 OpenSpec 工具选择')
+    const cli = await this.openSpecCli(snapshot.workspace.path)
+    if (!cli.installed) throw new Error('OpenSpec CLI 尚未安装')
+    await mkdir(target.projectRoot, { recursive: true })
+    const initialized = await runNative([nativeExecutable('openspec'), 'init', '--tools', normalizedTools, '--no-color', '--no-animation'], target.projectRoot, 180_000)
+    if (initialized.exitCode !== 0) throw new Error(`OpenSpec 初始化失败：${initialized.stderr.trim() || initialized.stdout.trim() || `exit ${initialized.exitCode}`}`)
+    if (!(await exists(join(target.openSpecRoot, 'config.yaml'))) && !(await exists(join(target.openSpecRoot, 'config.yml')))) throw new Error('OpenSpec CLI 执行完成，但没有生成 config.yaml')
+    await appendEvent(snapshot.workspace.path, 'openspec.initialized', workItem.key, undefined, { workspace: target.workspace, tools: normalizedTools, version: cli.version })
+  }
+
+  private async forkManagedOpenSpecSchema(workspaceId: string, workItemUid: string, schema: string): Promise<void> {
+    const snapshot = await this.requireSnapshot(workspaceId)
+    const workItem = snapshot.workItems.find(item => item.uid === workItemUid)
+    if (workItem === undefined) throw new Error(`work item not found: ${workItemUid}`)
+    const name = schema.trim()
+    if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name) || name === 'spec-driven') throw new Error('自定义 Schema 名称必须是 kebab-case，且不能使用 spec-driven')
+    const target = await this.openSpecWorkspace(snapshot, workItem, true)
+    const forked = await runNative([nativeExecutable('openspec'), 'schema', 'fork', workItem.openSpec?.schema ?? 'spec-driven', name, '--no-color'], target.projectRoot, 60_000)
+    if (forked.exitCode !== 0) throw new Error(`复制 OpenSpec Schema 失败：${forked.stderr.trim() || forked.stdout.trim() || `exit ${forked.exitCode}`}`)
+    const validated = await runNative([nativeExecutable('openspec'), 'schema', 'validate', name, '--no-color'], target.projectRoot, 60_000)
+    if (validated.exitCode !== 0) throw new Error(`OpenSpec Schema 校验失败：${validated.stderr.trim() || validated.stdout.trim() || `exit ${validated.exitCode}`}`)
+    const configPath = await exists(join(target.openSpecRoot, 'config.yaml')) ? join(target.openSpecRoot, 'config.yaml') : join(target.openSpecRoot, 'config.yml')
+    const config = parse(await readFile(configPath, 'utf8')) as Record<string, unknown>
+    await writeFile(configPath, stringify({ ...config, schema: name }), 'utf8')
+    await this.updateOpenSpecSettings(workspaceId, workItem.uid, true, name)
+    await appendEvent(snapshot.workspace.path, 'openspec.schema-forked', workItem.key, undefined, { schema: name, workspace: target.workspace })
+  }
+
+  private async createManagedOpenSpecChange(workspaceId: string, workItemUid: string, changeId: string, schema: string): Promise<void> {
+    const snapshot = await this.requireSnapshot(workspaceId)
+    const workItem = snapshot.workItems.find(item => item.uid === workItemUid)
+    if (workItem === undefined) throw new Error(`work item not found: ${workItemUid}`)
+    const normalizedChangeId = changeId.trim(); const normalizedSchema = schema.trim()
+    if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(normalizedChangeId)) throw new Error('OpenSpec Change ID 必须使用 kebab-case')
+    if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(normalizedSchema)) throw new Error('OpenSpec Schema 必须使用 kebab-case')
+    const target = await this.openSpecWorkspace(snapshot, workItem, true)
+    if (await exists(join(target.openSpecRoot, 'changes', normalizedChangeId))) throw new Error(`OpenSpec Change 已存在：${normalizedChangeId}`)
+    const validated = await runNative([nativeExecutable('openspec'), 'schema', 'validate', normalizedSchema, '--no-color'], target.projectRoot, 60_000)
+    if (validated.exitCode !== 0) throw new Error(`OpenSpec Schema 校验失败：${validated.stderr.trim() || validated.stdout.trim() || `exit ${validated.exitCode}`}`)
+    const created = await runNative([nativeExecutable('openspec'), 'new', 'change', normalizedChangeId, '--schema', normalizedSchema, '--json', '--no-color'], target.projectRoot, 60_000)
+    if (created.exitCode !== 0) throw new Error(`创建 OpenSpec Change 失败：${created.stderr.trim() || created.stdout.trim() || `exit ${created.exitCode}`}`)
+    const updated: WorkItem = { ...workItem, openSpec: { ...workItem.openSpec!, enabled: true, path: workItem.openSpec?.path ?? 'openspec', schema: normalizedSchema, changeId: normalizedChangeId }, updatedAt: new Date().toISOString() }
+    await writeFile(join(snapshot.workspace.path, '.sdd', 'work-items', workItem.uid, 'work-item.yaml'), stringify(updated), 'utf8')
+    await appendEvent(snapshot.workspace.path, 'openspec.change-created', workItem.key, undefined, { changeId: normalizedChangeId, schema: normalizedSchema, workspace: target.workspace })
+  }
+
+  private async openSpecFileTarget(workspaceId: string, workItemUid: string, requestedPath: string): Promise<{ snapshot: ProjectSnapshot & { project: ProjectConfig }; workItem: WorkItem; target: string; root: string }> {
+    const snapshot = await this.requireSnapshot(workspaceId)
+    const workItem = snapshot.workItems.find(item => item.uid === workItemUid)
+    if (workItem === undefined) throw new Error(`work item not found: ${workItemUid}`)
+    const workspace = await this.openSpecWorkspace(snapshot, workItem, true)
+    const normalized = requestedPath.replaceAll('\\', '/').replace(/^\/+/, '')
+    const target = resolve(workspace.openSpecRoot, normalized)
+    if (normalized === '' || !contained(workspace.openSpecRoot, target)) throw new Error('OpenSpec 文件路径无效')
+    if (!/\.(?:md|ya?ml|json|txt)$/i.test(target)) throw new Error('插件只允许管理 OpenSpec 文本、Markdown、YAML 和 JSON 文件')
+    return { snapshot, workItem, target, root: workspace.openSpecRoot }
+  }
+
+  private async readOpenSpecFile(workspaceId: string, workItemUid: string, path: string): Promise<OpenSpecFilePreview> {
+    const resolved = await this.openSpecFileTarget(workspaceId, workItemUid, path)
+    const info = await stat(resolved.target)
+    if (!info.isFile() || info.size > OPEN_SPEC_TEXT_LIMIT) throw new Error('OpenSpec 文件不存在或超过 1 MiB 编辑上限')
+    return { path: relative(resolved.root, resolved.target).replaceAll('\\', '/'), content: await readFile(resolved.target, 'utf8'), editable: true }
+  }
+
+  private async writeOpenSpecFile(workspaceId: string, workItemUid: string, path: string, content: string): Promise<void> {
+    if (Buffer.byteLength(content) > OPEN_SPEC_TEXT_LIMIT) throw new Error('OpenSpec 文件内容超过 1 MiB 编辑上限')
+    const resolved = await this.openSpecFileTarget(workspaceId, workItemUid, path)
+    if (!(await exists(resolved.target))) throw new Error('只能编辑 OpenSpec 已有文件；新建结构请使用 Schema 或 Change 操作')
+    const isConfig = /^config\.ya?ml$/i.test(relative(resolved.root, resolved.target).replaceAll('\\', '/'))
+    if (isConfig) {
+      const config = parse(content) as { schema?: unknown }
+      if (typeof config?.schema !== 'string' || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(config.schema)) throw new Error('config.yaml 中的 schema 必须是有效的 kebab-case 名称')
+    }
+    await writeFile(resolved.target, content, 'utf8')
+    if (isConfig) await this.updateOpenSpecSettings(workspaceId, workItemUid, true, String((parse(content) as { schema: string }).schema))
+    await appendEvent(resolved.snapshot.workspace.path, 'openspec.file-updated', resolved.workItem.key, undefined, { path: relative(resolved.root, resolved.target).replaceAll('\\', '/') })
+  }
+
+  private async validateManagedOpenSpec(workspaceId: string, workItemUid: string): Promise<void> {
+    const snapshot = await this.requireSnapshot(workspaceId)
+    const workItem = snapshot.workItems.find(item => item.uid === workItemUid)
+    if (workItem === undefined) throw new Error(`work item not found: ${workItemUid}`)
+    const target = await this.openSpecWorkspace(snapshot, workItem, true)
+    const result = await runNative([nativeExecutable('openspec'), 'validate', '--all', '--strict', '--json', '--no-interactive', '--no-color'], target.projectRoot, 60_000)
+    if (result.exitCode !== 0) throw new Error(`OpenSpec 校验未通过：${result.stderr.trim() || result.stdout.trim() || `exit ${result.exitCode}`}`)
+    await appendEvent(snapshot.workspace.path, 'openspec.validated', workItem.key, undefined, { workspace: target.workspace })
+  }
+
+  private async openManagedOpenSpecPath(workspaceId: string, workItemUid: string, path: string): Promise<void> {
+    const snapshot = await this.requireSnapshot(workspaceId)
+    const workItem = snapshot.workItems.find(item => item.uid === workItemUid)
+    if (workItem === undefined) throw new Error(`work item not found: ${workItemUid}`)
+    const workspace = await this.openSpecWorkspace(snapshot, workItem, true)
+    const target = path.trim() === '' ? workspace.openSpecRoot : resolve(workspace.openSpecRoot, path.replaceAll('\\', '/').replace(/^\/+/, ''))
+    if (!contained(workspace.openSpecRoot, target) || !(await exists(target))) throw new Error('OpenSpec 路径不存在或超出工作区')
+    const response = await this.api.host.openPath(request({ path: target }), AbortSignal.timeout(15_000))
+    if (!response.result.ok) throw new Error(`${response.result.error.code}: ${response.result.error.message}`)
+  }
+
   private async updateWorkItemSettings(
     workspaceId: string, workItemUid: string, repositoryScope: string[], developmentTargets: string[],
     developmentTargetDetails?: Record<string, string>,
@@ -1176,8 +1464,9 @@ export class SddProjectService {
     if (targets.some(id => !scope.includes(id))) throw new Error('development targets must be inside the selected repository scope')
     const details = Object.fromEntries(targets.map(id => [id, String(developmentTargetDetails?.[id] ?? workItem.developmentTargetDetails?.[id] ?? '').trim()]))
     if (openSpec?.enabled === true) {
-      if (openSpec.repositoryId === undefined || !targets.includes(openSpec.repositoryId)) throw new Error('OpenSpec repository must be a confirmed development target')
-      if (openSpec.path === undefined || openSpec.path.trim() === '' || isAbsolute(openSpec.path) || openSpec.path.split(/[\\/]/).includes('..')) throw new Error('OpenSpec path must be a safe repository-relative path')
+      if (openSpec.repositoryId !== undefined && !targets.includes(openSpec.repositoryId)) throw new Error('internal planning repository must be a confirmed development target')
+      const configuredPath = openSpec.path ?? 'openspec'
+      if (configuredPath.trim() === '' || isAbsolute(configuredPath) || configuredPath.split(/[\\/]/).includes('..')) throw new Error('internal planning path must be a safe repository-relative path')
       if (openSpec.schema !== undefined && !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(openSpec.schema)) throw new Error('OpenSpec schema must be kebab-case')
       if (openSpec.changeId !== undefined && !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(openSpec.changeId)) throw new Error('OpenSpec change id must be kebab-case')
       if (workItem.openSpec?.changeId !== undefined && openSpec.schema !== undefined && openSpec.schema !== workItem.openSpec.schema) throw new Error('cannot change the OpenSpec schema after this work item has created a change')
@@ -1185,7 +1474,7 @@ export class SddProjectService {
     const updated: WorkItem = {
       ...workItem, repositoryScope: scope, developmentTargets: targets, developmentTargetDetails: details,
       openSpec: openSpec?.enabled === true ? {
-        enabled: true, repositoryId: openSpec.repositoryId, path: openSpec.path!.trim(), schema: openSpec.schema ?? workItem.openSpec?.schema ?? 'spec-driven',
+        enabled: true, ...((openSpec.repositoryId ?? targets[0]) === undefined ? {} : { repositoryId: openSpec.repositoryId ?? targets[0] }), path: (openSpec.path ?? 'openspec').trim(), schema: openSpec.schema ?? workItem.openSpec?.schema ?? 'spec-driven',
         ...((openSpec.changeId ?? workItem.openSpec?.changeId) === undefined ? {} : { changeId: openSpec.changeId ?? workItem.openSpec?.changeId }),
       } : { enabled: false },
       updatedAt: new Date().toISOString(),
@@ -1311,6 +1600,159 @@ export class SddProjectService {
       return match === null ? value : Math.max(value, Number(match[1]))
     }, 0)
     return `${prefix}-${String(largest + 1).padStart(4, '0')}`
+  }
+
+  private nextProductKey(items: Array<{ key: string }>, prefix: string): string {
+    const expression = new RegExp(`^${prefix}-(\\d+)$`)
+    const largest = items.reduce((value, item) => {
+      const match = expression.exec(item.key)
+      return match === null ? value : Math.max(value, Number(match[1]))
+    }, 0)
+    return `${prefix}-${String(largest + 1).padStart(4, '0')}`
+  }
+
+  private async listProductKnowledge(workspacePath: string): Promise<ProductKnowledgeSnapshot> {
+    const productRoot = join(workspacePath, 'product')
+    const featuresRoot = join(productRoot, 'features')
+    const deliveriesRoot = join(workspacePath, 'deliveries')
+    const features: ProductFeature[] = []
+    const deliveries: DeliveryArchive[] = []
+    if (await exists(featuresRoot)) for (const directory of await readdir(featuresRoot, { withFileTypes: true })) {
+      if (!directory.isDirectory()) continue
+      const path = join(featuresRoot, directory.name, 'feature.yaml')
+      if (!(await exists(path))) continue
+      try {
+        const feature = parse(await readFile(path, 'utf8')) as ProductFeature
+        if (feature.schema === 'dsh-sdd/feature@1' && typeof feature.uid === 'string') features.push({ ...feature, history: feature.history ?? [], relativeDirectory: relative(workspacePath, dirname(path)).replaceAll('\\', '/') })
+      } catch { /* Invalid product knowledge stays repairable on disk and out of the normal UI. */ }
+    }
+    if (await exists(deliveriesRoot)) for (const directory of await readdir(deliveriesRoot, { withFileTypes: true })) {
+      if (!directory.isDirectory()) continue
+      const path = join(deliveriesRoot, directory.name, 'manifest.yaml')
+      if (!(await exists(path))) continue
+      try {
+        const delivery = parse(await readFile(path, 'utf8')) as DeliveryArchive
+        if (delivery.schema === 'dsh-sdd/delivery-archive@1' && typeof delivery.uid === 'string') deliveries.push({ ...delivery, relativeDirectory: relative(workspacePath, dirname(path)).replaceAll('\\', '/') })
+      } catch { /* Incomplete archives are ignored until repaired. */ }
+    }
+    return {
+      features: features.sort((left, right) => left.key.localeCompare(right.key)),
+      deliveries: deliveries.sort((left, right) => right.archivedAt.localeCompare(left.archivedAt)),
+      catalogPath: 'product/feature-catalog.md',
+      specificationPath: 'product/product-specification.md',
+    }
+  }
+
+  private async writeProductBaseline(workspacePath: string, features: ProductFeature[]): Promise<void> {
+    const productRoot = join(workspacePath, 'product')
+    await mkdir(productRoot, { recursive: true })
+    const active = features.filter(item => item.status === 'active')
+    const catalogRows = features.map(item => `| ${item.key} | ${item.name.replaceAll('|', '\\|')} | ${item.currentVersion} | ${item.status === 'active' ? '有效' : '已废弃'} | ${item.history.length} |`).join('\n')
+    await writeFile(join(productRoot, 'feature-catalog.md'), `# 产品特性目录\n\n> 本目录由已完成需求持续沉淀，展示产品当前能力及其生命周期。\n\n| 特性编号 | 名称 | 当前版本 | 状态 | 变更次数 |\n| --- | --- | --- | --- | ---: |\n${catalogRows || '| — | 暂无已交付特性 | — | — | 0 |'}\n`, 'utf8')
+    const specifications = active.map(item => `## ${item.key} · ${item.name}\n\n版本：${item.currentVersion}\n\n${item.summary}\n\n生命周期详情：\`${item.relativeDirectory}/feature.md\``).join('\n\n')
+    await writeFile(join(productRoot, 'product-specification.md'), `# 产品当前规格\n\n> 这是产品当前有效能力的基线视图。历史需求和旧版本请从对应特性生命周期及交付归档追溯。\n\n${specifications || '尚无已交付的产品特性。'}\n`, 'utf8')
+  }
+
+  private async closeDelivery(
+    workspaceId: string, workItemUid: string, featureUid: string | undefined, featureName: string,
+    changeType: 'created' | 'updated' | 'deprecated', summary: string,
+  ): Promise<void> {
+    const snapshot = await this.requireSnapshot(workspaceId)
+    const workItem = snapshot.workItems.find(item => item.uid === workItemUid)
+    if (workItem === undefined || workItem.executionMode === 'attached') throw new Error('delivery work item not found')
+    if (workItem.status === 'completed') throw new Error(`work item ${workItem.key} is already delivered`)
+    if (workItem.status !== 'active') throw new Error(`work item ${workItem.key} must resolve pending source changes before delivery`)
+    const workArtifacts = snapshot.artifacts.filter(item => item.workItemUid === workItem.uid)
+    const acceptedDevelopment = workArtifacts.filter(item => item.stage === 'development' && item.status === 'accepted').sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0]
+    if (acceptedDevelopment === undefined) throw new Error('accept the development delivery before closing the requirement')
+    if (workArtifacts.some(item => item.status === 'draft' || item.status === 'in-review')) throw new Error('discard or accept all remaining drafts before closing the requirement')
+    const frozenArtifacts = workArtifacts.filter(item => item.status === 'accepted' || item.status === 'superseded')
+    const invalidFrozen = frozenArtifacts.find(item => item.validationErrors.length > 0)
+    if (invalidFrozen !== undefined) throw new Error(`repair frozen deliverable ${invalidFrozen.key} before archiving: ${invalidFrozen.validationErrors.join('; ')}`)
+    const product = snapshot.productKnowledge ?? await this.listProductKnowledge(snapshot.workspace.path)
+    const existingFeature = featureUid === undefined ? undefined : product.features.find(item => item.uid === featureUid)
+    if (featureUid !== undefined && existingFeature === undefined) throw new Error(`product feature not found: ${featureUid}`)
+    if (existingFeature === undefined && changeType !== 'created') throw new Error('a new feature must use the created change type')
+    if (existingFeature !== undefined && changeType === 'created') throw new Error('an existing feature must be updated or deprecated')
+
+    const now = new Date().toISOString()
+    const deliveryUid = randomUUID()
+    const deliveryKey = this.nextProductKey(product.deliveries, 'DLV')
+    const deliveryRoot = join(snapshot.workspace.path, 'deliveries', `${deliveryKey.toLowerCase()}-${deliveryUid.slice(0, 8)}`)
+    await mkdir(deliveryRoot, { recursive: true })
+    const feature: ProductFeature = existingFeature === undefined ? {
+      schema: 'dsh-sdd/feature@1', uid: randomUUID(), key: this.nextProductKey(product.features, 'FEAT'), name: featureName.trim(),
+      status: 'active', currentVersion: '1.0.0', summary: summary.trim(), createdAt: now, updatedAt: now,
+      createdByWorkItemUid: workItem.uid, history: [], relativeDirectory: '',
+    } : {
+      ...existingFeature, name: featureName.trim(), status: changeType === 'deprecated' ? 'deprecated' : 'active',
+      currentVersion: nextVersion(existingFeature.currentVersion), summary: summary.trim(), updatedAt: now,
+    }
+    feature.relativeDirectory = `product/features/${feature.key.toLowerCase()}-${feature.uid.slice(0, 8)}`
+    feature.history = [...feature.history, {
+      deliveryUid, workItemUid: workItem.uid, workItemKey: workItem.key, workItemTitle: workItem.title,
+      changeType, version: feature.currentVersion, summary: summary.trim(), changedAt: now,
+    }]
+
+    const artifactRefs: DeliveryArchive['artifactRefs'] = []
+    for (const artifact of frozenArtifacts.sort((left, right) => left.createdAt.localeCompare(right.createdAt))) {
+      const archivePath = join('artifacts', artifact.stage, `${artifact.key}-v${artifact.version}`)
+      await cp(join(snapshot.workspace.path, artifact.relativeDirectory), join(deliveryRoot, archivePath), { recursive: true, errorOnExist: true })
+      artifactRefs.push({ uid: artifact.uid, key: artifact.key, stage: artifact.stage, version: artifact.version, status: artifact.status, ...(artifact.contentHash === undefined ? {} : { contentHash: artifact.contentHash }), archivePath: archivePath.replaceAll('\\', '/') })
+    }
+    await cp(join(snapshot.workspace.path, '.sdd', 'work-items', workItem.uid, 'work-item.yaml'), join(deliveryRoot, 'work-item.yaml'))
+    const sourceRoot = join(deliveryRoot, 'sources'); await mkdir(sourceRoot, { recursive: true })
+    for (const sourceUid of this.currentSourceUids(snapshot, workItem)) {
+      const source = snapshot.sources.find(item => item.uid === sourceUid)
+      if (source !== undefined) await cp(join(snapshot.workspace.path, source.relativePath), join(sourceRoot, basename(source.relativePath)))
+    }
+    const planningRoot = managedOpenSpecProject(snapshot.workspace.path, workItem.uid)
+    if (await exists(planningRoot)) await cp(planningRoot, join(deliveryRoot, 'internal-planning'), { recursive: true })
+
+    const repositoryRefs = snapshot.developmentWorkspaces.filter(item => item.artifactUid === acceptedDevelopment.uid).flatMap(item => item.repositories).map(repository => ({
+      id: repository.id, branch: repository.workingBranch, baseCommit: repository.baseCommit, headCommit: repository.headCommit,
+      tests: (repository.tests ?? []).filter(test => !test.stale).length,
+    }))
+    const latestByStage = STAGES.map(stage => workArtifacts.filter(item => item.stage === stage.id && item.status === 'accepted').sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0]).filter((item): item is ArtifactSummary => item !== undefined)
+    const stageRows = latestByStage.map(item => `| ${stageDefinition(item.stage).label} | ${item.key} | v${item.version} | ${item.contentHash ?? '未记录'} |`).join('\n')
+    const repositoryRows = repositoryRefs.map(item => `| ${item.id} | ${item.branch} | ${item.baseCommit.slice(0, 12)} | ${item.headCommit.slice(0, 12)} | ${item.tests} |`).join('\n')
+    const report = `# ${deliveryKey} · ${workItem.title}转测报告\n\n## 交付摘要\n\n- 需求：${workItem.key} · ${workItem.title}\n- 产品特性：${feature.key} · ${feature.name}（${changeType}，v${feature.currentVersion}）\n- 归档时间：${now}\n\n${summary.trim()}\n\n## 阶段交付\n\n| 阶段 | 交付件 | 版本 | 内容哈希 |\n| --- | --- | --- | --- |\n${stageRows}\n\n## 代码与测试\n\n| 仓库 | 分支 | 基线提交 | 交付提交 | 有效测试证据 |\n| --- | --- | --- | --- | ---: |\n${repositoryRows || '| — | — | — | — | 0 |'}\n\n## 归档说明\n\n本次需求的来源快照、全部已验收及被替代阶段成果、内部规划副本、代码提交引用和测试证据已经冻结在本交付归档中。\n`
+    const email = `# 转测邮件 · ${workItem.key} ${workItem.title}\n\n**主题：** [转测] ${workItem.key} ${workItem.title}\n\n各位好，\n\n${workItem.key}「${workItem.title}」已完成开发并进入转测。\n\n- 影响特性：${feature.key} ${feature.name}，版本 ${feature.currentVersion}\n- 变更说明：${summary.trim()}\n- 代码范围：${repositoryRefs.map(item => `${item.id} / ${item.branch} @ ${item.headCommit.slice(0, 12)}`).join('；') || '无代码仓库记录'}\n- 测试证据：${repositoryRefs.reduce((total, item) => total + item.tests, 0)} 条\n- 完整报告：${deliveryKey}/transfer-test-report.md\n\n请按报告中的交付范围进行验证。如发现问题，请关联需求 ${workItem.key}。\n`
+    await writeFile(join(deliveryRoot, 'transfer-test-report.md'), report, 'utf8')
+    await writeFile(join(deliveryRoot, 'transfer-test-email.md'), email, 'utf8')
+
+    const featureRoot = join(snapshot.workspace.path, feature.relativeDirectory)
+    await mkdir(featureRoot, { recursive: true })
+    await writeFile(join(featureRoot, 'feature.yaml'), stringify({ ...feature, relativeDirectory: undefined }), 'utf8')
+    const history = feature.history.map(item => `| ${item.changedAt.slice(0, 10)} | ${item.version} | ${item.changeType} | ${item.workItemKey} | ${item.summary.replaceAll('|', '\\|').replaceAll('\n', ' ')} |`).join('\n')
+    await writeFile(join(featureRoot, 'feature.md'), `# ${feature.key} · ${feature.name}\n\n- 当前版本：${feature.currentVersion}\n- 当前状态：${feature.status === 'active' ? '有效' : '已废弃'}\n- 首次创建：${feature.createdAt}\n- 创建需求：${feature.history[0]?.workItemKey ?? workItem.key}\n\n## 当前规格\n\n${feature.summary}\n\n## 生命周期\n\n| 日期 | 版本 | 变更 | 需求 | 摘要 |\n| --- | --- | --- | --- | --- |\n${history}\n`, 'utf8')
+    const allFeatures = [...product.features.filter(item => item.uid !== feature.uid), feature]
+    await this.writeProductBaseline(snapshot.workspace.path, allFeatures)
+
+    const archive: DeliveryArchive = {
+      schema: 'dsh-sdd/delivery-archive@1', uid: deliveryUid, key: deliveryKey, title: workItem.title,
+      workItemUid: workItem.uid, workItemKey: workItem.key, archivedAt: now,
+      featureRefs: [{ uid: feature.uid, key: feature.key, version: feature.currentVersion, changeType }], artifactRefs, repositoryRefs,
+      reportPath: 'transfer-test-report.md', emailPath: 'transfer-test-email.md', relativeDirectory: relative(snapshot.workspace.path, deliveryRoot).replaceAll('\\', '/'),
+    }
+    await writeFile(join(deliveryRoot, 'manifest.yaml'), stringify({ ...archive, relativeDirectory: undefined }), 'utf8')
+    const completed = { ...workItem, status: 'completed' as const, updatedAt: now }
+    await writeFile(join(snapshot.workspace.path, '.sdd', 'work-items', workItem.uid, 'work-item.yaml'), stringify(completed), 'utf8')
+    for (const attached of snapshot.workItems.filter(item => item.executionMode === 'attached' && item.parentWorkItemUid === workItem.uid && item.status !== 'completed')) {
+      await writeFile(join(snapshot.workspace.path, '.sdd', 'work-items', attached.uid, 'work-item.yaml'), stringify({ ...attached, status: 'completed', updatedAt: now }), 'utf8')
+    }
+    await appendEvent(snapshot.workspace.path, 'delivery.archived', deliveryKey, 'development', { workItemUid: workItem.uid, featureKey: feature.key, featureVersion: feature.currentVersion })
+  }
+
+  private async readProductFile(workspaceId: string, path: string): Promise<{ path: string; content: string }> {
+    const snapshot = await this.requireSnapshot(workspaceId)
+    const root = resolve(snapshot.workspace.path)
+    const target = resolve(root, path)
+    if (!contained(root, target) || (!contained(resolve(root, 'product'), target) && !contained(resolve(root, 'deliveries'), target))) throw new Error('product file path escapes product knowledge and delivery archives')
+    if (!(await exists(target)) || !(await stat(target)).isFile()) throw new Error(`product file not found: ${path}`)
+    const info = await stat(target)
+    if (info.size > OPEN_SPEC_TEXT_LIMIT) throw new Error('product file exceeds 1 MiB')
+    return { path: relative(snapshot.workspace.path, target).replaceAll('\\', '/'), content: await readFile(target, 'utf8') }
   }
 
   private async listSources(workspacePath: string): Promise<SourceSummary[]> {
@@ -1598,7 +2040,7 @@ export class SddProjectService {
   }
 
   private async accept(workspaceId: string, artifactUid: string, checklist?: Record<string, boolean>): Promise<void> {
-    let snapshot = await this.snapshot(workspaceId)
+    let snapshot = await this.requireSnapshot(workspaceId)
     let artifact = snapshot.artifacts.find(item => item.uid === artifactUid)
     if (artifact === undefined) throw new Error(`artifact not found: ${artifactUid}`)
     if (artifact.status !== 'draft' && artifact.status !== 'in-review') throw new Error(`artifact cannot be accepted from ${artifact.status}`)
@@ -1623,7 +2065,7 @@ export class SddProjectService {
     manifest.status = 'in-review'
     manifest.updatedAt = new Date().toISOString()
     await writeFile(manifestPath, stringify(manifest), 'utf8')
-    snapshot = await this.snapshot(workspaceId)
+    snapshot = await this.requireSnapshot(workspaceId)
     artifact = this.requireArtifact(snapshot as ProjectSnapshot & { project: ProjectConfig }, artifactUid)
     const report = snapshot.quality[artifactUid]
     if (report === undefined || !report.ready) {
@@ -1714,6 +2156,9 @@ export class SddProjectService {
     }
     const targetManifestPath = join(target.relativeDirectory, 'manifest.yaml')
     const targetEntryPath = join(target.relativeDirectory, target.entry)
+    const openSpecValidation = workItem === undefined ? undefined : snapshot.openSpecValidation[workItem.uid]
+    const openSpecContext = workItem?.openSpec?.enabled !== true || openSpecValidation?.status !== 'valid' || openSpecValidation.relativeRoot === undefined ? ''
+      : `内部规划工作区（不得主动向普通用户暴露底层 OpenSpec、Schema、Change 或 CLI 术语）：${fileMention(openSpecValidation.relativeRoot)}\n当前规划单元：${openSpecValidation.changeExists === true ? openSpecValidation.changeId : '尚未建立'}\n可用文件：\n${(openSpecValidation.files ?? []).map(path => `- ${fileMention(join(openSpecValidation.relativeRoot!, path))}`).join('\n') || '- 尚无规划产物'}\n首次回答前读取配置和已有规划文件。形成确定结论后，同时更新阶段成果与相关内部规划文件，不让用户重复转述；对用户只描述业务决策、阶段进度和下一步。`
     return [
       `你正在执行 DSH SDD 的“${definition.label}”阶段，角色侧重：${definition.role}。`,
       `项目仓库：${snapshot.workspace.path}`,
@@ -1721,7 +2166,8 @@ export class SddProjectService {
       unavailableCode.length === 0 ? '' : `暂不可用的项目代码参考（不阻止非开发阶段继续）：\n${unavailableCode.map(reference => `- ${reference.repositoryId}：${reference.error ?? '准备失败'}`).join('\n')}`,
       `本次固定绑定交付件：${target.key}\n交付件清单：${fileMention(targetManifestPath)}\n交付件正文：${fileMention(targetEntryPath)}`,
       `阶段目标：${runtime.objective}`,
-      workItem === undefined ? '' : `本需求选择的仓库范围：${(workItem.repositoryScope ?? []).join('、') || '未配置'}\n本需求开发目标：${(workItem.developmentTargets ?? []).map(id => `${id}${workItem.developmentTargetDetails?.[id] ? `（${workItem.developmentTargetDetails[id]}）` : ''}`).join('、') || '未配置'}\nOpenSpec：${openSpecDescription(workItem, snapshot.openSpecValidation[workItem.uid])}`,
+      workItem === undefined ? '' : `本需求选择的仓库范围：${(workItem.repositoryScope ?? []).join('、') || '未配置'}\n本需求开发目标：${(workItem.developmentTargets ?? []).map(id => `${id}${workItem.developmentTargetDetails?.[id] ? `（${workItem.developmentTargetDetails[id]}）` : ''}`).join('、') || '未配置'}`,
+      openSpecContext,
       `完成清单：\n${runtime.completionChecklist.map((item, index) => `${index + 1}. ${item}`).join('\n')}`,
       target.template === undefined ? '' : `本交付件固定模板快照：${fileMention(join(target.relativeDirectory, target.template.snapshotPath))}\n模板配置：${fileMention(join(target.relativeDirectory, target.template.configSnapshotPath))}\n模板版本：${target.template.version}\n模板哈希：${target.template.contentHash}`,
       target.revision === undefined ? '' : `本次修订类型：${target.revision.kind === 'upstream' ? '上游输入变更' : '用户主动调整'}\n变更原因：${target.revision.reason ?? '由结构化输入差异触发'}\n影响范围：${target.revision.affectedAreas?.join('、') || '待讨论确认'}\n输入差异：\n${target.revision.changes.map(change => `- ${change.label}：${change.previous?.version ?? change.previous?.contentHash ?? '无'} → ${change.current?.version ?? change.current?.contentHash ?? '无'}`).join('\n') || '- 用户主动调整，上游输入未变化'}\n历史阶段运行：${target.revision.previousRunUid ?? '无'}`,
@@ -1734,8 +2180,13 @@ export class SddProjectService {
     workspaceId: string, runUid: string | undefined, stage: StageId, artifactUid: string, sessionId: string,
     artifactUids: string[], sourceUids: string[],
   ): Promise<{ prompt: string; run: StageRun }> {
-    const snapshot = await this.requireSnapshot(workspaceId)
-    const artifact = this.requireArtifact(snapshot, artifactUid)
+    let snapshot = await this.requireSnapshot(workspaceId)
+    let artifact = this.requireArtifact(snapshot, artifactUid)
+    const initialWorkItem = snapshot.workItems.find(item => item.uid === artifact.workItemUid)
+    if (initialWorkItem !== undefined) {
+      snapshot = await this.prepareInternalPlanning(workspaceId, snapshot, initialWorkItem)
+      artifact = this.requireArtifact(snapshot, artifactUid)
+    }
     if (runUid === undefined && snapshot.runs.some(item => item.artifactUid === artifactUid && item.status !== 'completed')) {
       throw new Error('artifact already has an active stage run; resume that run instead')
     }
@@ -1811,12 +2262,17 @@ export class SddProjectService {
     const templateConfigPath = artifact.template === undefined
       ? join('.sdd', 'templates', artifact.stage, 'template.yaml')
       : join(artifact.relativeDirectory, artifact.template.configSnapshotPath)
-    const openSpecRepository = workItem?.openSpec?.enabled === true
-      ? development?.repositories.find(item => item.id === workItem.openSpec?.repositoryId) : undefined
-    const openSpecTarget = openSpecRepository === undefined || workItem?.openSpec?.path === undefined
-      ? undefined : resolve(openSpecRepository.path, workItem.openSpec.path)
+    const openSpecTarget = workItem?.openSpec?.enabled === true && openSpecValidation?.relativeRoot !== undefined
+      ? resolve(workspacePath, openSpecValidation.relativeRoot) : undefined
+    const stageOpenSpecFocus: Record<StageId, string> = {
+      requirements: '维护 proposal 与需求增量规格，记录目标、范围和可验证场景',
+      prototype: '把已确认的用户流程、交互状态和原型约束同步到 design 或 Schema 定义的对应产物',
+      architecture: '维护 design 中的边界、关键决策、接口、数据和风险',
+      specification: '维护 specs 的需求、场景与约束，并使 tasks 可由开发执行',
+      development: '按 tasks 实施和标记进度，保持代码、规格、设计与验证结论一致',
+    }
     const openSpecRuntime = openSpecTarget === undefined || openSpecValidation?.status !== 'valid' ? ''
-      : `OpenSpec 已启用并通过检查。OpenSpec 项目根目录：${dirname(openSpecTarget)}。当前 Schema：${openSpecValidation.schema ?? 'spec-driven'}。当前需求 Change：${openSpecValidation.changeExists === true ? openSpecValidation.changeId : '尚未创建，不能假设已有 proposal/specs/design/tasks'}。官方生成的共享 skills 位于 ${join(dirname(openSpecTarget), '.agents', 'skills')}；由于代码仓是当前 SDD 工作空间内的隔离 Worktree，执行 OpenSpec 工作流前必须先读取匹配的 openspec-*/SKILL.md 并遵循，在 OpenSpec 项目根目录运行 openspec 命令。`
+      : `内部结构化规划引擎已就绪。内部规划目录：${openSpecTarget}。本阶段同步重点：${stageOpenSpecFocus[stage]}。每轮形成确定结论时，同时更新绑定的阶段成果和相关内部规划文件；先读取已有文件并保留其他阶段内容。不得主动向普通用户提及 OpenSpec、Schema、Change、CLI、目录迁移或底层文件同步；对用户只呈现当前阶段的问题、已确认决策、风险、进度和自然语言的下一步。`
     const repositoryContext = stage !== 'development' || development === undefined ? '' : `开发仓库上下文加载协议：\n${development.repositories.map(repository => `- ${repository.id} 根目录：${repository.path}\n  具体开发目标：${workItem?.developmentTargetDetails?.[repository.id] ?? '未填写'}\n  首次修改前先在该根目录查找并读取 AGENTS.md、README、构建入口、CI 配置及 .agents/skills 下与当前工作匹配的 SKILL.md；读取仓库内文件后遵循更深层 AGENTS.md。`).join('\n')}\n会话 cwd 保持为外层 SDD 项目以维护交付件；代码操作必须使用上面绑定的仓库根目录。Skill 即使未自动出现在会话技能列表，也必须按明确路径读取后遵循。多仓库不得混用 workdir。`
     const readOnlyRepositoryContext = stage === 'development' || codeReferences.length === 0 ? '' : `项目关联代码仓库自动只读参考：\n${codeReferences.map(reference => reference.available && reference.path !== undefined && reference.baseCommit !== undefined
       ? `- ${reference.repositoryId}: ${reference.path}\n  ${reference.baseBranch} @ ${reference.baseCommit.slice(0, 12)}；按需读取，禁止修改`
@@ -1825,6 +2281,7 @@ export class SddProjectService {
       sessionId, stage, artifactUid: artifact.uid, projectPath: workspacePath,
       artifactDirectory: resolve(workspacePath, artifact.relativeDirectory),
       developmentDirectories: development?.repositories.map(item => item.path) ?? [],
+      openSpecDirectories: openSpecTarget === undefined ? [] : [openSpecTarget],
       developmentRepositories: development?.repositories.map(item => ({ id: item.id, path: item.path })) ?? [],
       codeReferences,
       artifactTemplateReference: fileMention(templatePath),
@@ -1834,7 +2291,7 @@ export class SddProjectService {
         `绑定项目：${project.project.key} · ${project.project.name}`,
         `绑定交付件：${artifact.key} (${artifact.uid})`,
         `交付件入口：${resolve(workspacePath, artifact.relativeDirectory, artifact.entry)}`,
-        workItem === undefined ? '' : `仓库范围：${(workItem.repositoryScope ?? []).join('、') || '未配置'}\n开发目标：${(workItem.developmentTargets ?? []).map(id => `${id}${workItem.developmentTargetDetails?.[id] ? `（${workItem.developmentTargetDetails[id]}）` : ''}`).join('、') || '未配置'}\nOpenSpec：${openSpecDescription(workItem, openSpecValidation)}`,
+        workItem === undefined ? '' : `仓库范围：${(workItem.repositoryScope ?? []).join('、') || '未配置'}\n开发目标：${(workItem.developmentTargets ?? []).map(id => `${id}${workItem.developmentTargetDetails?.[id] ? `（${workItem.developmentTargetDetails[id]}）` : ''}`).join('、') || '未配置'}`,
         openSpecRuntime,
         development === undefined ? '' : `隔离代码目录：\n${development.repositories.map(item => `- ${item.id}: ${item.path}`).join('\n')}`,
         repositoryContext,

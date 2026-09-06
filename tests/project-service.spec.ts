@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { chmod, mkdir, mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -85,6 +86,53 @@ process.exit(1)\n`)
     expect(await readFile(join(isolated, 'openspec', 'changes', 'req-open-spec', '.openspec.yaml'), 'utf8')).toContain('company-sdd')
     expect(execFileSync('git', ['status', '--short'], { cwd: repository, encoding: 'utf8' })).toBe('')
     process.env.PATH = originalPath
+  })
+
+  it('manages one OpenSpec planning change across pre-development stages', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-sdd-openspec-planning-'))
+    const originalPath = process.env.PATH
+    const bin = join(root, 'bin'); await mkdir(bin)
+    await writeFile(join(bin, 'openspec.cjs'), `const fs=require('node:fs');const path=require('node:path');const args=process.argv.slice(2);const root=process.cwd();
+if(args.includes('--version')){console.log('1.11.0');process.exit(0)}
+if(args.includes('init')){fs.mkdirSync(path.join(root,'openspec','changes'),{recursive:true});fs.writeFileSync(path.join(root,'openspec','config.yaml'),'schema: spec-driven\\n');process.exit(0)}
+if(args[0]==='schema'&&args[1]==='validate'){process.exit(0)}
+if(args[0]==='new'&&args[1]==='change'){const dir=path.join(root,'openspec','changes',args[2]);fs.mkdirSync(dir,{recursive:true});fs.writeFileSync(path.join(dir,'.openspec.yaml'),'schema: '+args[args.indexOf('--schema')+1]+'\\n');fs.writeFileSync(path.join(dir,'proposal.md'),'# Proposal\\n');process.exit(0)}
+if(args[0]==='status'){console.log(JSON.stringify({artifacts:[{id:'proposal',status:'done'},{id:'design',status:'ready'}]}));process.exit(0)}
+if(args[0]==='validate'){console.log('{}');process.exit(0)}
+process.exit(1)\n`)
+    if (process.platform === 'win32') await writeFile(join(bin, 'openspec.cmd'), '@node "%~dp0\\openspec.cjs" %*\r\n')
+    else { await writeFile(join(bin, 'openspec'), '#!/usr/bin/env node\nrequire("./openspec.cjs")\n'); await chmod(join(bin, 'openspec'), 0o755) }
+    process.env.PATH = `${bin}${process.platform === 'win32' ? ';' : ':'}${process.env.PATH ?? ''}`
+    try {
+      const provider = new ManualSourceProvider()
+      const sources = { names: () => ['manual'], fetch: async (_name: string, request: any) => provider.get({ ...request, signal: request.signal ?? AbortSignal.timeout(1000) }) } as unknown as SddSourceRegistry
+      const sessions = { bind: vi.fn() } as unknown as StageSessionController
+      const service = new SddProjectService(api(root), sources, sessions)
+      await service.execute({ kind: 'import-source', workspaceId: 'w1', provider: 'manual', sourceKind: 'requirement', key: 'PLAN-1', input: { title: '跨阶段规格' } })
+      let snapshot = await service.snapshot('w1'); const workItem = snapshot.workItems[0]!
+      await service.execute({ kind: 'create-draft', workspaceId: 'w1', stage: 'requirements', title: workItem.title, basedOn: [], sourceUids: [workItem.sourceUid!], workItemUid: workItem.uid })
+      snapshot = await service.snapshot('w1'); const requirement = snapshot.artifacts.find(item => item.stage === 'requirements')!
+      await service.execute({ kind: 'bind-session', workspaceId: 'w1', stage: 'requirements', artifactUid: requirement.uid, sessionId: 's1', artifactUids: [], sourceUids: requirement.derivedFrom.map(item => item.uid) })
+      snapshot = await service.snapshot('w1')
+      expect(snapshot.openSpecValidation[workItem.uid]).toMatchObject({ status: 'valid', workspace: 'planning', changeId: 'plan-1', changeExists: true, artifacts: [{ id: 'proposal', status: 'done' }, { id: 'design', status: 'ready' }] })
+      const file = await service.execute({ kind: 'openspec-read-file', workspaceId: 'w1', workItemUid: workItem.uid, path: 'changes/plan-1/proposal.md' })
+      expect(file).toMatchObject({ openSpecFile: { content: '# Proposal\n' } })
+      await service.execute({ kind: 'openspec-write-file', workspaceId: 'w1', workItemUid: workItem.uid, path: 'changes/plan-1/proposal.md', content: '# Proposal\n\nConfirmed.\n' })
+      await service.execute({ kind: 'openspec-validate', workspaceId: 'w1', workItemUid: workItem.uid })
+      expect(await readFile(join(root, '.sdd', 'openspec', workItem.uid, 'openspec', 'changes', 'plan-1', 'proposal.md'), 'utf8')).toContain('Confirmed.')
+      const repository = join(root, 'app'); await mkdir(repository)
+      execFileSync('git', ['init', '-b', 'main'], { cwd: repository }); execFileSync('git', ['config', 'user.email', 'sdd@example.test'], { cwd: repository }); execFileSync('git', ['config', 'user.name', 'SDD Test'], { cwd: repository })
+      await writeFile(join(repository, 'README.md'), '# App\n'); execFileSync('git', ['add', 'README.md'], { cwd: repository }); execFileSync('git', ['commit', '-m', 'initial'], { cwd: repository })
+      await service.execute({ kind: 'add-project-repository', workspaceId: 'w1', id: 'app', source: './app', baseBranch: 'main' })
+      await service.execute({ kind: 'update-work-item-settings', workspaceId: 'w1', workItemUid: workItem.uid, repositoryScope: ['app'], developmentTargets: ['app'], developmentTargetDetails: { app: '实现跨阶段规格' }, openSpec: { enabled: true, repositoryId: 'app', path: 'openspec', schema: 'spec-driven', changeId: 'plan-1' } })
+      const projectPath = join(root, '.sdd', 'project.yaml'); const project = parse(await readFile(projectPath, 'utf8')); project.dependencies.development = {}; await writeFile(projectPath, stringify(project), 'utf8')
+      await service.execute({ kind: 'create-draft', workspaceId: 'w1', stage: 'development', title: workItem.title, basedOn: [], sourceUids: [workItem.sourceUid!], workItemUid: workItem.uid })
+      snapshot = await service.snapshot('w1'); const artifact = snapshot.artifacts.find(item => item.stage === 'development')!
+      await service.execute({ kind: 'development-create', workspaceId: 'w1', artifactUid: artifact.uid, repositoryId: 'app' })
+      snapshot = await service.snapshot('w1')
+      expect(snapshot.openSpecValidation[workItem.uid]).toMatchObject({ status: 'valid', workspace: 'development', changeId: 'plan-1' })
+      expect(await readFile(join(snapshot.developmentWorkspaces[0]!.repositories[0]!.path, 'openspec', 'changes', 'plan-1', 'proposal.md'), 'utf8')).toContain('Confirmed.')
+    } finally { process.env.PATH = originalPath }
   })
 
   it('works out of the box with the built-in manual source', async () => {
@@ -424,7 +472,7 @@ process.exit(1)\n`)
     snapshot = await service.snapshot('w1')
     expect(snapshot.workItems.find(item => item.key === 'REQ-1')).toMatchObject({ status: 'change-pending', change: { kind: 'modified', reviewRequiredStages: ['requirements'] } })
     expect(snapshot.workItems.find(item => item.key === 'REQ-1')).toMatchObject({ repositoryScope: ['web'], developmentTargets: ['web'], openSpec: { enabled: true, repositoryId: 'web', path: 'openspec' } })
-    expect(snapshot.openSpecValidation[req1.uid]).toMatchObject({ status: 'pending', message: expect.stringContaining('创建开发空间后检查目录'), cliInstalled: expect.any(Boolean) })
+    expect(snapshot.openSpecValidation[req1.uid]).toMatchObject({ status: 'pending', message: expect.stringContaining('创建开发空间后迁移规划内容'), cliInstalled: expect.any(Boolean) })
     expect(snapshot.workItems.find(item => item.key === 'REQ-2')).toMatchObject({ status: 'removed-pending', change: { kind: 'removed' } })
     expect(snapshot.workItems.find(item => item.key === 'REQ-3')).toMatchObject({ status: 'active' })
     await service.execute({ kind: 'remove-project-repository', workspaceId: 'w1', id: 'web' })
@@ -490,5 +538,37 @@ process.exit(1)\n`)
       run: { codeReferences: [{ repositoryId: 'existing-system', sourceKind: 'local', available: true, path: source }] },
     })
     expect(bindings.at(-1)).toMatchObject({ codeReferences: [{ repositoryId: 'existing-system', available: true, path: source }] })
+  })
+
+  it('closes a requirement into a versioned product feature and immutable delivery archive', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-sdd-product-'))
+    const provider = new ManualSourceProvider()
+    const sources = { names: () => ['manual'], fetch: async (_name: string, request: any) => provider.get({ ...request, signal: request.signal ?? AbortSignal.timeout(1000) }) } as unknown as SddSourceRegistry
+    const service = new SddProjectService(api(root), sources)
+    await service.execute({ kind: 'import-source', workspaceId: 'w1', provider: 'manual', sourceKind: 'requirement', key: 'ORDER-1', input: { title: '订单部分退款', description: '允许一个订单分批退款。' } })
+    let snapshot = await service.snapshot('w1'); const workItem = snapshot.workItems[0]!
+    await service.execute({ kind: 'create-draft', workspaceId: 'w1', stage: 'development', title: workItem.title, basedOn: [], sourceUids: [workItem.sourceUid!], workItemUid: workItem.uid })
+    snapshot = await service.snapshot('w1'); const artifact = snapshot.artifacts[0]!
+    const manifestPath = join(root, artifact.relativeDirectory, 'manifest.yaml')
+    const manifest = parse(await readFile(manifestPath, 'utf8')); manifest.status = 'accepted'; manifest.updatedAt = new Date().toISOString()
+    const filePaths = ['.template/deliverable.md', '.template/template.yaml', 'deliverable.md']
+    manifest.files = await Promise.all(filePaths.map(async path => {
+      const content = await readFile(join(root, artifact.relativeDirectory, path))
+      return { path, size: content.byteLength, contentHash: `sha256:${createHash('sha256').update(content).digest('hex')}`, kind: path.endsWith('.md') ? 'markdown' : 'text' }
+    }))
+    manifest.contentHash = `sha256:${createHash('sha256').update(manifest.files.map((file: any) => `${file.path}\0${file.size}\0${file.contentHash}`).join('\n')).digest('hex')}`
+    await writeFile(manifestPath, stringify(manifest), 'utf8')
+
+    await service.execute({ kind: 'close-delivery', workspaceId: 'w1', workItemUid: workItem.uid, featureName: '订单退款', changeType: 'created', summary: '支持订单按可退款金额进行一次或多次部分退款。' })
+    snapshot = await service.snapshot('w1')
+    expect(snapshot.workItems[0]?.status).toBe('completed')
+    expect(snapshot.productKnowledge?.features).toEqual([expect.objectContaining({ key: 'FEAT-0001', name: '订单退款', currentVersion: '1.0.0', history: [expect.objectContaining({ workItemKey: 'ORDER-1', changeType: 'created' })] })])
+    expect(snapshot.productKnowledge?.deliveries).toEqual([expect.objectContaining({ key: 'DLV-0001', workItemKey: 'ORDER-1', artifactRefs: [expect.objectContaining({ key: 'DEV-0001' })] })])
+    const delivery = snapshot.productKnowledge!.deliveries[0]!
+    expect(await readFile(join(root, delivery.relativeDirectory, 'transfer-test-report.md'), 'utf8')).toContain('订单部分退款转测报告')
+    expect(await readFile(join(root, 'product/product-specification.md'), 'utf8')).toContain('支持订单按可退款金额')
+    const file = await service.execute({ kind: 'read-product-file', workspaceId: 'w1', path: `${delivery.relativeDirectory}/${delivery.emailPath}` })
+    expect(file).toMatchObject({ productFile: { content: expect.stringContaining('[转测] ORDER-1') } })
+    await expect(service.execute({ kind: 'close-delivery', workspaceId: 'w1', workItemUid: workItem.uid, featureName: '订单退款', changeType: 'created', summary: '重复归档' })).rejects.toThrow('already delivered')
   })
 })

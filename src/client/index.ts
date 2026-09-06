@@ -1,7 +1,7 @@
 import type { ClientContext, ISessions, IWorkspaces, WorkspaceId } from '@deepseek-ai/dsh-client-runtime/client'
 import DOMPurify from 'dompurify'
 import { marked } from 'marked'
-import { STAGES, STAGE_ARTIFACT_TEMPLATES, type ArtifactSummary, type BurnupPoint, type DeliveryCellStatus, type ProjectSnapshot, type RepositoryInspection, type SddAction, type SddResponse, type SourceImportDetail, type SourceSummary, type StageId, type StageRun, type StageTemplatePreview } from '../protocol.ts'
+import { STAGES, STAGE_ARTIFACT_TEMPLATES, type ArtifactSummary, type BurnupPoint, type DeliveryCellStatus, type OpenSpecFilePreview, type ProjectSnapshot, type RepositoryInspection, type SddAction, type SddResponse, type SourceImportDetail, type SourceSummary, type StageId, type StageRun, type StageTemplatePreview } from '../protocol.ts'
 import { jsonPreviewHtml } from './json-preview.ts'
 import { preferredSourceSelection } from './source-selection.ts'
 
@@ -14,11 +14,11 @@ type MenuId = 'dashboard' | 'settings' | StageId
 const MENUS: Array<{ id: MenuId; label: string }> = [{ id: 'dashboard', label: '项目看板' }, ...STAGES, { id: 'settings', label: '项目设置' }]
 
 const CSS = `
-[data-dsh-sdd-view]{position:absolute;inset:0;display:none;z-index:70;overflow:auto;background:var(--dsw-alias-bg-base,#fff);color:var(--dsw-alias-label-primary,#171717);font-family:var(--dsw-font-family,system-ui)}
+[data-dsh-sdd-view]{position:absolute;inset:0;display:none;z-index:70;overflow:auto;background:var(--dsw-alias-bg-base,#fff);color:var(--dsw-alias-label-primary,#0f1115);font-family:var(--dsw-font-family,-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei","Helvetica Neue",Helvetica,Arial,sans-serif);font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
 html[${ACTIVE_ATTR}] [data-dsh-sdd-view]{display:block}html[${ACTIVE_ATTR}] [data-pane='conversation']>:not([data-dsh-sdd-view]),html[${ACTIVE_ATTR}] [class*='centerCol']>:not([data-dsh-sdd-view]){display:none!important}
-.dsh-sdd-menu{box-sizing:border-box;display:flex;align-items:center;gap:8px;width:100%;height:36px;padding:0 10px;border:0;border-radius:8px;background:transparent;color:var(--dsw-alias-label-secondary,#666);cursor:pointer;font-size:13px;white-space:nowrap}.dsh-sdd-menu:hover,.dsh-sdd-menu[data-active]{background:var(--dsw-alias-interactive-bg-hover,#eee);color:var(--dsw-alias-label-primary,#111)}.dsh-sdd-menu[data-active]{font-weight:600}.dsh-sdd-menu svg{width:18px;height:18px;flex:none}.dsh-sdd-menu span{overflow:hidden;text-overflow:ellipsis}[data-dsh-frame][data-sidebar-collapsed] .dsh-sdd-menu{justify-content:center;width:36px;margin:0 auto 8px;padding:0;border-radius:50%}[data-dsh-frame][data-sidebar-collapsed] .dsh-sdd-menu span{display:none}
-.dsh-sdd-page{box-sizing:border-box;width:100%;min-height:100%;padding:20px;max-width:1220px;margin:0 auto}.dsh-sdd-header{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:18px}.dsh-sdd-header h1{font-size:22px;margin:0;margin-right:auto}.dsh-sdd-header .dsh-sdd-select{min-width:0;max-width:min(360px,100%)}.dsh-sdd-select,.dsh-sdd-input{box-sizing:border-box;padding:8px 10px;border:1px solid var(--dsw-alias-border-l2,#ccc);border-radius:8px;background:var(--dsw-specific-input-major,#fff);color:inherit}.dsh-sdd-button{padding:8px 12px;border:1px solid var(--dsw-alias-border-l2,#ccc);border-radius:8px;background:var(--dsw-alias-bg-layer-2,#f5f5f5);color:inherit;cursor:pointer}.dsh-sdd-button:hover{filter:brightness(.97)}.dsh-sdd-button.primary{background:var(--dsw-alias-button-primary-fill,#3b63f3);border-color:transparent;color:var(--dsw-alias-label-primary-foreground,#fff)}.dsh-sdd-button:disabled{opacity:.5;cursor:not-allowed}
-.dsh-sdd-grid{display:grid;grid-template-columns:minmax(0,.8fr) minmax(0,1.2fr);gap:14px}@media(max-width:850px){.dsh-sdd-grid{grid-template-columns:minmax(0,1fr)}}.dsh-sdd-card{min-width:0;border:1px solid var(--dsw-alias-border-l1,#ddd);border-radius:12px;background:var(--dsw-alias-bg-layer-2,#fafafa);padding:14px}.dsh-sdd-card h2{font-size:15px;margin:0 0 10px}.dsh-sdd-muted{font-size:12px;color:var(--dsw-alias-label-secondary,#666);overflow-wrap:anywhere}.dsh-sdd-list{display:flex;min-width:0;flex-direction:column;gap:8px}.dsh-sdd-row{display:grid;min-width:0;grid-template-columns:auto minmax(0,1fr) auto;align-items:start;gap:9px;padding:10px;border:1px solid var(--dsw-alias-border-l1,#ddd);border-radius:9px;background:var(--dsw-alias-bg-base,#fff)}.dsh-sdd-row>span{min-width:0}.dsh-sdd-row strong{display:block;font-size:13px;overflow-wrap:anywhere}.dsh-sdd-badge{display:inline-block;max-width:100%;font-size:11px;padding:2px 6px;border-radius:999px;background:var(--dsw-alias-interactive-bg-hover,#eee);margin:0 0 4px 4px;overflow-wrap:anywhere}.dsh-sdd-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}.dsh-sdd-error{padding:9px;border-radius:8px;background:#c5303018;color:#c53030;font-size:12px;overflow-wrap:anywhere}.dsh-sdd-empty{padding:18px;text-align:center;color:var(--dsw-alias-label-secondary,#666)}
+.dsh-sdd-menu{box-sizing:border-box;display:flex;align-items:center;gap:6px;width:100%;height:32px;padding:0 8px;border:0;border-radius:8px;background:transparent;color:var(--dsw-alias-label-secondary,#61666b);cursor:pointer;font:400 14px/22px var(--dsw-font-family,-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei","Helvetica Neue",Helvetica,Arial,sans-serif);white-space:nowrap;transition:background-color .16s ease,color .16s ease}.dsh-sdd-menu:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(38,49,72,.04));color:var(--dsw-alias-label-primary,#0f1115)}.dsh-sdd-menu[data-active]{background:var(--dsw-alias-interactive-bg-selected,rgba(38,49,72,.06));color:var(--dsw-alias-label-primary,#0f1115);font-weight:500}.dsh-sdd-menu:focus-visible{outline:2px solid var(--dsw-alias-focus-ring,rgba(38,49,72,.18));outline-offset:1px}.dsh-sdd-menu svg{width:16px;height:16px;flex:none;opacity:.9}.dsh-sdd-menu span{overflow:hidden;text-overflow:ellipsis}[data-dsh-frame][data-sidebar-collapsed] .dsh-sdd-menu{justify-content:center;width:32px;margin:0 auto 6px;padding:0;border-radius:8px}[data-dsh-frame][data-sidebar-collapsed] .dsh-sdd-menu span{display:none}
+.dsh-sdd-page{box-sizing:border-box;width:100%;min-height:100%;padding:20px;max-width:1220px;margin:0 auto}.dsh-sdd-header{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:18px}.dsh-sdd-header h1{font-size:22px;line-height:31px;font-weight:700;margin:0;margin-right:auto;letter-spacing:-.01em}.dsh-sdd-header .dsh-sdd-select{min-width:0;max-width:min(360px,100%)}.dsh-sdd-select,.dsh-sdd-input{box-sizing:border-box;min-height:34px;padding:6px 10px;border:1px solid var(--dsw-alias-border-l2,rgba(0,0,0,.1));border-radius:8px;background:var(--dsw-specific-input-major,var(--dsw-alias-bg-base,#fff));color:var(--dsw-alias-label-primary,#0f1115);font-family:inherit;font-size:13px;font-weight:400;line-height:20px;transition:border-color .16s ease,box-shadow .16s ease}.dsh-sdd-select:focus,.dsh-sdd-input:focus{outline:0;border-color:var(--dsw-alias-border-l3,rgba(15,17,21,.28));box-shadow:0 0 0 2px rgba(38,49,72,.06)}.dsh-sdd-button{box-sizing:border-box;min-height:34px;padding:6px 12px;border:1px solid var(--dsw-alias-border-l2,rgba(0,0,0,.1));border-radius:8px;background:var(--dsw-alias-bg-base,#fff);color:var(--dsw-alias-label-primary,#0f1115);cursor:pointer;font-family:inherit;font-size:13px;font-weight:400;line-height:20px;transition:background-color .16s ease,border-color .16s ease,opacity .16s ease}.dsh-sdd-button:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover,rgba(38,49,72,.04))}.dsh-sdd-button:focus-visible{outline:2px solid var(--dsw-alias-focus-ring,rgba(38,49,72,.18));outline-offset:1px}.dsh-sdd-button.primary{background:var(--dsw-alias-button-primary-fill,#0f1115);border-color:transparent;color:var(--dsw-alias-label-primary-foreground,#fff);font-weight:500}.dsh-sdd-button.primary:hover:not(:disabled){background:var(--dsw-alias-button-primary-fill-hover,#272a2f)}.dsh-sdd-button:disabled{opacity:.4;cursor:not-allowed}
+.dsh-sdd-grid{display:grid;grid-template-columns:minmax(0,.8fr) minmax(0,1.2fr);gap:14px}@media(max-width:850px){.dsh-sdd-grid{grid-template-columns:minmax(0,1fr)}}.dsh-sdd-card{min-width:0;border:1px solid var(--dsw-alias-border-l1,rgba(0,0,0,.04));border-radius:12px;background:var(--dsw-alias-bg-layer-2,#fff);padding:14px}.dsh-sdd-card h2{font-size:15px;line-height:22px;font-weight:600;margin:0 0 10px}.dsh-sdd-muted{font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary,#61666b);overflow-wrap:anywhere}.dsh-sdd-list{display:flex;min-width:0;flex-direction:column;gap:8px}.dsh-sdd-row{display:grid;min-width:0;grid-template-columns:auto minmax(0,1fr) auto;align-items:start;gap:9px;padding:10px;border:1px solid var(--dsw-alias-border-l1,rgba(0,0,0,.04));border-radius:8px;background:var(--dsw-alias-bg-base,#fff)}.dsh-sdd-row>span{min-width:0}.dsh-sdd-row strong{display:block;font-size:13px;line-height:20px;font-weight:600;overflow-wrap:anywhere}.dsh-sdd-badge{display:inline-block;max-width:100%;font-size:11px;line-height:16px;padding:1px 6px;border-radius:999px;background:var(--dsw-alias-interactive-bg-hover,rgba(38,49,72,.06));color:var(--dsw-alias-label-secondary,#61666b);margin:0 0 4px 4px;overflow-wrap:anywhere}.dsh-sdd-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}.dsh-sdd-error{padding:9px;border-radius:8px;background:rgba(197,48,48,.08);color:#c53030;font-size:12px;line-height:18px;overflow-wrap:anywhere}.dsh-sdd-empty{padding:18px;text-align:center;color:var(--dsw-alias-label-secondary,#61666b);font-size:13px;line-height:20px}
 .dsh-sdd-busy{position:sticky;top:8px;z-index:20;display:flex;align-items:center;gap:9px;margin:0 0 12px;padding:9px 12px;border:1px solid var(--dsw-alias-border-l2,#bbb);border-radius:9px;background:var(--dsw-alias-bg-base,#fff);box-shadow:0 4px 16px #0002;font-size:12px}.dsh-sdd-busy::before{content:"";width:12px;height:12px;flex:none;border:2px solid var(--dsw-alias-border-l2,#bbb);border-top-color:var(--dsw-alias-label-primary,#222);border-radius:50%;animation:dsh-sdd-spin .8s linear infinite}@keyframes dsh-sdd-spin{to{transform:rotate(360deg)}}
 .dsh-sdd-page[aria-busy="true"] button:not([data-action="close"]),.dsh-sdd-page[aria-busy="true"] select,.dsh-sdd-page[aria-busy="true"] input{pointer-events:none;opacity:.65}
 .dsh-sdd-stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:14px}.dsh-sdd-stat{box-sizing:border-box;min-width:0;border:1px solid var(--dsw-alias-border-l1,#ddd);border-radius:12px;padding:14px;background:var(--dsw-alias-bg-layer-2,#fafafa);overflow:hidden}.dsh-sdd-stat b{display:block;min-width:0;font-size:clamp(20px,2vw,25px);line-height:1.2;margin-top:5px;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}.dsh-sdd-workload-list{display:flex;flex-direction:column;gap:5px;max-height:86px;margin-top:8px;overflow:auto}.dsh-sdd-workload-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:center;font-size:12px}.dsh-sdd-workload-row span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.dsh-sdd-workload-row strong{font-variant-numeric:tabular-nums;white-space:nowrap}.dsh-sdd-progress{height:8px;background:var(--dsw-alias-interactive-bg-hover,#e5e5e5);border-radius:999px;overflow:hidden;margin-top:7px}.dsh-sdd-progress span{display:block;height:100%;background:var(--dsw-alias-brand-primary,#3b63f3)}.dsh-sdd-stage-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px}.dsh-sdd-stage-grid .dsh-sdd-stat{padding:12px}.dsh-sdd-stage-head{display:flex;align-items:flex-start;justify-content:space-between;gap:6px}.dsh-sdd-stage-head .dsh-sdd-badge{flex:none}.dsh-sdd-scroll-list{max-height:340px;overflow:auto;overscroll-behavior:contain;padding-right:3px}.dsh-sdd-dashboard-columns{align-items:start}.dsh-sdd-dashboard-columns>.dsh-sdd-card{max-height:430px;overflow:hidden}.dsh-sdd-dashboard-columns .dsh-sdd-checks{max-height:340px;overflow:auto;padding-right:4px}.dsh-sdd-trace-list{max-height:420px;overflow:auto;overscroll-behavior:contain}.dsh-sdd-checks{margin:7px 0 0;padding-left:17px;font-size:12px;overflow-wrap:anywhere}.dsh-sdd-checks li+li{margin-top:5px}.dsh-sdd-checks li[data-fail]{color:#c53030}.dsh-sdd-checks li[data-pass]{color:#238636}.dsh-sdd-wide{grid-column:1/-1}@media(max-width:1000px){.dsh-sdd-stats{grid-template-columns:repeat(3,minmax(0,1fr))}.dsh-sdd-stage-grid{grid-template-columns:repeat(3,minmax(0,1fr))}}@media(max-width:700px){.dsh-sdd-stats,.dsh-sdd-stage-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.dsh-sdd-page{padding:14px}.dsh-sdd-header{gap:8px}.dsh-sdd-header h1{width:100%;order:-1}.dsh-sdd-header .dsh-sdd-select{flex:1 1 220px}}@media(max-width:430px){.dsh-sdd-stats,.dsh-sdd-stage-grid{grid-template-columns:minmax(0,1fr)}}
@@ -251,11 +251,20 @@ class SddWorkbench {
     const gitNote = projectGit?.isRepository !== true ? '当前工作空间尚未初始化 Git 仓库'
       : !projectGit.exactWorkspaceRoot ? '当前工作空间不是 Git 仓库根目录'
         : `${projectGit.branch ?? 'detached HEAD'} · ${projectGit.changedFiles} 个本地变更 · ahead ${projectGit.ahead} / behind ${projectGit.behind}${projectGit.keyConflicts.length ? ` · 编号冲突 ${projectGit.keyConflicts.length}` : ''}`
-    return `<div class="dsh-sdd-grid" style="margin-bottom:14px"><section class="dsh-sdd-card"><h2>需求与缺陷管理</h2><p class="dsh-sdd-muted">从这里导入需求包或需要独立推进的缺陷；开发中的需求缺陷请进入对应需求后添加。</p><div class="dsh-sdd-actions"><button class="dsh-sdd-button primary" data-action="import-requirement">获取并预览需求包</button><button class="dsh-sdd-button" data-action="import-standalone-defect">获取并预览独立缺陷</button></div></section><section class="dsh-sdd-card"><h2>项目仓库与设置</h2><p class="dsh-sdd-muted">${escapeHtml(gitNote)}。已登记 ${repositoryCount} 个目标代码仓库；协作远程、同步和仓库规则统一在项目设置维护。</p><div class="dsh-sdd-actions"><button class="dsh-sdd-button" data-action="open-settings">打开项目设置</button></div></section></div><div class="dsh-sdd-stats">${stat('阶段完成度', `${dashboard.overallCompletion}%`, '全部适用阶段的已验收占比')}${stat('需求包', String(dashboard.requirements.packages), `${dashboard.workItems.requirements} 个需求工作单元`)}${stat('独立交付单元', String(dashboard.workItems.total), `需求 ${dashboard.workItems.requirements} · 缺陷 ${dashboard.workItems.standaloneDefects}`)}${stat('缺陷', String(dashboard.defects.total), `独立 ${dashboard.defects.standalone} · 需求内 ${dashboard.defects.attached}`)}${stat('待处理变化', String(dashboard.workItems.pendingChanges), '来源变更、移除或关联缺陷变化')}${stat('交付件', String(dashboard.artifacts.total), `草稿 ${dashboard.artifacts.drafts} · 已验收 ${dashboard.artifacts.accepted}`)}${stat('代码空间', String(dashboard.development.workspaces), `变更文件 ${dashboard.development.changedFiles} · 提交 ${dashboard.development.commits}`)}${stat('测试证据', String(dashboard.development.passingTests + dashboard.development.failingTests), `通过 ${dashboard.development.passingTests} · 失败 ${dashboard.development.failingTests}`)}</div>
+    return `<div class="dsh-sdd-grid" style="margin-bottom:14px"><section class="dsh-sdd-card"><h2>需求与缺陷管理</h2><p class="dsh-sdd-muted">从这里导入需求包或需要独立推进的缺陷；开发中的需求缺陷请进入对应需求后添加。</p><div class="dsh-sdd-actions"><button class="dsh-sdd-button primary" data-action="import-requirement">获取并预览需求包</button><button class="dsh-sdd-button" data-action="import-standalone-defect">获取并预览独立缺陷</button></div></section><section class="dsh-sdd-card"><h2>项目仓库与设置</h2><p class="dsh-sdd-muted">${escapeHtml(gitNote)}。已登记 ${repositoryCount} 个目标代码仓库；协作远程、同步和仓库规则统一在项目设置维护。</p><div class="dsh-sdd-actions"><button class="dsh-sdd-button" data-action="open-settings">打开项目设置</button></div></section></div>${this.productKnowledgeHtml(snapshot)}<div class="dsh-sdd-stats">${stat('阶段完成度', `${dashboard.overallCompletion}%`, '全部适用阶段的已验收占比')}${stat('需求包', String(dashboard.requirements.packages), `${dashboard.workItems.requirements} 个需求工作单元`)}${stat('独立交付单元', String(dashboard.workItems.total), `需求 ${dashboard.workItems.requirements} · 缺陷 ${dashboard.workItems.standaloneDefects}`)}${stat('缺陷', String(dashboard.defects.total), `独立 ${dashboard.defects.standalone} · 需求内 ${dashboard.defects.attached}`)}${stat('待处理变化', String(dashboard.workItems.pendingChanges), '来源变更、移除或关联缺陷变化')}${stat('交付件', String(dashboard.artifacts.total), `草稿 ${dashboard.artifacts.drafts} · 已验收 ${dashboard.artifacts.accepted}`)}${stat('代码空间', String(dashboard.development.workspaces), `变更文件 ${dashboard.development.changedFiles} · 提交 ${dashboard.development.commits}`)}${stat('测试证据', String(dashboard.development.passingTests + dashboard.development.failingTests), `通过 ${dashboard.development.passingTests} · 失败 ${dashboard.development.failingTests}`)}</div>
       <div class="dsh-sdd-dashboard-overview">${this.defectOverviewHtml(snapshot)}${this.workloadOverviewHtml(snapshot)}</div>
       <div class="dsh-sdd-chart-grid">${this.stageFlowHtml(snapshot)}${this.burnupHtml(dashboard.burnup)}</div>
       ${this.deliveryMatrixHtml(snapshot)}
       <div class="dsh-sdd-grid dsh-sdd-dashboard-columns" style="margin-top:14px"><section class="dsh-sdd-card"><h2>质量与追踪</h2><p>来源追踪覆盖率：<strong>${dashboard.traceability}%</strong></p>${dashboard.blockers.length === 0 ? '<div class="dsh-sdd-empty">当前没有结构化阻塞项</div>' : `<ul class="dsh-sdd-checks">${dashboard.blockers.map(item => `<li data-fail>${escapeHtml(item)}</li>`).join('')}</ul>`}</section><section class="dsh-sdd-card"><h2>最近活动</h2>${dashboard.recentEvents.length === 0 ? '<div class="dsh-sdd-empty">暂无事件</div>' : `<div class="dsh-sdd-list dsh-sdd-scroll-list">${dashboard.recentEvents.slice(0, 10).map(event => `<div class="dsh-sdd-row"><span></span><span><strong>${escapeHtml(event.subject)}</strong><span class="dsh-sdd-muted">${escapeHtml(event.type)} · ${escapeHtml(event.time)}</span></span></div>`).join('')}</div>`}</section></div>${this.traceabilityHtml(snapshot)}`
+  }
+
+  private productKnowledgeHtml(snapshot: ProjectSnapshot): string {
+    const product = snapshot.productKnowledge
+    const features = product?.features ?? []
+    const deliveries = product?.deliveries ?? []
+    const featureRows = features.slice(0, 5).map(feature => `<div class="dsh-sdd-row"><span></span><span><strong>${escapeHtml(feature.key)} · ${escapeHtml(feature.name)}</strong><span class="dsh-sdd-muted">v${escapeHtml(feature.currentVersion)} · ${feature.status === 'active' ? '当前有效' : '已废弃'} · ${feature.history.length} 次生命周期记录</span></span><span><button class="dsh-sdd-button" data-product-file="${escapeHtml(`${feature.relativeDirectory}/feature.md`)}" data-product-title="${escapeHtml(`${feature.key} · ${feature.name}`)}">查看特性</button></span></div>`).join('')
+    const deliveryRows = deliveries.slice(0, 5).map(delivery => `<div class="dsh-sdd-row"><span></span><span><strong>${escapeHtml(delivery.key)} · ${escapeHtml(delivery.workItemKey)} ${escapeHtml(delivery.title)}</strong><span class="dsh-sdd-muted">${escapeHtml(delivery.archivedAt)} · 特性 ${escapeHtml(delivery.featureRefs.map(item => `${item.key} v${item.version}`).join('、'))}</span></span><span><button class="dsh-sdd-button" data-product-file="${escapeHtml(`${delivery.relativeDirectory}/${delivery.reportPath}`)}" data-product-title="转测报告 · ${escapeHtml(delivery.key)}">报告</button> <button class="dsh-sdd-button" data-product-file="${escapeHtml(`${delivery.relativeDirectory}/${delivery.emailPath}`)}" data-product-title="转测邮件 · ${escapeHtml(delivery.key)}">邮件稿</button></span></div>`).join('')
+    return `<section class="dsh-sdd-card" style="margin-bottom:14px"><h2>产品积累</h2><p class="dsh-sdd-muted">需求完成后沉淀为项目根目录中的长期产品资产；过程数据仍保留在 .sdd 中。</p><div class="dsh-sdd-actions"><button class="dsh-sdd-button" data-product-file="${escapeHtml(product?.catalogPath ?? 'product/feature-catalog.md')}" data-product-title="产品特性目录"${features.length === 0 ? ' disabled' : ''}>产品特性目录</button><button class="dsh-sdd-button primary" data-product-file="${escapeHtml(product?.specificationPath ?? 'product/product-specification.md')}" data-product-title="产品当前规格"${features.length === 0 ? ' disabled' : ''}>产品当前规格</button></div><div class="dsh-sdd-grid" style="margin-top:12px"><div><strong>当前特性（${features.length}）</strong><div class="dsh-sdd-list" style="margin-top:8px">${featureRows || '<div class="dsh-sdd-empty">完成首个需求交付后开始积累</div>'}</div></div><div><strong>交付归档（${deliveries.length}）</strong><div class="dsh-sdd-list" style="margin-top:8px">${deliveryRows || '<div class="dsh-sdd-empty">尚无已归档交付</div>'}</div></div></div></section>`
   }
 
   private defectOverviewHtml(snapshot: ProjectSnapshot): string {
@@ -365,7 +374,7 @@ class SddWorkbench {
       ? `下一步：创建“${deliverableName}”草稿，作为 AI 本阶段输出的固定文件。`
       : target === undefined ? `下一步：选择一个 ${deliverableName} 草稿。` : `已选择 ${target.key}，可以开始阶段对话。`
     const applicability = workItem?.stageApplicability?.[stage]
-    const applicabilityHtml = workItem === undefined || stage === 'requirements' ? '' : applicability?.status === 'not-applicable'
+    let applicabilityHtml = workItem === undefined || stage === 'requirements' ? '' : applicability?.status === 'not-applicable'
       ? `<div class="dsh-sdd-card" style="margin-bottom:14px"><strong>本需求已将${escapeHtml(STAGES.find(item => item.id === stage)!.label)}标记为不适用</strong><p class="dsh-sdd-muted">${escapeHtml(applicability.reason || '未填写说明')}</p><button class="dsh-sdd-button" data-action="restore-stage">恢复为可用阶段</button></div>`
       : current.length === 0 ? `<div class="dsh-sdd-actions" style="margin-bottom:14px"><button class="dsh-sdd-button" data-action="skip-stage">本需求不需要${escapeHtml(STAGES.find(item => item.id === stage)!.label)}</button></div>` : ''
     const selectedArtifacts = accepted.filter(item => this.state.selected.has(item.uid))
@@ -382,7 +391,42 @@ class SddWorkbench {
     const visible = current.filter(item => visibleUids.has(item.uid))
     const history = current.filter(item => !visibleUids.has(item.uid)).sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
     const outputList = current.length === 0 ? `<div class="dsh-sdd-empty">尚未创建${escapeHtml(deliverableName)}</div>` : `<div class="dsh-sdd-list dsh-sdd-bounded-list">${visible.map(item => this.outputRow(item, snapshot)).join('')}</div>${history.length === 0 ? '' : `<details class="dsh-sdd-history"><summary>历史版本（${history.length}）</summary><div class="dsh-sdd-list dsh-sdd-bounded-list">${history.map(item => this.outputRow(item, snapshot)).join('')}</div></details>`}`
-    return `${change}${noWorkItem}${attachedDefectsHtml}${applicabilityHtml}${this.stageSettingsHtml(snapshot, stage)}<div class="dsh-sdd-grid"><section class="dsh-sdd-card"><h2>本阶段输入材料（${selectedArtifacts.length + selectedSources.length}）</h2><p class="dsh-sdd-muted">${target === undefined ? '创建草稿前选择输入；默认推荐当前来源、需求内缺陷和每个上游阶段的最新已验收版本。' : `输入已固定在 ${target.key} v${target.version} 的 manifest.yaml 中，调整上游输入需要创建修订。`}</p><div class="dsh-sdd-list dsh-sdd-bounded-list dsh-sdd-input-summary">${selectedRows || '<div class="dsh-sdd-empty">尚未选择输入材料</div>'}</div>${codeReferenceHtml}<div class="dsh-sdd-actions"><button class="dsh-sdd-button" data-action="select-inputs"${target === undefined ? '' : ' disabled'}>${target === undefined ? '选择/调整输入' : '输入已固定'}</button>${importAction}</div></section><section class="dsh-sdd-card"><h2>${escapeHtml(deliverableName)}</h2><p class="dsh-sdd-muted">当前处理中和最近已验收版本优先展示，其余版本收纳到历史记录。</p>${outputList}<div class="dsh-sdd-muted" style="margin-top:12px">${escapeHtml(nextStep)}</div><div class="dsh-sdd-actions"><button class="dsh-sdd-button" data-action="view-template">查看${escapeHtml(deliverableName)}模板</button><button class="dsh-sdd-button${target === undefined ? ' primary' : ''}" data-action="draft"${snapshot.workItems.some(item => item.executionMode !== 'attached') && (workItem === undefined || applicability?.status === 'not-applicable') ? ' disabled' : ''}>创建${escapeHtml(deliverableName)}草稿</button><button class="dsh-sdd-button primary" data-action="conversation"${target === undefined ? ' disabled title="请先创建或选择本阶段交付件草稿"' : ''}>开始阶段对话</button></div></section>${stage === 'development' ? this.developmentHtml(snapshot) : ''}</div>`
+    return `${change}${noWorkItem}${attachedDefectsHtml}${applicabilityHtml}${this.stageSettingsHtml(snapshot, stage)}<div class="dsh-sdd-grid"><section class="dsh-sdd-card"><h2>本阶段输入材料（${selectedArtifacts.length + selectedSources.length}）</h2><p class="dsh-sdd-muted">${target === undefined ? '创建草稿前选择输入；默认推荐当前来源、需求内缺陷和每个上游阶段的最新已验收版本。' : `输入已固定在 ${target.key} v${target.version} 的 manifest.yaml 中，调整上游输入需要创建修订。`}</p><div class="dsh-sdd-list dsh-sdd-bounded-list dsh-sdd-input-summary">${selectedRows || '<div class="dsh-sdd-empty">尚未选择输入材料</div>'}</div>${codeReferenceHtml}<div class="dsh-sdd-actions"><button class="dsh-sdd-button" data-action="select-inputs"${target === undefined ? '' : ' disabled'}>${target === undefined ? '选择/调整输入' : '输入已固定'}</button>${importAction}</div></section><section class="dsh-sdd-card"><h2>${escapeHtml(deliverableName)}</h2><p class="dsh-sdd-muted">当前处理中和最近已验收版本优先展示，其余版本收纳到历史记录。</p>${outputList}<div class="dsh-sdd-muted" style="margin-top:12px">${escapeHtml(nextStep)}</div><div class="dsh-sdd-actions"><button class="dsh-sdd-button" data-action="view-template">查看${escapeHtml(deliverableName)}模板</button><button class="dsh-sdd-button${target === undefined ? ' primary' : ''}" data-action="draft"${snapshot.workItems.some(item => item.executionMode !== 'attached') && (workItem === undefined || applicability?.status === 'not-applicable') ? ' disabled' : ''}>创建${escapeHtml(deliverableName)}草稿</button><button class="dsh-sdd-button primary" data-action="conversation"${target === undefined ? ' disabled title="请先创建或选择本阶段交付件草稿"' : ''}>开始阶段对话</button></div></section>${stage === 'development' ? `${this.developmentHtml(snapshot)}${this.deliveryCloseoutHtml(snapshot)}` : ''}</div>`
+  }
+
+  private deliveryCloseoutHtml(snapshot: ProjectSnapshot): string {
+    const workItem = snapshot.workItems.find(item => item.uid === this.state.workItemUid)
+    if (workItem === undefined || workItem.executionMode === 'attached') return ''
+    const archive = snapshot.productKnowledge?.deliveries.find(item => item.workItemUid === workItem.uid)
+    if (archive !== undefined) return `<section class="dsh-sdd-card dsh-sdd-wide"><h2>需求交付已归档</h2><p class="dsh-sdd-muted">${escapeHtml(archive.key)} 已沉淀到 ${escapeHtml(archive.featureRefs.map(item => `${item.key} v${item.version}`).join('、'))}，历史阶段成果和转测材料已冻结。</p><div class="dsh-sdd-actions"><button class="dsh-sdd-button primary" data-product-file="${escapeHtml(`${archive.relativeDirectory}/${archive.reportPath}`)}" data-product-title="转测报告 · ${escapeHtml(archive.key)}">查看转测报告</button><button class="dsh-sdd-button" data-product-file="${escapeHtml(`${archive.relativeDirectory}/${archive.emailPath}`)}" data-product-title="转测邮件 · ${escapeHtml(archive.key)}">查看邮件稿</button></div></section>`
+    const accepted = snapshot.artifacts.some(item => item.workItemUid === workItem.uid && item.stage === 'development' && item.status === 'accepted')
+    const drafts = snapshot.artifacts.some(item => item.workItemUid === workItem.uid && (item.status === 'draft' || item.status === 'in-review'))
+    const ready = accepted && !drafts && workItem.status === 'active'
+    const note = !accepted ? '开发测试交付记录验收后才能归档。' : drafts ? '请先验收或删除仍在处理的草稿。' : workItem.status !== 'active' ? '请先处理外部来源变化。' : '归档将冻结历史交付件，更新产品特性和当前规格，并生成转测报告及邮件稿。'
+    return `<section class="dsh-sdd-card dsh-sdd-wide"><h2>需求交付收口</h2><p class="dsh-sdd-muted">${escapeHtml(note)}</p><button class="dsh-sdd-button primary" data-action="close-delivery"${ready ? '' : ' disabled'}>归档并沉淀到产品</button></section>`
+  }
+
+  private openSpecCardHtml(snapshot: ProjectSnapshot, stage: StageId): string {
+    const workItem = snapshot.workItems.find(item => item.uid === this.state.workItemUid)
+    if (workItem === undefined) return ''
+    const focus: Record<StageId, string> = {
+      requirements: '把目标、范围和验收场景沉淀到 proposal / specs',
+      prototype: '把用户流程、交互状态和原型约束沉淀到 design',
+      architecture: '把系统边界、接口、数据和关键决策沉淀到 design',
+      specification: '把可实现、可验证的规则沉淀到 specs / tasks',
+      development: '按照 tasks 实施，持续同步代码与验证结果',
+    }
+    if (workItem.openSpec?.enabled !== true) return `<section class="dsh-sdd-card" style="margin-bottom:14px"><h2>OpenSpec · 跨阶段规格</h2><p class="dsh-sdd-muted">启用后，AI 会在每轮对话中同时维护阶段成果和 OpenSpec，您不需要记命令或重复转述结论。本阶段重点：${escapeHtml(focus[stage])}。</p><div class="dsh-sdd-actions"><button class="dsh-sdd-button primary" data-action="enable-openspec">为本需求启用 OpenSpec</button></div></section>`
+    const validation = snapshot.openSpecValidation[workItem.uid]
+    const ready = validation?.status === 'valid'
+    const artifacts = validation?.artifacts?.map(item => `<span class="dsh-sdd-badge">${escapeHtml(item.id)} · ${escapeHtml(item.status)}</span>`).join('') ?? ''
+    const editableFiles = (validation?.files ?? []).filter(path => /^(?:config\.ya?ml|schemas\/|changes\/)/.test(path))
+    const files = editableFiles.length === 0 ? '' : `<details class="dsh-sdd-history"><summary>管理配置、Schema 与 Change 文件（${editableFiles.length}）</summary><div class="dsh-sdd-list dsh-sdd-bounded-list" style="margin-top:8px">${editableFiles.map(path => `<div class="dsh-sdd-row"><span></span><span><strong>${escapeHtml(path)}</strong></span><span><button class="dsh-sdd-button" data-openspec-edit="${escapeHtml(path)}">查看 / 编辑</button></span></div>`).join('')}</div></details>`
+    const nextAction = validation?.canInstall === true ? '<button class="dsh-sdd-button primary" data-action="install-openspec">安装 OpenSpec CLI</button>'
+      : validation?.canInitialize === true || validation === undefined ? '<button class="dsh-sdd-button primary" data-action="initialize-managed-openspec">初始化规划工作区</button>'
+        : ready && validation.changeExists !== true ? '<button class="dsh-sdd-button primary" data-action="create-managed-openspec-change">创建当前需求 Change</button>'
+          : ''
+    return `<section class="dsh-sdd-card" style="margin-bottom:14px"><h2>OpenSpec · ${escapeHtml(workItem.key)}</h2><p class="dsh-sdd-muted"><strong>${escapeHtml(validation?.message ?? '正在检查')}</strong><br>当前位置：${validation?.workspace === 'development' ? '隔离开发工作区' : '项目规划工作区'}${validation?.relativeRoot ? ` · ${escapeHtml(validation.relativeRoot)}` : ''}<br>本阶段重点：${escapeHtml(focus[stage])}。AI 会同步更新，无需您重复输入 OpenSpec 命令。</p>${artifacts ? `<div>${artifacts}</div>` : ''}${files}<div class="dsh-sdd-actions">${nextAction}${ready ? '<button class="dsh-sdd-button" data-action="validate-managed-openspec">校验全部规格</button><button class="dsh-sdd-button" data-action="fork-managed-openspec-schema">定制 Schema</button><button class="dsh-sdd-button" data-action="open-managed-openspec">打开工作区</button>' : ''}<button class="dsh-sdd-button" data-action="disable-openspec">关闭关联</button></div></section>`
   }
 
   private stageSettingsHtml(snapshot: ProjectSnapshot, stage: StageId): string {
@@ -390,31 +434,17 @@ class SddWorkbench {
     if (workItem === undefined) return ''
     const scope = workItem.repositoryScope?.join('、') || '未确认'
     const targets = workItem.developmentTargets?.join('、') || '未确认'
-    const openSpecValidation = snapshot.openSpecValidation[workItem.uid]
-    const openSpecState = openSpecValidation?.status === 'valid' ? openSpecValidation.message
-      : openSpecValidation?.status === 'invalid' ? `验证失败：${openSpecValidation.message}`
-        : openSpecValidation?.status === 'pending' ? '已配置，待开发空间验证' : '已配置，待验证'
-    const openSpec = workItem.openSpec?.enabled === true ? `${workItem.openSpec.repositoryId}:${workItem.openSpec.path} · ${openSpecState}` : '本需求未配置'
     if (stage === 'requirements' || stage === 'prototype') return ''
     const repositories = snapshot.project?.development.repositories ?? []
-    const openSpecActions = stage === 'development' && workItem.openSpec?.enabled === true ? [
-      openSpecValidation?.canInstall === true ? '<button class="dsh-sdd-button" data-action="install-openspec">安装 OpenSpec CLI</button>' : '',
-      openSpecValidation?.canInitialize === true ? '<button class="dsh-sdd-button" data-action="initialize-openspec">使用 OpenSpec CLI 初始化</button>' : '',
-      '<button class="dsh-sdd-button" data-action="disable-openspec">不使用 OpenSpec</button>',
-    ].filter(Boolean).join('') : ''
-    const openSpecReadyActions = stage === 'development' && openSpecValidation?.status === 'valid' ? [
-      '<button class="dsh-sdd-button" data-action="view-openspec-templates">查看模板位置</button>',
-      openSpecValidation.schema !== undefined && openSpecValidation.schema !== 'spec-driven' ? '<button class="dsh-sdd-button" data-action="open-openspec-schema">打开 Schema 目录</button>' : '',
-      openSpecValidation.changeExists === true ? '' : '<button class="dsh-sdd-button" data-action="fork-openspec-schema">复制官方 Schema 定制</button>',
-      openSpecValidation.changeExists === true ? '' : '<button class="dsh-sdd-button primary" data-action="create-openspec-change">创建当前需求 Change</button>',
-    ].filter(Boolean).join('') : ''
+    const openSpecActions = ''
+    const openSpecReadyActions = ''
     const description = stage === 'architecture' ? '系统设计角色确认本需求涉及的代码仓库范围。项目仓库目录和默认基线请在“项目设置”维护。'
       : stage === 'specification' ? '规格设计角色在已确认仓库范围内明确实际修改仓库和具体开发目标。'
-        : '开发阶段只执行最终开发配置；跳过前置阶段时，可以在这里补齐缺失的仓库范围和开发目标。'
+        : '开发阶段只执行最终开发配置；跳过前置阶段时，可以在这里补齐缺失的仓库范围和开发目标。规划方法由插件在后台自动准备。'
     const buttons = stage === 'architecture'
       ? `<button class="dsh-sdd-button primary" data-action="configure-scope"${repositories.length === 0 ? ' disabled' : ''}>确认仓库范围</button>`
-      : `<button class="dsh-sdd-button" data-action="configure-scope"${repositories.length === 0 ? ' disabled' : ''}>${workItem.repositoryScope?.length ? '调整仓库范围' : '补充仓库范围'}</button><button class="dsh-sdd-button primary" data-action="configure-targets"${workItem.repositoryScope?.length ? '' : ' disabled'}>配置开发目标${stage === 'development' ? '与 OpenSpec' : ''}</button>${stage === 'development' ? `${openSpecActions}${openSpecReadyActions}` : ''}`
-    return `<section class="dsh-sdd-card" style="margin-bottom:14px"><h2>${stage === 'architecture' ? '仓库范围' : stage === 'specification' ? '开发目标' : '开发执行设置'}</h2><p class="dsh-sdd-muted">${description}</p><p class="dsh-sdd-muted">仓库范围：${escapeHtml(scope)}　开发目标：${escapeHtml(targets)}${stage === 'development' ? `　OpenSpec：${escapeHtml(openSpec)}` : ''}</p><div class="dsh-sdd-actions">${buttons}</div></section>`
+      : `<button class="dsh-sdd-button" data-action="configure-scope"${repositories.length === 0 ? ' disabled' : ''}>${workItem.repositoryScope?.length ? '调整仓库范围' : '补充仓库范围'}</button><button class="dsh-sdd-button primary" data-action="configure-targets"${workItem.repositoryScope?.length ? '' : ' disabled'}>配置开发目标</button>${stage === 'development' ? `${openSpecActions}${openSpecReadyActions}` : ''}`
+    return `<section class="dsh-sdd-card" style="margin-bottom:14px"><h2>${stage === 'architecture' ? '仓库范围' : stage === 'specification' ? '开发目标' : '开发执行设置'}</h2><p class="dsh-sdd-muted">${description}</p><p class="dsh-sdd-muted">仓库范围：${escapeHtml(scope)}　开发目标：${escapeHtml(targets)}</p><div class="dsh-sdd-actions">${buttons}</div></section>`
   }
 
   private inputSummaryRow(item: ArtifactSummary): string { return `<div class="dsh-sdd-row"><span></span><span><strong>${escapeHtml(item.key)} · ${escapeHtml(item.title)}</strong><span class="dsh-sdd-muted">${escapeHtml(STAGES.find(stage => stage.id === item.stage)?.label ?? item.stage)} · 固定版本 v${escapeHtml(item.version)}</span></span><span><span class="dsh-sdd-badge">已验收</span><button class="dsh-sdd-button" data-preview-artifact="${escapeHtml(item.uid)}">查看交付包</button></span></div>` }
@@ -455,6 +485,8 @@ class SddWorkbench {
     root.querySelector<HTMLSelectElement>('[data-action="work-item"]')?.addEventListener('change', event => { this.state.workItemUid = (event.currentTarget as HTMLSelectElement).value; this.state.targetArtifactUid = undefined; this.state.selected = this.state.snapshot !== undefined && stageMenu(this.state.menu) ? this.defaultInputs(this.state.snapshot, this.state.menu) : new Set(); this.render() })
     root.querySelector<HTMLElement>('[data-action="initialize"]')?.addEventListener('click', () => { void this.mutate({ kind: 'initialize', workspaceId: this.state.workspaceId! }) }); root.querySelector<HTMLElement>('[data-action="draft"]')?.addEventListener('click', () => { void this.createDraft() }); root.querySelector<HTMLElement>('[data-action="import-requirement"]')?.addEventListener('click', () => { void this.importSource('requirement') }); root.querySelector<HTMLElement>('[data-action="import-standalone-defect"]')?.addEventListener('click', () => { void this.importSource('defect') }); root.querySelector<HTMLElement>('[data-action="import-attached-defect"]')?.addEventListener('click', () => { void this.importSource('defect', this.state.workItemUid) }); root.querySelector<HTMLElement>('[data-action="conversation"]')?.addEventListener('click', () => { void this.startConversation() })
     root.querySelector<HTMLElement>('[data-action="open-settings"]')?.addEventListener('click', () => this.open('settings'))
+    root.querySelector<HTMLElement>('[data-action="close-delivery"]')?.addEventListener('click', () => { void this.closeDelivery() })
+    root.querySelectorAll<HTMLButtonElement>('[data-product-file]').forEach(button => button.addEventListener('click', () => { void this.showProductFile(button.dataset.productFile!, button.dataset.productTitle ?? '产品资料') }))
     root.querySelector<HTMLElement>('[data-action="apply-dashboard-filter"]')?.addEventListener('click', () => {
       this.state.dashboardQuery = root.querySelector<HTMLInputElement>('[data-dashboard-query]')?.value ?? ''
       this.state.dashboardKind = (root.querySelector<HTMLSelectElement>('[data-dashboard-kind]')?.value ?? 'all') as RuntimeState['dashboardKind']
@@ -480,6 +512,13 @@ class SddWorkbench {
     root.querySelector<HTMLElement>('[data-action="skip-stage"]')?.addEventListener('click', () => { void this.setStageApplicability('not-applicable') })
     root.querySelector<HTMLElement>('[data-action="restore-stage"]')?.addEventListener('click', () => { void this.setStageApplicability('applicable') })
     root.querySelector<HTMLElement>('[data-action="install-openspec"]')?.addEventListener('click', () => { void this.installOpenSpec() })
+    root.querySelector<HTMLElement>('[data-action="enable-openspec"]')?.addEventListener('click', () => { void this.enableOpenSpec() })
+    root.querySelector<HTMLElement>('[data-action="initialize-managed-openspec"]')?.addEventListener('click', () => { void this.initializeManagedOpenSpec() })
+    root.querySelector<HTMLElement>('[data-action="create-managed-openspec-change"]')?.addEventListener('click', () => { void this.createManagedOpenSpecChange() })
+    root.querySelector<HTMLElement>('[data-action="fork-managed-openspec-schema"]')?.addEventListener('click', () => { void this.forkManagedOpenSpecSchema() })
+    root.querySelector<HTMLElement>('[data-action="validate-managed-openspec"]')?.addEventListener('click', () => { if (this.state.workItemUid) void this.mutate({ kind: 'openspec-validate', workspaceId: this.state.workspaceId!, workItemUid: this.state.workItemUid }) })
+    root.querySelector<HTMLElement>('[data-action="open-managed-openspec"]')?.addEventListener('click', () => { void this.openManagedOpenSpec() })
+    root.querySelectorAll<HTMLButtonElement>('[data-openspec-edit]').forEach(button => button.addEventListener('click', () => { void this.editOpenSpecFile(button.dataset.openspecEdit!) }))
     root.querySelector<HTMLElement>('[data-action="initialize-openspec"]')?.addEventListener('click', () => { void this.initializeOpenSpec() })
     root.querySelector<HTMLElement>('[data-action="view-openspec-templates"]')?.addEventListener('click', () => { void this.viewOpenSpecTemplates() })
     root.querySelector<HTMLElement>('[data-action="open-openspec-schema"]')?.addEventListener('click', () => { void this.openOpenSpecSchema() })
@@ -530,6 +569,48 @@ class SddWorkbench {
       backdrop.querySelectorAll<HTMLButtonElement>('[data-template-open]').forEach(button => button.addEventListener('click', () => { void this.openTemplatePath(template, button.dataset.templateOpen as 'directory' | 'config' | 'content') }))
       const close = () => backdrop.remove(); backdrop.querySelector<HTMLElement>('[data-template-close]')!.addEventListener('click', close); backdrop.addEventListener('click', event => { if (event.target === backdrop) close() })
     } catch (error) { this.state.error = error instanceof Error ? error.message : String(error); this.render() }
+  }
+
+  private async showProductFile(path: string, title: string): Promise<void> {
+    try {
+      const response = await call({ kind: 'read-product-file', workspaceId: this.state.workspaceId!, path })
+      if (!response.ok) throw new Error(response.error)
+      if (!('productFile' in response)) throw new Error('Host returned an unexpected product file')
+      const backdrop = document.createElement('div'); backdrop.className = 'dsh-sdd-modal-backdrop'
+      const html = DOMPurify.sanitize(marked.parse(response.productFile.content) as string)
+      backdrop.innerHTML = `<section class="dsh-sdd-modal dsh-sdd-template-modal" role="dialog" aria-modal="true" aria-label="${escapeHtml(title)}"><header class="dsh-sdd-modal-header"><h2>${escapeHtml(title)}</h2><p class="dsh-sdd-muted">${escapeHtml(response.productFile.path)}</p></header><div class="dsh-sdd-modal-body"><article class="dsh-sdd-markdown">${html}</article></div><footer class="dsh-sdd-modal-footer"><button class="dsh-sdd-button primary" type="button" data-product-close>关闭</button></footer></section>`
+      this.container!.appendChild(backdrop)
+      const close = () => backdrop.remove(); backdrop.querySelector<HTMLElement>('[data-product-close]')!.addEventListener('click', close); backdrop.addEventListener('click', event => { if (event.target === backdrop) close() })
+    } catch (error) { this.state.error = error instanceof Error ? error.message : String(error); this.render() }
+  }
+
+  private async closeDelivery(): Promise<void> {
+    const snapshot = this.state.snapshot
+    const workItem = snapshot?.workItems.find(item => item.uid === this.state.workItemUid)
+    if (snapshot === undefined || workItem === undefined) return
+    const features = snapshot.productKnowledge?.features ?? []
+    const featureOptions = [{ value: '__new__', label: '创建新的产品特性' }, ...features.filter(item => item.status === 'active').map(item => ({ value: item.uid, label: `${item.key} · ${item.name} · v${item.currentVersion}` }))]
+    const values = await this.openForm({
+      title: `交付收口 · ${workItem.key}`,
+      description: '确认这次需求创建或改变的主要产品特性。系统会冻结全部历史成果、更新产品当前规格，并生成转测报告和邮件稿。',
+      submitLabel: '确认归档并沉淀',
+      fields: [
+        { name: 'feature', label: '沉淀到哪个产品特性', type: 'select', required: true, value: '__new__', options: featureOptions },
+        { name: 'featureName', label: '新特性名称', type: 'text', required: true, value: workItem.title, showWhen: { field: 'feature', value: '__new__' } },
+        { name: 'changeType', label: '本次对特性的影响', type: 'select', required: true, value: 'created', options: [{ value: 'created', label: '创建新特性' }, { value: 'updated', label: '修改现有特性' }, { value: 'deprecated', label: '废弃现有特性' }] },
+        { name: 'summary', label: '交付后产品当前具备的能力', type: 'textarea', required: true, value: workItem.title, placeholder: '用面向产品的语言描述交付后的当前能力，不要只描述开发过程。' },
+      ],
+    })
+    if (values === undefined) return
+    const selected = String(values.feature)
+    const existing = features.find(item => item.uid === selected)
+    const selectedChangeType = String(values.changeType)
+    const changeType = existing === undefined ? 'created' : selectedChangeType === 'deprecated' ? 'deprecated' : 'updated'
+    await this.mutate({
+      kind: 'close-delivery', workspaceId: this.state.workspaceId!, workItemUid: workItem.uid,
+      ...(existing === undefined ? {} : { featureUid: existing.uid }), featureName: existing?.name ?? String(values.featureName),
+      changeType, summary: String(values.summary),
+    })
   }
 
   private async openTemplatePath(template: StageTemplatePreview, target: 'directory' | 'config' | 'content'): Promise<void> {
@@ -704,9 +785,9 @@ class SddWorkbench {
     if (snapshot?.project === undefined || workItem === undefined) return
     const scope = snapshot.project.development.repositories.filter(repository => workItem.repositoryScope?.includes(repository.id))
     if (scope.length === 0) { this.state.error = '请先在本需求开发设置中勾选并保存代码仓库范围'; return this.render() }
-    const configureOpenSpec = this.state.menu === 'development'
+    const configureOpenSpec = false
     const values = await this.openForm({
-      title: `配置开发目标 · ${workItem.key}`, description: configureOpenSpec ? '选择本需求实际修改的仓库，并填写具体改动目标；开发阶段还可以选择是否使用 OpenSpec。' : '选择本需求实际修改的仓库，并为每个选中的仓库填写具体、可交付的改动目标。', submitLabel: '保存开发设置',
+      title: `配置开发目标 · ${workItem.key}`, description: '选择本需求实际修改的仓库，并为每个选中的仓库填写具体、可交付的改动目标。', submitLabel: '保存开发设置',
       fields: [
         ...scope.flatMap(repository => [
           { name: `target-${repository.id}`, label: `${repository.id} · ${repository.source}`, type: 'checkbox' as const, value: workItem.developmentTargets?.includes(repository.id) === true },
@@ -745,6 +826,86 @@ class SddWorkbench {
     })
     if (values === undefined) return
     await this.mutate({ kind: 'update-stage-applicability', workspaceId: this.state.workspaceId!, workItemUid: this.state.workItemUid, stage: this.state.menu, status, reason: String(values.reason ?? '') })
+  }
+
+  private async enableOpenSpec(): Promise<void> {
+    const workItem = this.state.snapshot?.workItems.find(item => item.uid === this.state.workItemUid)
+    if (workItem === undefined) return
+    const values = await this.openForm({
+      title: `启用 OpenSpec · ${workItem.key}`,
+      description: '插件会先在 .sdd 中建立规划工作区，让五个阶段共同维护一个 Change；进入开发时自动迁移到隔离代码仓。现有业务适配器和来源协议不受影响。',
+      submitLabel: '启用',
+      fields: [{ name: 'schema', label: '工作流 Schema', type: 'text', required: true, value: 'spec-driven', help: '通常保持 spec-driven；初始化后可在插件内复制并定制。' }],
+    })
+    if (values === undefined) return
+    await this.mutate({ kind: 'openspec-update-settings', workspaceId: this.state.workspaceId!, workItemUid: workItem.uid, enabled: true, schema: String(values.schema) })
+  }
+
+  private async initializeManagedOpenSpec(): Promise<void> {
+    const workItem = this.state.snapshot?.workItems.find(item => item.uid === this.state.workItemUid)
+    if (workItem === undefined) return
+    const values = await this.openForm({
+      title: `初始化 OpenSpec 规划工作区 · ${workItem.key}`,
+      description: '由插件执行官方初始化。规划阶段保存在可提交的 .sdd 目录中，不会修改业务代码仓；无需记忆命令。', submitLabel: '初始化',
+      fields: [
+        { name: 'tools', label: 'AI 工具集成', type: 'select', value: 'agents', options: [{ value: 'agents', label: 'DSH / 共享 Agents（推荐）' }, { value: 'none', label: '仅创建 OpenSpec 结构' }, { value: 'all', label: '全部支持工具' }] },
+        { name: 'confirmed', label: '我确认创建当前需求的 OpenSpec 规划文件', type: 'checkbox', required: true },
+      ],
+    })
+    if (values?.confirmed !== true) return
+    await this.mutate({ kind: 'openspec-initialize', workspaceId: this.state.workspaceId!, workItemUid: workItem.uid, tools: String(values.tools) })
+  }
+
+  private async createManagedOpenSpecChange(): Promise<void> {
+    const snapshot = this.state.snapshot; const workItem = snapshot?.workItems.find(item => item.uid === this.state.workItemUid)
+    if (workItem === undefined) return
+    const schema = snapshot?.openSpecValidation[workItem.uid]?.schema ?? workItem.openSpec?.schema ?? 'spec-driven'
+    const suggested = workItem.key.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || `change-${workItem.uid.slice(0, 8)}`
+    const values = await this.openForm({
+      title: `创建需求 Change · ${workItem.key}`, description: '创建后，各阶段 AI 会自动读取并同步相关 OpenSpec 产物。', submitLabel: '创建 Change',
+      fields: [
+        { name: 'changeId', label: 'Change 标识', type: 'text', required: true, value: suggested, help: '使用小写字母、数字和连字符。' },
+        { name: 'schema', label: 'Schema', type: 'text', required: true, value: schema },
+      ],
+    })
+    if (values === undefined) return
+    await this.mutate({ kind: 'openspec-create-change', workspaceId: this.state.workspaceId!, workItemUid: workItem.uid, changeId: String(values.changeId), schema: String(values.schema) })
+  }
+
+  private async forkManagedOpenSpecSchema(): Promise<void> {
+    const workItem = this.state.snapshot?.workItems.find(item => item.uid === this.state.workItemUid)
+    if (workItem === undefined) return
+    const values = await this.openForm({
+      title: '创建可编辑的项目 Schema', description: '复制当前 Schema 的完整定义和模板到当前 OpenSpec 工作区。之后可直接在插件中编辑并校验。', submitLabel: '复制并启用',
+      fields: [{ name: 'schema', label: '新 Schema 名称', type: 'text', required: true, value: `${workItem.key.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-sdd`, help: '使用 kebab-case。' }],
+    })
+    if (values === undefined) return
+    await this.mutate({ kind: 'openspec-fork-schema', workspaceId: this.state.workspaceId!, workItemUid: workItem.uid, schema: String(values.schema) })
+  }
+
+  private async editOpenSpecFile(path: string): Promise<void> {
+    const workItemUid = this.state.workItemUid
+    if (workItemUid === undefined) return
+    this.updateBusy(true, `正在读取 OpenSpec 文件 ${path}…`)
+    try {
+      const response = await call({ kind: 'openspec-read-file', workspaceId: this.state.workspaceId!, workItemUid, path })
+      if (!response.ok) throw new Error(response.error)
+      if (!('openSpecFile' in response)) throw new Error('Host 未返回 OpenSpec 文件')
+      const file: OpenSpecFilePreview = response.openSpecFile
+      this.updateBusy(false)
+      const values = await this.openForm({ title: `编辑 OpenSpec · ${file.path}`, description: '保存后建议立即执行“校验全部规格”。', submitLabel: '保存文件', fields: [{ name: 'content', label: file.path, type: 'textarea', required: true, value: file.content }] })
+      if (values === undefined) return
+      await this.mutate({ kind: 'openspec-write-file', workspaceId: this.state.workspaceId!, workItemUid, path: file.path, content: String(values.content) })
+    } catch (error) { this.state.error = error instanceof Error ? error.message : String(error); this.render() }
+    finally { this.updateBusy(false) }
+  }
+
+  private async openManagedOpenSpec(): Promise<void> {
+    if (this.state.workItemUid === undefined) return
+    try {
+      const response = await call({ kind: 'openspec-open-path', workspaceId: this.state.workspaceId!, workItemUid: this.state.workItemUid, path: '' })
+      if (!response.ok) throw new Error(response.error)
+    } catch (error) { this.state.error = error instanceof Error ? error.message : String(error); this.render() }
   }
 
   private async viewOpenSpecTemplates(): Promise<void> {
@@ -909,7 +1070,7 @@ class SddWorkbench {
         { name: 'remote', label: 'Git remote 名称', type: 'text', required: true, value: collaboration.remote, placeholder: '例如：origin' },
         { name: 'baseBranch', label: '协作基线分支', type: 'text', required: true, value: collaboration.baseBranch, placeholder: '例如：main' },
         { name: 'syncStrategy', label: '同步策略', type: 'select', required: true, value: collaboration.syncStrategy, options: [{ value: 'ff-only', label: '仅 Fast-forward（推荐）' }, { value: 'manual', label: '手工同步' }] },
-        { name: 'commitScope', label: '项目提交范围', type: 'select', required: true, value: collaboration.commitScope, options: [{ value: 'sdd', label: '仅 .sdd 和 .gitignore（推荐）' }, { value: 'workspace', label: '整个工作空间' }] },
+        { name: 'commitScope', label: '项目提交范围', type: 'select', required: true, value: collaboration.commitScope, options: [{ value: 'sdd', label: '过程数据与产品资产（推荐）' }, { value: 'workspace', label: '整个工作空间' }] },
       ],
     })
     if (values === undefined) return
@@ -1285,7 +1446,7 @@ class SddWorkbench {
       fields: [{ name: 'confirmed', label: '我确认当前需求不使用 OpenSpec', type: 'checkbox', required: true }],
     })
     if (values?.confirmed !== true) return
-    await this.mutate({ kind: 'update-work-item-settings', workspaceId: this.state.workspaceId!, workItemUid: workItem.uid, repositoryScope: workItem.repositoryScope ?? [], developmentTargets: workItem.developmentTargets ?? [], developmentTargetDetails: workItem.developmentTargetDetails, openSpec: { enabled: false } })
+    await this.mutate({ kind: 'openspec-update-settings', workspaceId: this.state.workspaceId!, workItemUid: workItem.uid, enabled: false })
   }
 
   private async runTest(repositoryId: string): Promise<void> {

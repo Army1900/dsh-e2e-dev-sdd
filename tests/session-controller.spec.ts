@@ -39,6 +39,10 @@ describe('StageSessionController', () => {
     expect(guard({ name: 'write', arguments: { file_path: '.sdd/artifacts/requirements/a1/deliverable.md' }, agent: agents.agent })).toBeUndefined()
     expect(guard({ name: 'write', arguments: { file_path: '.sdd/artifacts/requirements/a1/.template/deliverable.md' }, agent: agents.agent })).toContain('快照不可修改')
     expect(guard({ name: 'write', arguments: { file_path: 'src/app.ts' }, agent: agents.agent })).toContain('只能修改')
+    controller.bind({ sessionId: 's1', stage: 'architecture', systemPrompt: 'OPEN SPEC', projectPath: '/project', artifactDirectory: '/project/.sdd/artifacts/architecture/a1', developmentDirectories: [], openSpecDirectories: ['/project/.sdd/openspec/w1/openspec'], artifactTemplateReference: '@.sdd/artifacts/architecture/a1/.template/deliverable.md', requiredSections: ['总体架构'] })
+    const planningGuard = tools.guards[0]!
+    expect(planningGuard({ name: 'write', arguments: { file_path: '.sdd/openspec/w1/openspec/changes/pay/design.md' }, agent: agents.agent })).toBeUndefined()
+    expect(planningGuard({ name: 'write', arguments: { file_path: 'src/app.ts' }, agent: agents.agent })).toContain('只能修改')
     controller.bind({ sessionId: 's1', stage: 'development', artifactUid: 'd1', systemPrompt: 'DEV', projectPath: '/project', artifactDirectory: '/project/.sdd/artifacts/development/d1', developmentDirectories: ['/project/.sdd-workspaces/DEV-1/app'], developmentRepositories: [{ id: 'app', path: '/project/.sdd-workspaces/DEV-1/app' }], artifactTemplateReference: '@.sdd/artifacts/development/d1/.template/deliverable.md', requiredSections: ['实现范围'] })
     const developmentGuard = tools.guards[0]!
     expect(developmentGuard({ name: 'bash', arguments: { command: 'pnpm test' }, agent: agents.agent })).toContain('workdir')

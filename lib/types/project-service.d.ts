@@ -1,5 +1,5 @@
 import type { ApiProxy } from '@deepseek-ai/dsh-host-apiproxy';
-import { type ArtifactFileSummary, type ImportPreview, type OpenSpecTemplatesPreview, type ProjectSnapshot, type RepositoryInspection, type RevisionPreview, type SddAction, type SourceImportDetail, type StageRun, type StageTemplatePreview } from './protocol.ts';
+import { type ArtifactFileSummary, type ImportPreview, type OpenSpecFilePreview, type OpenSpecTemplatesPreview, type ProjectSnapshot, type RepositoryInspection, type RevisionPreview, type SddAction, type SourceImportDetail, type StageRun, type StageTemplatePreview } from './protocol.ts';
 import { type SddSourceRegistry } from './extensions.ts';
 import { ConnectorCatalog } from './connector-catalog.ts';
 import { GitDevelopmentService, ProjectGitService } from './git-service.ts';
@@ -15,10 +15,23 @@ export declare class SddProjectService {
     constructor(api: ApiProxy, sourceRegistry?: SddSourceRegistry | undefined, sessionController?: StageSessionController | undefined, git?: GitDevelopmentService, projectGit?: ProjectGitService, connectors?: ConnectorCatalog);
     private openSpecCli;
     private workspace;
+    /** Resolve the single OpenSpec working copy used by every SDD stage. Before development it lives in .sdd;
+     * once the configured isolated repository exists, that repository copy becomes authoritative. */
+    private openSpecWorkspace;
+    private syncManagedOpenSpecToDevelopment;
+    /** Best-effort internal planning preparation. Normal users never need to enable or operate OpenSpec. */
+    private prepareInternalPlanning;
     /** Import preview only needs source ownership and lightweight artifact state, not Git/OpenSpec/quality/dashboard inspection. */
     private importProjectContext;
     execute(action: SddAction): Promise<ProjectSnapshot | ImportPreview | SourceImportDetail | StageTemplatePreview | RepositoryInspection | {
         openSpecTemplates: OpenSpecTemplatesPreview;
+    } | {
+        openSpecFile: OpenSpecFilePreview;
+    } | {
+        productFile: {
+            path: string;
+            content: string;
+        };
     } | {
         revisionPreview: RevisionPreview;
     } | {
@@ -56,6 +69,15 @@ export declare class SddProjectService {
     private createOpenSpecChange;
     private openOpenSpecSchema;
     private inspectOpenSpecTemplates;
+    private updateOpenSpecSettings;
+    private initializeManagedOpenSpec;
+    private forkManagedOpenSpecSchema;
+    private createManagedOpenSpecChange;
+    private openSpecFileTarget;
+    private readOpenSpecFile;
+    private writeOpenSpecFile;
+    private validateManagedOpenSpec;
+    private openManagedOpenSpecPath;
     private updateWorkItemSettings;
     private updateStageApplicability;
     private addProjectRepository;
@@ -64,6 +86,11 @@ export declare class SddProjectService {
     private updateProjectRepositoryBranch;
     private removeProjectRepository;
     private nextKey;
+    private nextProductKey;
+    private listProductKnowledge;
+    private writeProductBaseline;
+    private closeDelivery;
+    private readProductFile;
     private listSources;
     private previewSourceImport;
     private readStagedImport;

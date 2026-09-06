@@ -32,7 +32,13 @@
 
 开发测试阶段不会直接在基线分支写代码。本地来源从所选基线提交创建 Git Worktree 和 `branchPattern` 定义的特性分支；远程来源在隔离目录克隆基线后创建同名特性分支。开发交付件的新修订继承同一工作单元的物理 Worktree 和特性分支，注册切换到新 artifact uid，旧测试证据因输入修订而失效。测试与提交都发生在特性分支，推送、创建合并请求以及合入基线是负责人显式执行的交付动作。
 
-OpenSpec 是需求级可选增强，不是开发硬门禁。插件分别检查宿主机 CLI 和隔离 Worktree 中的配置目录；缺失时用户可以安装 CLI、执行官方 `openspec init --tools ...`，或关闭关联继续开发。初始化只准备 `openspec/config.yaml`、目录以及所选 AI 工具的 skills/commands，默认模板仍由 OpenSpec 安装包中的 `spec-driven` Schema 运行时解析，因此空的 `specs/` 与 `changes/` 是正常状态。初始化后插件展示 `openspec templates --json` 的解析位置；用户可执行 `openspec schema fork spec-driven <name>` 创建代码仓内可编辑、可提交的 Schema，并由插件执行校验。每个需求还需显式执行 `openspec new change <id> --schema <schema>` 创建 Change，之后 AI 才能维护 proposal/specs/design/tasks。插件不会自动提交或推送这些文件。
+OpenSpec 是内部规划引擎，普通用户不需要启用、创建 Change、选择 Schema 或记忆任何命令。首次开始需求的阶段会话时，插件后台尝试准备规划工作区和规划单元；如果宿主机没有 CLI 或初始化失败，则记录降级事件并继续使用内置结构化引导，不阻断对话或验收。开发空间创建前，规划副本位于 `.sdd/openspec/<work-item-uid>/openspec`；各阶段会话在可用时读取并同步相关产物：需求侧重 proposal/specs，原型和架构侧重 design，规格侧重 specs/tasks，开发按 tasks 实施并回写进度。自定义 Schema 的实际 artifact graph 优先于默认映射。
+
+每个阶段先在内部判断轻量、标准或复杂深度。轻量流程避免仪式化追问；标准流程按目标、范围、主流程、边界异常和验收推进；复杂流程再增加依赖、风险、备选方案、分阶段决策和验证策略。每轮优先提出一个、最多三个聚焦问题，并以用户能理解的业务语言呈现当前理解、待确认内容和下一步，不暴露底层规划引擎术语。
+
+底层初始化、Schema、Change、文件编辑和严格校验 action 仍保留给项目管理员及后续高级设置使用，但不出现在普通阶段工作台。初始化只准备配置和目录，不会凭空生成业务内容。
+
+开发阶段创建配置仓库的隔离 Worktree 后，插件把规划副本迁移到目标代码分支，此后该副本成为当前需求的权威 OpenSpec 工作区。插件不会自动提交或推送 OpenSpec 文件。旧项目如果已经只在隔离 Worktree 中初始化 OpenSpec，仍按原路径识别并可继续使用。
 
 代码仓库在 `.sdd/project.yaml` 中配置：
 
@@ -57,4 +63,4 @@ development:
 
 ## 项目仓库同步
 
-“项目设置”中的 SDD 项目仓库协作只操作当前 Workspace 的 Git 根目录。状态刷新不访问网络；“获取远程状态”执行 Fetch；“Fast-forward 同步”要求工作区干净、当前分支未分叉且无冲突。项目提交按照 `collaboration.commitScope` 暂存 `.sdd/` 或整个工作空间，Push 只推送当前分支并在首次推送时建立 upstream。插件不会为分叉执行隐式 merge/rebase，也不会自动解决冲突。同步完成后的 Snapshot 会重新加载交付件、运行绑定、模板哈希和编号冲突，避免旧会话覆盖远程更新。
+“项目设置”中的 SDD 项目仓库协作只操作当前 Workspace 的 Git 根目录。状态刷新不访问网络；“获取远程状态”执行 Fetch；“Fast-forward 同步”要求工作区干净、当前分支未分叉且无冲突。默认项目提交范围会暂存 `.sdd/` 过程数据、根目录 `product/` 产品基线、`deliveries/` 交付归档和 `.gitignore`；选择整个工作空间时才暂存其他文件。Push 只推送当前分支并在首次推送时建立 upstream。插件不会为分叉执行隐式 merge/rebase，也不会自动解决冲突。同步完成后的 Snapshot 会重新加载交付件、运行绑定、模板哈希和编号冲突，避免旧会话覆盖远程更新。

@@ -526,6 +526,59 @@ export interface ProjectSnapshot {
   openSpecValidation: Record<string, OpenSpecValidation>
   dashboard: DashboardSnapshot
   projectRepository?: ProjectRepositoryState
+  /** Long-lived product knowledge accumulated from completed requirement deliveries. */
+  productKnowledge?: ProductKnowledgeSnapshot
+}
+
+export type FeatureChangeType = 'created' | 'updated' | 'deprecated'
+
+export interface ProductFeatureHistoryEntry {
+  deliveryUid: string
+  workItemUid: string
+  workItemKey: string
+  workItemTitle: string
+  changeType: FeatureChangeType
+  version: string
+  summary: string
+  changedAt: string
+}
+
+export interface ProductFeature {
+  schema: 'dsh-sdd/feature@1'
+  uid: string
+  key: string
+  name: string
+  status: 'active' | 'deprecated'
+  currentVersion: string
+  summary: string
+  createdAt: string
+  updatedAt: string
+  createdByWorkItemUid: string
+  history: ProductFeatureHistoryEntry[]
+  relativeDirectory: string
+}
+
+export interface DeliveryArchive {
+  schema: 'dsh-sdd/delivery-archive@1'
+  uid: string
+  key: string
+  title: string
+  workItemUid: string
+  workItemKey: string
+  archivedAt: string
+  featureRefs: Array<{ uid: string; key: string; version: string; changeType: FeatureChangeType }>
+  artifactRefs: Array<{ uid: string; key: string; stage: StageId; version: string; status: ArtifactStatus; contentHash?: string; archivePath: string }>
+  repositoryRefs: Array<{ id: string; branch: string; baseCommit: string; headCommit: string; tests: number }>
+  reportPath: string
+  emailPath: string
+  relativeDirectory: string
+}
+
+export interface ProductKnowledgeSnapshot {
+  features: ProductFeature[]
+  deliveries: DeliveryArchive[]
+  catalogPath: string
+  specificationPath: string
 }
 
 export interface OpenSpecValidation {
@@ -540,11 +593,23 @@ export interface OpenSpecValidation {
   availableSchemas?: string[]
   changeId?: string
   changeExists?: boolean
+  /** The project-managed planning copy is available before a development worktree exists. */
+  workspace?: 'planning' | 'development'
+  relativeRoot?: string
+  files?: string[]
+  artifacts?: Array<{ id: string; status: string }>
+  validationMessage?: string
 }
 
 export interface OpenSpecTemplatesPreview {
   schema: string
   paths: string[]
+}
+
+export interface OpenSpecFilePreview {
+  path: string
+  content: string
+  editable: boolean
 }
 
 export interface StageProgress {
@@ -659,9 +724,19 @@ export type SddAction =
   | { kind: 'development-open-openspec-schema'; workspaceId: string; artifactUid: string; schema: string }
   | { kind: 'development-inspect-openspec-templates'; workspaceId: string; artifactUid: string; schema: string }
   | { kind: 'development-create-openspec-change'; workspaceId: string; artifactUid: string; changeId: string; schema: string }
+  | { kind: 'openspec-update-settings'; workspaceId: string; workItemUid: string; enabled: boolean; schema?: string }
+  | { kind: 'openspec-initialize'; workspaceId: string; workItemUid: string; tools: string }
+  | { kind: 'openspec-fork-schema'; workspaceId: string; workItemUid: string; schema: string }
+  | { kind: 'openspec-create-change'; workspaceId: string; workItemUid: string; changeId: string; schema: string }
+  | { kind: 'openspec-read-file'; workspaceId: string; workItemUid: string; path: string }
+  | { kind: 'openspec-write-file'; workspaceId: string; workItemUid: string; path: string; content: string }
+  | { kind: 'openspec-validate'; workspaceId: string; workItemUid: string }
+  | { kind: 'openspec-open-path'; workspaceId: string; workItemUid: string; path: string }
   | { kind: 'development-status'; workspaceId: string; artifactUid: string }
   | { kind: 'development-skip-test'; workspaceId: string; artifactUid: string; repositoryId: string; reason: string }
   | { kind: 'development-commit'; workspaceId: string; artifactUid: string; repositoryId: string; message: string }
+  | { kind: 'close-delivery'; workspaceId: string; workItemUid: string; featureUid?: string; featureName: string; changeType: FeatureChangeType; summary: string }
+  | { kind: 'read-product-file'; workspaceId: string; path: string }
   | { kind: 'import-source'; workspaceId: string; provider: string; sourceKind: string; key: string; connector?: string; input?: ManualSourceInput; attachToWorkItemUid?: string }
   | { kind: 'preview-source-import'; workspaceId: string; provider: string; sourceKind: string; key: string; connector?: string; input?: ManualSourceInput; attachToWorkItemUid?: string }
   | { kind: 'read-source-import-detail'; workspaceId: string; previewUid: string; identity: string }
@@ -678,6 +753,8 @@ export type SddResponse =
   | { ok: true; repositoryInspection: RepositoryInspection }
   | { ok: true; revisionPreview: RevisionPreview }
   | { ok: true; openSpecTemplates: OpenSpecTemplatesPreview }
+  | { ok: true; openSpecFile: OpenSpecFilePreview }
+  | { ok: true; productFile: { path: string; content: string } }
   | { ok: true; opened: true }
   | { ok: false; error: string }
 
@@ -733,10 +810,24 @@ export function parseAction(value: unknown): SddAction | undefined {
   if (action.kind === 'development-open-openspec-schema' && typeof action.artifactUid === 'string' && typeof action.schema === 'string') return action as unknown as SddAction
   if (action.kind === 'development-inspect-openspec-templates' && typeof action.artifactUid === 'string' && typeof action.schema === 'string') return action as unknown as SddAction
   if (action.kind === 'development-create-openspec-change' && typeof action.artifactUid === 'string' && typeof action.changeId === 'string' && typeof action.schema === 'string') return action as unknown as SddAction
+  if (action.kind === 'openspec-update-settings' && typeof action.workItemUid === 'string' && typeof action.enabled === 'boolean'
+    && (action.schema === undefined || typeof action.schema === 'string')) return action as unknown as SddAction
+  if (action.kind === 'openspec-initialize' && typeof action.workItemUid === 'string' && typeof action.tools === 'string') return action as unknown as SddAction
+  if ((action.kind === 'openspec-fork-schema' || action.kind === 'openspec-create-change') && typeof action.workItemUid === 'string'
+    && typeof action.schema === 'string' && (action.kind === 'openspec-fork-schema' || typeof action.changeId === 'string')) return action as unknown as SddAction
+  if (action.kind === 'openspec-read-file' && typeof action.workItemUid === 'string' && typeof action.path === 'string') return action as unknown as SddAction
+  if (action.kind === 'openspec-write-file' && typeof action.workItemUid === 'string' && typeof action.path === 'string' && typeof action.content === 'string') return action as unknown as SddAction
+  if ((action.kind === 'openspec-validate' || action.kind === 'openspec-open-path') && typeof action.workItemUid === 'string'
+    && (action.kind === 'openspec-validate' || typeof action.path === 'string')) return action as unknown as SddAction
   if (action.kind === 'development-skip-test' && typeof action.artifactUid === 'string' && typeof action.repositoryId === 'string'
     && typeof action.reason === 'string' && action.reason.trim() !== '') return action as unknown as SddAction
   if (action.kind === 'development-commit' && typeof action.artifactUid === 'string' && typeof action.repositoryId === 'string'
     && typeof action.message === 'string' && action.message.trim() !== '') return action as unknown as SddAction
+  if (action.kind === 'close-delivery' && typeof action.workItemUid === 'string'
+    && (action.featureUid === undefined || typeof action.featureUid === 'string') && typeof action.featureName === 'string' && action.featureName.trim() !== ''
+    && (action.changeType === 'created' || action.changeType === 'updated' || action.changeType === 'deprecated')
+    && typeof action.summary === 'string' && action.summary.trim() !== '') return action as unknown as SddAction
+  if (action.kind === 'read-product-file' && typeof action.path === 'string') return action as unknown as SddAction
   if ((action.kind === 'import-source' || action.kind === 'preview-source-import') && typeof action.provider === 'string' && typeof action.sourceKind === 'string'
     && typeof action.key === 'string' && (action.connector === undefined || typeof action.connector === 'string')
     && (action.attachToWorkItemUid === undefined || typeof action.attachToWorkItemUid === 'string')

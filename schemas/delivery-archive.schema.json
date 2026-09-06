@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://army1900.github.io/dsh-e2e-dev-sdd/schemas/delivery-archive.schema.json",
+  "title": "DSH SDD Delivery Archive",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "uid", "key", "title", "workItemUid", "workItemKey", "archivedAt", "featureRefs", "artifactRefs", "repositoryRefs", "reportPath", "emailPath"],
+  "properties": {
+    "schema": { "const": "dsh-sdd/delivery-archive@1" },
+    "uid": { "type": "string", "format": "uuid" },
+    "key": { "type": "string", "pattern": "^DLV-[0-9]{4}$" },
+    "title": { "type": "string", "minLength": 1 },
+    "workItemUid": { "type": "string", "format": "uuid" },
+    "workItemKey": { "type": "string", "minLength": 1 },
+    "archivedAt": { "type": "string", "format": "date-time" },
+    "featureRefs": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/featureRef" } },
+    "artifactRefs": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/artifactRef" } },
+    "repositoryRefs": { "type": "array", "items": { "$ref": "#/$defs/repositoryRef" } },
+    "reportPath": { "type": "string", "minLength": 1 },
+    "emailPath": { "type": "string", "minLength": 1 }
+  },
+  "$defs": {
+    "featureRef": {
+      "type": "object", "additionalProperties": false, "required": ["uid", "key", "version", "changeType"],
+      "properties": { "uid": { "type": "string", "format": "uuid" }, "key": { "type": "string" }, "version": { "type": "string" }, "changeType": { "enum": ["created", "updated", "deprecated"] } }
+    },
+    "artifactRef": {
+      "type": "object", "additionalProperties": false, "required": ["uid", "key", "stage", "version", "status", "archivePath"],
+      "properties": { "uid": { "type": "string" }, "key": { "type": "string" }, "stage": { "enum": ["requirements", "prototype", "architecture", "specification", "development"] }, "version": { "type": "string" }, "status": { "enum": ["accepted", "superseded"] }, "contentHash": { "type": "string" }, "archivePath": { "type": "string" } }
+    },
+    "repositoryRef": {
+      "type": "object", "additionalProperties": false, "required": ["id", "branch", "baseCommit", "headCommit", "tests"],
+      "properties": { "id": { "type": "string" }, "branch": { "type": "string" }, "baseCommit": { "type": "string" }, "headCommit": { "type": "string" }, "tests": { "type": "integer", "minimum": 0 } }
+    }
+  }
+}

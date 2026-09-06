@@ -8,6 +8,7 @@ interface SessionBindingSpec {
     projectPath: string;
     artifactDirectory: string;
     developmentDirectories: string[];
+    openSpecDirectories?: string[];
     developmentRepositories?: Array<{
         id: string;
         path: string;

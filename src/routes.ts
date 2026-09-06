@@ -4,7 +4,7 @@ import { parseAction, type SddResponse } from './protocol.ts'
 import type { SddProjectService } from './project-service.ts'
 
 export const SDD_API_PATH = '/api/dsh-e2e-dev-sdd'
-const BODY_LIMIT = 256 * 1024
+const BODY_LIMIT = 2 * 1024 * 1024
 
 function writeJson(res: ServerResponse, status: number, body: SddResponse): void {
   res.writeHead(status, {
@@ -56,6 +56,8 @@ export function makeSddRoute(service: SddProjectService): WebRoute {
         if ('sourceKind' in result && 'branches' in result) return writeJson(res, 200, { ok: true, repositoryInspection: result })
         if ('revisionPreview' in result) return writeJson(res, 200, { ok: true, revisionPreview: result.revisionPreview })
         if ('openSpecTemplates' in result) return writeJson(res, 200, { ok: true, openSpecTemplates: result.openSpecTemplates })
+        if ('openSpecFile' in result) return writeJson(res, 200, { ok: true, openSpecFile: result.openSpecFile })
+        if ('productFile' in result) return writeJson(res, 200, { ok: true, productFile: result.productFile })
         if ('opened' in result) return writeJson(res, 200, { ok: true, opened: true })
         if ('schema' in result && result.schema === 'dsh-sdd/import-preview@1') return writeJson(res, 200, { ok: true, preview: result })
         if ('workspace' in result) return writeJson(res, 200, { ok: true, snapshot: result })

@@ -16,7 +16,7 @@
 
 ## 项目真源
 
-一个 DSH Workspace 对应一个项目 Git 仓库。一个主业务编号形成需求包，每个可独立交付的子需求形成工作单元；工作单元共享项目配置，但拥有独立五阶段交付件和开发空间。可审计状态全部位于 `.sdd/`：
+一个 DSH Workspace 对应一个项目 Git 仓库。一个主业务编号形成需求包，每个可独立交付的子需求形成工作单元；工作单元共享项目配置，但拥有独立五阶段交付件和开发空间。`.sdd/` 保存研发过程和运行状态，项目根目录的 `product/` 与 `deliveries/` 保存可以脱离插件阅读和移交的长期产品资产：
 
 ```text
 .sdd/
@@ -39,14 +39,28 @@
 │   └── adapters/
 ├── runs/
 ├── development/
+├── openspec/<work-item-uid>/       # 开发前的 OpenSpec 规划工作区
 └── events/
+product/
+├── feature-catalog.md              # 全部特性索引
+├── product-specification.md        # 当前有效产品规格
+└── features/<feature>/             # FEAT 生命周期与当前规格
+deliveries/<delivery>/              # DLV 不可变交付归档、转测报告与邮件稿
 ```
 
 Host 通过 DSH Workspace registry 校验 `workspaceId`，浏览器不能直接指定任意宿主路径。浏览器只发送 Workspace ID 和领域动作。
 
+## 跨阶段 OpenSpec 工作区
+
+OpenSpec 是内部实现机制，不是普通用户需要理解的产品概念。首次启动某需求的阶段会话时，插件在后台尽力于 `.sdd/openspec/<work-item-uid>/` 创建项目管理的规划工作区和规划单元；不可用时退回内置的同构结构化引导。需求、原型、架构和规格会话对内部规划文件拥有受控写权限，并在形成确定结论时同时更新 SDD 阶段成果和对应规划产物。正常阶段页面不展示启用、Schema、Change 或 CLI 操作。
+
+规划阶段仍将目标代码仓作为只读参考。开发阶段创建配置仓库的隔离 Worktree 后，插件将规划工作区的 `openspec/` 复制到该特性分支；此后隔离代码仓中的副本成为权威工作副本。已有仅在开发 Worktree 中使用 OpenSpec 的项目继续按原路径解析，旧 action 和 Work Item 字段保持兼容。
+
+底层 OpenSpec 配置、Schema 和文件管理 action 保留为管理员与后续高级设置能力，不进入日常需求路径。Source Provider、Connector、Adapter 与 `source-bundle@1` 协议不参与此过程，协议和调用方式保持不变。
+
 ## SDD 项目仓库协作
 
-外层 Workspace Git 仓库负责共享 `.sdd/`、模板和交付状态，与开发阶段绑定的目标代码仓库相互独立。`project.yaml` 的 `collaboration` 配置 remote、协作基线、同步策略和提交范围。页面读取本地分支、upstream、ahead/behind、暂存、未跟踪和冲突文件；Fetch 可以直接执行，自动同步只使用干净工作区上的 `merge --ff-only`。分支分叉和 Git 冲突不会被自动合并。项目提交默认只暂存 `.sdd/` 与 `.gitignore`，Push 必须由用户显式确认。
+外层 Workspace Git 仓库负责共享 `.sdd/` 过程数据以及根目录 `product/`、`deliveries/` 产品资产，与开发阶段绑定的目标代码仓库相互独立。`project.yaml` 的 `collaboration` 配置 remote、协作基线、同步策略和提交范围。页面读取本地分支、upstream、ahead/behind、暂存、未跟踪和冲突文件；Fetch 可以直接执行，自动同步只使用干净工作区上的 `merge --ff-only`。分支分叉和 Git 冲突不会被自动合并。默认项目提交范围暂存 `.sdd/`、`product/`、`deliveries/` 与 `.gitignore`，Push 必须由用户显式确认。
 
 交付件关系始终使用 UUID，`REQ/UX/ARCH/SPEC/DEV` key 只是显示编号。并行分支合并后若不同 UID 血缘使用同一 key，项目状态会报告编号冲突：尚未绑定会话、开发空间或修订血缘的草稿可以保留原前缀并追加 UID 短后缀；任何已验收血缘冲突都需要人工决定，不能静默重编号。
 
@@ -94,6 +108,14 @@ draft -> in-review -> accepted -> superseded
 
 Agent 可以创建和修改 draft；接受动作必须由用户从阶段页面触发。接受时 Host 校验 manifest 和入口文件，并记录内容哈希。accepted 版本需要修订时创建新版本，不能原地覆写。
 
+## 产品基线与交付收口
+
+需求工作单元描述一次研发变更，`FEAT` 描述跨需求长期存在的产品能力，产品当前规格描述此刻有效的产品事实。开发交付已验收、来源无待处理变化且没有遗留草稿时，用户可以执行交付收口：创建新特性，或把当前需求作为一次更新/废弃记录追加到现有特性生命周期。
+
+收口在项目根目录的 `deliveries/` 生成一个 `DLV` 不可变归档，复制当前需求全部 accepted/superseded 阶段成果、当前来源快照和项目管理的内部规划副本，并记录目标仓库分支、基线提交、交付提交及有效测试证据。相同结构化数据同时渲染为 `transfer-test-report.md` 和 `transfer-test-email.md`。归档 Manifest 最后写入，未完成的中间目录不会进入项目快照。
+
+每次收口都会在根目录的 `product/` 重建 `feature-catalog.md` 和 `product-specification.md`。前者用于定位所有有效或已废弃特性，后者只汇总当前有效特性的最新规格；历史事实从特性 `feature.md` 生命周期和 `DLV` 归档追溯，不能把旧需求正文简单追加为当前规格。工作单元和其需求内缺陷在成功归档后进入 `completed`。
+
 ## 需求开发空间
 
 阶段代码目录统一收束在已加入 `.gitignore` 的 `.sdd-workspaces/`：
@@ -126,6 +148,7 @@ DSH 当前侧边栏没有第三方多入口导航 slot。插件采用 dsh-web �
 - 阶段输入门禁、结构质量报告、人工验收清单和 accepted 哈希冻结。
 - 开发阶段 Worktree/clone、AI 驱动测试、真实执行证据与本地提交门禁。
 - 项目看板与 append-only 事件日志。
+- 产品特性生命周期、产品当前规格、不可变需求交付归档及转测材料生成。
 - 看板统计以独立交付工作单元为五阶段分母；需求内缺陷只进入父需求的缺陷覆盖指标。服务端按工作单元、阶段和来源建立内存索引，客户端对交付矩阵先筛选再限制为 200 行，避免项目规模增长后重复全表扫描和过量 DOM 渲染。
 
 ## 后续边界

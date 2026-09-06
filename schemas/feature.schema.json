@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://army1900.github.io/dsh-e2e-dev-sdd/schemas/feature.schema.json",
+  "title": "DSH SDD Product Feature",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "uid", "key", "name", "status", "currentVersion", "summary", "createdAt", "updatedAt", "createdByWorkItemUid", "history"],
+  "properties": {
+    "schema": { "const": "dsh-sdd/feature@1" },
+    "uid": { "type": "string", "format": "uuid" },
+    "key": { "type": "string", "pattern": "^FEAT-[0-9]{4}$" },
+    "name": { "type": "string", "minLength": 1 },
+    "status": { "enum": ["active", "deprecated"] },
+    "currentVersion": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
+    "summary": { "type": "string", "minLength": 1 },
+    "createdAt": { "type": "string", "format": "date-time" },
+    "updatedAt": { "type": "string", "format": "date-time" },
+    "createdByWorkItemUid": { "type": "string", "format": "uuid" },
+    "history": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["deliveryUid", "workItemUid", "workItemKey", "workItemTitle", "changeType", "version", "summary", "changedAt"],
+        "properties": {
+          "deliveryUid": { "type": "string", "format": "uuid" },
+          "workItemUid": { "type": "string", "format": "uuid" },
+          "workItemKey": { "type": "string", "minLength": 1 },
+          "workItemTitle": { "type": "string", "minLength": 1 },
+          "changeType": { "enum": ["created", "updated", "deprecated"] },
+          "version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
+          "summary": { "type": "string", "minLength": 1 },
+          "changedAt": { "type": "string", "format": "date-time" }
+        }
+      }
+    }
+  }
+}

@@ -473,6 +473,73 @@ export interface ProjectSnapshot {
     openSpecValidation: Record<string, OpenSpecValidation>;
     dashboard: DashboardSnapshot;
     projectRepository?: ProjectRepositoryState;
+    /** Long-lived product knowledge accumulated from completed requirement deliveries. */
+    productKnowledge?: ProductKnowledgeSnapshot;
+}
+export type FeatureChangeType = 'created' | 'updated' | 'deprecated';
+export interface ProductFeatureHistoryEntry {
+    deliveryUid: string;
+    workItemUid: string;
+    workItemKey: string;
+    workItemTitle: string;
+    changeType: FeatureChangeType;
+    version: string;
+    summary: string;
+    changedAt: string;
+}
+export interface ProductFeature {
+    schema: 'dsh-sdd/feature@1';
+    uid: string;
+    key: string;
+    name: string;
+    status: 'active' | 'deprecated';
+    currentVersion: string;
+    summary: string;
+    createdAt: string;
+    updatedAt: string;
+    createdByWorkItemUid: string;
+    history: ProductFeatureHistoryEntry[];
+    relativeDirectory: string;
+}
+export interface DeliveryArchive {
+    schema: 'dsh-sdd/delivery-archive@1';
+    uid: string;
+    key: string;
+    title: string;
+    workItemUid: string;
+    workItemKey: string;
+    archivedAt: string;
+    featureRefs: Array<{
+        uid: string;
+        key: string;
+        version: string;
+        changeType: FeatureChangeType;
+    }>;
+    artifactRefs: Array<{
+        uid: string;
+        key: string;
+        stage: StageId;
+        version: string;
+        status: ArtifactStatus;
+        contentHash?: string;
+        archivePath: string;
+    }>;
+    repositoryRefs: Array<{
+        id: string;
+        branch: string;
+        baseCommit: string;
+        headCommit: string;
+        tests: number;
+    }>;
+    reportPath: string;
+    emailPath: string;
+    relativeDirectory: string;
+}
+export interface ProductKnowledgeSnapshot {
+    features: ProductFeature[];
+    deliveries: DeliveryArchive[];
+    catalogPath: string;
+    specificationPath: string;
 }
 export interface OpenSpecValidation {
     status: 'pending' | 'valid' | 'invalid';
@@ -486,10 +553,24 @@ export interface OpenSpecValidation {
     availableSchemas?: string[];
     changeId?: string;
     changeExists?: boolean;
+    /** The project-managed planning copy is available before a development worktree exists. */
+    workspace?: 'planning' | 'development';
+    relativeRoot?: string;
+    files?: string[];
+    artifacts?: Array<{
+        id: string;
+        status: string;
+    }>;
+    validationMessage?: string;
 }
 export interface OpenSpecTemplatesPreview {
     schema: string;
     paths: string[];
+}
+export interface OpenSpecFilePreview {
+    path: string;
+    content: string;
+    editable: boolean;
 }
 export interface StageProgress {
     stage: StageId;
@@ -791,6 +872,48 @@ export type SddAction = {
     changeId: string;
     schema: string;
 } | {
+    kind: 'openspec-update-settings';
+    workspaceId: string;
+    workItemUid: string;
+    enabled: boolean;
+    schema?: string;
+} | {
+    kind: 'openspec-initialize';
+    workspaceId: string;
+    workItemUid: string;
+    tools: string;
+} | {
+    kind: 'openspec-fork-schema';
+    workspaceId: string;
+    workItemUid: string;
+    schema: string;
+} | {
+    kind: 'openspec-create-change';
+    workspaceId: string;
+    workItemUid: string;
+    changeId: string;
+    schema: string;
+} | {
+    kind: 'openspec-read-file';
+    workspaceId: string;
+    workItemUid: string;
+    path: string;
+} | {
+    kind: 'openspec-write-file';
+    workspaceId: string;
+    workItemUid: string;
+    path: string;
+    content: string;
+} | {
+    kind: 'openspec-validate';
+    workspaceId: string;
+    workItemUid: string;
+} | {
+    kind: 'openspec-open-path';
+    workspaceId: string;
+    workItemUid: string;
+    path: string;
+} | {
     kind: 'development-status';
     workspaceId: string;
     artifactUid: string;
@@ -806,6 +929,18 @@ export type SddAction = {
     artifactUid: string;
     repositoryId: string;
     message: string;
+} | {
+    kind: 'close-delivery';
+    workspaceId: string;
+    workItemUid: string;
+    featureUid?: string;
+    featureName: string;
+    changeType: FeatureChangeType;
+    summary: string;
+} | {
+    kind: 'read-product-file';
+    workspaceId: string;
+    path: string;
 } | {
     kind: 'import-source';
     workspaceId: string;
@@ -874,6 +1009,15 @@ export type SddResponse = {
 } | {
     ok: true;
     openSpecTemplates: OpenSpecTemplatesPreview;
+} | {
+    ok: true;
+    openSpecFile: OpenSpecFilePreview;
+} | {
+    ok: true;
+    productFile: {
+        path: string;
+        content: string;
+    };
 } | {
     ok: true;
     opened: true;

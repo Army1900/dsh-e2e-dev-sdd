@@ -229,9 +229,13 @@ export class ProjectGitService {
     if (message.trim() === '') throw new Error('项目提交说明不能为空')
     const collaboration = projectCollaboration(project)
     if (collaboration.commitScope === 'workspace') await run(['git', 'add', '-A'], projectPath)
-    else await run(['git', 'add', '-A', '--', '.sdd', '.gitignore'], projectPath)
+    else {
+      const candidates = ['.sdd', 'product', 'deliveries', '.gitignore']
+      const paths = (await Promise.all(candidates.map(async path => await exists(join(projectPath, path)) ? path : undefined))).filter((path): path is string => path !== undefined)
+      if (paths.length > 0) await run(['git', 'add', '-A', '--', ...paths], projectPath)
+    }
     const staged = await run(['git', 'diff', '--cached', '--quiet'], projectPath, 30_000, true)
-    if (staged.exitCode === 0) throw new Error(`没有可提交的${collaboration.commitScope === 'sdd' ? ' SDD ' : '项目'}变更`)
+    if (staged.exitCode === 0) throw new Error(`没有可提交的${collaboration.commitScope === 'sdd' ? '过程数据或产品资产' : '项目'}变更`)
     if (staged.exitCode !== 1) throw new Error(`无法检查项目暂存区，git 退出码 ${staged.exitCode}`)
     await run(['git', 'commit', '-m', message.trim()], projectPath, 120_000)
   }

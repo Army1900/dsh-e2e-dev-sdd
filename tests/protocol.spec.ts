@@ -39,6 +39,8 @@ describe('parseAction', () => {
     expect(parseAction({ kind: 'preview-revision', workspaceId: 'w1', artifactUid: 'a1' })).toMatchObject({ kind: 'preview-revision' })
     expect(parseAction({ kind: 'create-revision', workspaceId: 'w1', artifactUid: 'a1', revisionKind: 'user-intent', reason: '调整规则', affectedAreas: ['验收条件'] })).toMatchObject({ kind: 'create-revision', revisionKind: 'user-intent' })
     expect(parseAction({ kind: 'preview-source-import', workspaceId: 'w1', provider: 'manual', sourceKind: 'requirement', key: 'M-1', input: { title: '手工需求' } })).toMatchObject({ provider: 'manual', input: { title: '手工需求' } })
+    expect(parseAction({ kind: 'close-delivery', workspaceId: 'w1', workItemUid: 'w1', featureName: '订单退款', changeType: 'created', summary: '支持订单部分退款。' })).toMatchObject({ kind: 'close-delivery', changeType: 'created' })
+    expect(parseAction({ kind: 'read-product-file', workspaceId: 'w1', path: 'product/feature-catalog.md' })).toMatchObject({ kind: 'read-product-file' })
   })
 
   it('rejects unknown stages and malformed arrays', () => {
@@ -63,6 +65,12 @@ describe('parseAction', () => {
       .toMatchObject({ kind: 'development-inspect-openspec-templates' })
     expect(parseAction({ kind: 'development-create-openspec-change', workspaceId: 'w1', artifactUid: 'a1', changeId: 'req-1', schema: 'company-sdd' }))
       .toMatchObject({ changeId: 'req-1' })
+    expect(parseAction({ kind: 'openspec-update-settings', workspaceId: 'w1', workItemUid: 'w1', enabled: true, schema: 'spec-driven' }))
+      .toMatchObject({ kind: 'openspec-update-settings', workItemUid: 'w1' })
+    expect(parseAction({ kind: 'openspec-initialize', workspaceId: 'w1', workItemUid: 'w1', tools: 'agents' }))
+      .toMatchObject({ kind: 'openspec-initialize' })
+    expect(parseAction({ kind: 'openspec-write-file', workspaceId: 'w1', workItemUid: 'w1', path: 'config.yaml', content: 'schema: spec-driven\n' }))
+      .toMatchObject({ kind: 'openspec-write-file' })
   })
 
   it('accepts requirement bundle preview and apply actions', () => {
