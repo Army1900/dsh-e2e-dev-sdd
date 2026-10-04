@@ -1,5 +1,4 @@
 import type { Context } from '@deepseek-ai/cordis'
-import type {} from '@deepseek-ai/dsh-host-apiproxy'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import { SddProjectService } from './project-service.ts'
 import { makeSddRoute } from './routes.ts'
@@ -13,6 +12,8 @@ import type {} from '@deepseek-ai/dsh-system-prompt'
 import type {} from '@deepseek-ai/dsh-tools'
 import { fileURLToPath } from 'node:url'
 import { ConnectorCatalog } from './connector-catalog.ts'
+
+import type { SessionControllerService, WorkspaceRegistryService } from './dsh-services.ts'
 
 export const name = 'dsh-e2e-dev-sdd'
 const connectorCatalog = new ConnectorCatalog(fileURLToPath(new URL('../business/', import.meta.url)))
@@ -28,11 +29,16 @@ function installBuiltins(ctx: Context): void {
   ctx.dshSddSources.register(new CommandSourceProvider(connectorCatalog))
 }
 
-installHostApi.inject = ['apiProxy', 'webServer', 'agents', 'systemPrompt', 'tools', 'dshSddSources']
+// DSH 0.2 host services: `webServer` serves the plugin API route, `workspaceRegistry`
+// resolves workspace ids to project directories, `sessionController` opens host paths,
+// and `agents`/`systemPrompt`/`tools` install the per-stage runtime on a bound session.
+installHostApi.inject = ['webServer', 'workspaceRegistry', 'sessionController', 'agents', 'systemPrompt', 'tools', 'dshSddSources']
 function installHostApi(ctx: Context): void {
   const git = new GitDevelopmentService()
   const sessions = new StageSessionController(ctx, async evidence => { await git.recordAiTest(evidence.projectPath, evidence.artifactUid, evidence.repositoryId, evidence) })
-  const service = new SddProjectService(ctx.apiProxy, ctx.dshSddSources, sessions, git, new ProjectGitService(), connectorCatalog)
+  const workspaces = ctx.get('workspaceRegistry') as WorkspaceRegistryService
+  const hostPaths = ctx.get('sessionController') as SessionControllerService
+  const service = new SddProjectService(workspaces, hostPaths, ctx.dshSddSources, sessions, git, new ProjectGitService(), connectorCatalog)
   ctx.effect(() => ctx.webServer.register(makeSddRoute(service)), 'dsh-sdd: host api')
 }
 

@@ -2,15 +2,18 @@ import { Context, Service } from '@deepseek-ai/cordis'
 import { describe, expect, it } from 'vitest'
 import * as Plugin from '../src/index.ts'
 
-class FakeApiProxy extends Service {
-  workspace = {
-    list: async (request: { rpcId: string }) => ({
-      rpcId: request.rpcId,
-      result: { ok: true as const, value: { items: [], archivedSessionIds: [] } },
-    }),
-  }
+class FakeWorkspaceRegistry extends Service {
+  constructor(ctx: Context) { super(ctx, 'workspaceRegistry') }
 
-  constructor(ctx: Context) { super(ctx, 'apiProxy') }
+  get(): undefined { return undefined }
+
+  list(): unknown[] { return [] }
+}
+
+class FakeSessionController extends Service {
+  constructor(ctx: Context) { super(ctx, 'sessionController') }
+
+  async openPath(): Promise<void> {}
 }
 
 class FakeWebServer extends Service {
@@ -31,7 +34,8 @@ class FakeDependency extends Service {
 describe('plugin composition', () => {
   it('provides extension registries, builtins and the Host route', async () => {
     const ctx = new Context()
-    await ctx.plugin(FakeApiProxy)
+    await ctx.plugin(FakeWorkspaceRegistry)
+    await ctx.plugin(FakeSessionController)
     await ctx.plugin(FakeWebServer)
     await ctx.plugin(inner => { new FakeDependency(inner, 'agents') })
     await ctx.plugin(inner => { new FakeDependency(inner, 'systemPrompt') })

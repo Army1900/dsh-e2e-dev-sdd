@@ -1,4 +1,5 @@
-import type { ClientContext, ISessions, IWorkspaces, WorkspaceId } from '@deepseek-ai/dsh-client-runtime/client'
+import type { Context } from '@deepseek-ai/cordis'
+import * as React from 'react'
 import DOMPurify from 'dompurify'
 import { marked } from 'marked'
 import { STAGES, STAGE_ARTIFACT_TEMPLATES, type ArtifactSummary, type BurnupPoint, type DeliveryCellStatus, type OpenSpecFilePreview, type ProjectSnapshot, type RepositoryInspection, type SddAction, type SddResponse, type SourceImportDetail, type SourceSummary, type StageId, type StageRun, type StageTemplatePreview } from '../protocol.ts'
@@ -6,17 +7,103 @@ import { jsonPreviewHtml } from './json-preview.ts'
 import { preferredSourceSelection } from './source-selection.ts'
 
 export const name = 'dsh-e2e-dev-sdd-client'
-export const inject = ['workspaces', 'sessions']
+/** DSH 0.2 client services. `workspaces`/`sessions` carry the project and session data,
+ * `uiWorkspace` opens a session in the main panel, and `slots`/`layout` render the UI. */
+export const inject = ['slots', 'layout', 'workspaces', 'sessions', 'uiWorkspace']
 
 const API_PATH = '/api/dsh-e2e-dev-sdd'
-const ACTIVE_ATTR = 'data-dsh-sdd-active'
 type MenuId = 'dashboard' | 'settings' | StageId
 const MENUS: Array<{ id: MenuId; label: string }> = [{ id: 'dashboard', label: '项目看板' }, ...STAGES, { id: 'settings', label: '项目设置' }]
 
+/** One client-side snapshot source: `getSnapshot()` plus `subscribe()`. */
+interface StoreLike<T> {
+  getSnapshot(): T
+  subscribe(listener: () => void): () => void
+}
+
+interface ClientWorkspaceView {
+  workspaceId: string
+  path: string
+  title: string
+  sessionIds: string[]
+}
+
+interface ClientWorkspaceList {
+  items: ClientWorkspaceView[]
+  archivedSessionIds: string[]
+}
+
+interface ClientSessionList {
+  ids: string[]
+  byId: Record<string, { cwd?: string; title?: string } | undefined>
+}
+
+/** The retained session binding the workbench prompts through. */
+interface ClientSessionBinding {
+  sessionId: unknown
+  session: {
+    prompt(parts: Array<{ type: string; text: string }>, mode: string): Promise<{ ok: true } | { ok: false; error: { code: string; message: string } }>
+    rename(title: string): Promise<unknown> | unknown
+    getSnapshot(): { running: boolean }
+    subscribe(listener: () => void): () => void
+  }
+}
+
+interface ClientSessionsService {
+  list: StoreLike<ClientSessionList>
+  binding(id: unknown): ClientSessionBinding | undefined
+  uiSession?: { current?: StoreLike<{ sessionId?: string }> }
+}
+
+interface ClientWorkspacesFacade {
+  list: StoreLike<ClientWorkspaceList>
+}
+
+interface ClientWorkspaceNavigation {
+  connectWorkspace(workspaceId: string): Promise<string>
+  openSession(sessionId: string): void
+}
+
+interface ClientSlotApi {
+  register(options: { name: string; id?: string; key?: string; order?: number; label?: string; priority?: number }, component: (props: Readonly<Record<string, unknown>>) => unknown): () => void
+  inject(ownerKey: string, callback: () => void): () => void
+}
+
+interface ClientLayoutApi {
+  selectPanel(panelId: string | null): void
+}
+
+/** Resolve the 0.2 client services by name; Cordis resolves services by name at runtime. */
+function clientServices(ctx: Context): { workspaces: ClientWorkspacesFacade; sessions: ClientSessionsService; uiWorkspace: ClientWorkspaceNavigation; layout: ClientLayoutApi; slots: ClientSlotApi } | undefined {
+  const workspaces = ctx.get('workspaces') as ClientWorkspacesFacade | undefined
+  const sessions = ctx.get('sessions') as ClientSessionsService | undefined
+  const uiWorkspace = ctx.get('uiWorkspace') as ClientWorkspaceNavigation | undefined
+  const layout = ctx.get('layout') as ClientLayoutApi | undefined
+  const slots = ctx.get('slots') as ClientSlotApi | undefined
+  if (workspaces === undefined || sessions === undefined || uiWorkspace === undefined || layout === undefined || slots === undefined) {
+    console.error('dsh-e2e-dev-sdd: the 0.2 client services are incomplete', { workspaces: workspaces !== undefined, sessions: sessions !== undefined, uiWorkspace: uiWorkspace !== undefined, layout: layout !== undefined, slots: slots !== undefined })
+    return undefined
+  }
+  return { workspaces, sessions, uiWorkspace, layout, slots }
+}
+
+
 const CSS = `
-[data-dsh-sdd-view]{position:absolute;inset:0;display:none;z-index:70;overflow:auto;background:var(--dsw-alias-bg-base,#fff);color:var(--dsw-alias-label-primary,#0f1115);font-family:var(--dsw-font-family,-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei","Helvetica Neue",Helvetica,Arial,sans-serif);font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
-html[${ACTIVE_ATTR}] [data-dsh-sdd-view]{display:block}html[${ACTIVE_ATTR}] [data-pane='conversation']>:not([data-dsh-sdd-view]),html[${ACTIVE_ATTR}] [class*='centerCol']>:not([data-dsh-sdd-view]){display:none!important}
-.dsh-sdd-menu{box-sizing:border-box;display:flex;align-items:center;gap:6px;width:100%;height:32px;padding:0 8px;border:0;border-radius:8px;background:transparent;color:var(--dsw-alias-label-secondary,#61666b);cursor:pointer;font:400 14px/22px var(--dsw-font-family,-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei","Helvetica Neue",Helvetica,Arial,sans-serif);white-space:nowrap;transition:background-color .16s ease,color .16s ease}.dsh-sdd-menu:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(38,49,72,.04));color:var(--dsw-alias-label-primary,#0f1115)}.dsh-sdd-menu[data-active]{background:var(--dsw-alias-interactive-bg-selected,rgba(38,49,72,.06));color:var(--dsw-alias-label-primary,#0f1115);font-weight:500}.dsh-sdd-menu:focus-visible{outline:2px solid var(--dsw-alias-focus-ring,rgba(38,49,72,.18));outline-offset:1px}.dsh-sdd-menu svg{width:16px;height:16px;flex:none;opacity:.9}.dsh-sdd-menu span{overflow:hidden;text-overflow:ellipsis}[data-dsh-frame][data-sidebar-collapsed] .dsh-sdd-menu{justify-content:center;width:32px;margin:0 auto 6px;padding:0;border-radius:8px}[data-dsh-frame][data-sidebar-collapsed] .dsh-sdd-menu span{display:none}
+.dsh-sdd-panel{position:relative;box-sizing:border-box;width:100%;height:100%;overflow:auto;padding-top:var(--dsh-frame-top-clearance,48px);background:var(--dsw-alias-bg-base,#fff);color:var(--dsw-alias-label-primary,#0f1115);font-family:var(--dsw-font-family,-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei","Helvetica Neue",Helvetica,Arial,sans-serif);font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
+/* 项目开发 group: header pinned above the sidebar footer + the panel rows indented beneath it. */
+.dsh-sdd-group{flex-direction:column;flex:none;display:flex;width:100%}
+.dsh-sdd-group-header{box-sizing:border-box;display:flex;align-items:center;gap:8px;width:100%;min-height:36px;margin:0 2px;padding:7px 8px;border:0;border-radius:var(--dsw-radius-md,8px);background:0 0;color:var(--dsw-alias-label-secondary,#61666b);cursor:pointer;font:inherit;line-height:22px;text-align:left;transition:background-color .16s ease,color .16s ease}
+.dsh-sdd-group-header:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(38,49,72,.04));color:var(--dsw-alias-label-primary,#0f1115)}
+.dsh-sdd-group-header:focus-visible{outline:var(--dsw-focus-ring-width,2px) solid var(--dsw-alias-state-business-primary,rgba(38,49,72,.3));outline-offset:-2px}
+.dsh-sdd-group-glyph{flex:none;justify-content:center;align-items:center;display:inline-flex}
+.dsh-sdd-group-title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500}
+.dsh-sdd-group-chevron{flex:none;margin-left:auto;display:inline-flex;opacity:.75;transition:transform .16s var(--ds-ease-in-out,ease)}
+html:not([data-dsh-sdd-group-collapsed]) .dsh-sdd-group-chevron{transform:rotate(180deg)}
+/* The seven SDD entries in the shell's panel list, indented under the group header. */
+.dsh-sdd-panel-list{flex-direction:column;flex:none;display:flex;gap:4px;margin-bottom:8px}
+.dsh-sdd-panel-list>*{padding-left:26px}
+.dsh-sdd-panel-list>* [class*='panelGlyph']{opacity:.85}
+html[data-dsh-sdd-group-collapsed] .dsh-sdd-panel-list>*{display:none}
 .dsh-sdd-page{box-sizing:border-box;width:100%;min-height:100%;padding:20px;max-width:1220px;margin:0 auto}.dsh-sdd-header{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:18px}.dsh-sdd-header h1{font-size:22px;line-height:31px;font-weight:700;margin:0;margin-right:auto;letter-spacing:-.01em}.dsh-sdd-header .dsh-sdd-select{min-width:0;max-width:min(360px,100%)}.dsh-sdd-select,.dsh-sdd-input{box-sizing:border-box;min-height:34px;padding:6px 10px;border:1px solid var(--dsw-alias-border-l2,rgba(0,0,0,.1));border-radius:8px;background:var(--dsw-specific-input-major,var(--dsw-alias-bg-base,#fff));color:var(--dsw-alias-label-primary,#0f1115);font-family:inherit;font-size:13px;font-weight:400;line-height:20px;transition:border-color .16s ease,box-shadow .16s ease}.dsh-sdd-select:focus,.dsh-sdd-input:focus{outline:0;border-color:var(--dsw-alias-border-l3,rgba(15,17,21,.28));box-shadow:0 0 0 2px rgba(38,49,72,.06)}.dsh-sdd-button{box-sizing:border-box;min-height:34px;padding:6px 12px;border:1px solid var(--dsw-alias-border-l2,rgba(0,0,0,.1));border-radius:8px;background:var(--dsw-alias-bg-base,#fff);color:var(--dsw-alias-label-primary,#0f1115);cursor:pointer;font-family:inherit;font-size:13px;font-weight:400;line-height:20px;transition:background-color .16s ease,border-color .16s ease,opacity .16s ease}.dsh-sdd-button:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover,rgba(38,49,72,.04))}.dsh-sdd-button:focus-visible{outline:2px solid var(--dsw-alias-focus-ring,rgba(38,49,72,.18));outline-offset:1px}.dsh-sdd-button.primary{background:var(--dsw-alias-button-primary-fill,#0f1115);border-color:transparent;color:var(--dsw-alias-label-primary-foreground,#fff);font-weight:500}.dsh-sdd-button.primary:hover:not(:disabled){background:var(--dsw-alias-button-primary-fill-hover,#272a2f)}.dsh-sdd-button:disabled{opacity:.4;cursor:not-allowed}
 .dsh-sdd-grid{display:grid;grid-template-columns:minmax(0,.8fr) minmax(0,1.2fr);gap:14px}@media(max-width:850px){.dsh-sdd-grid{grid-template-columns:minmax(0,1fr)}}.dsh-sdd-card{min-width:0;border:1px solid var(--dsw-alias-border-l1,rgba(0,0,0,.04));border-radius:12px;background:var(--dsw-alias-bg-layer-2,#fff);padding:14px}.dsh-sdd-card h2{font-size:15px;line-height:22px;font-weight:600;margin:0 0 10px}.dsh-sdd-muted{font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary,#61666b);overflow-wrap:anywhere}.dsh-sdd-list{display:flex;min-width:0;flex-direction:column;gap:8px}.dsh-sdd-row{display:grid;min-width:0;grid-template-columns:auto minmax(0,1fr) auto;align-items:start;gap:9px;padding:10px;border:1px solid var(--dsw-alias-border-l1,rgba(0,0,0,.04));border-radius:8px;background:var(--dsw-alias-bg-base,#fff)}.dsh-sdd-row>span{min-width:0}.dsh-sdd-row strong{display:block;font-size:13px;line-height:20px;font-weight:600;overflow-wrap:anywhere}.dsh-sdd-badge{display:inline-block;max-width:100%;font-size:11px;line-height:16px;padding:1px 6px;border-radius:999px;background:var(--dsw-alias-interactive-bg-hover,rgba(38,49,72,.06));color:var(--dsw-alias-label-secondary,#61666b);margin:0 0 4px 4px;overflow-wrap:anywhere}.dsh-sdd-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}.dsh-sdd-error{padding:9px;border-radius:8px;background:rgba(197,48,48,.08);color:#c53030;font-size:12px;line-height:18px;overflow-wrap:anywhere}.dsh-sdd-empty{padding:18px;text-align:center;color:var(--dsw-alias-label-secondary,#61666b);font-size:13px;line-height:20px}
 .dsh-sdd-busy{position:sticky;top:8px;z-index:20;display:flex;align-items:center;gap:9px;margin:0 0 12px;padding:9px 12px;border:1px solid var(--dsw-alias-border-l2,#bbb);border-radius:9px;background:var(--dsw-alias-bg-base,#fff);box-shadow:0 4px 16px #0002;font-size:12px}.dsh-sdd-busy::before{content:"";width:12px;height:12px;flex:none;border:2px solid var(--dsw-alias-border-l2,#bbb);border-top-color:var(--dsw-alias-label-primary,#222);border-radius:50%;animation:dsh-sdd-spin .8s linear infinite}@keyframes dsh-sdd-spin{to{transform:rotate(360deg)}}
@@ -89,8 +176,6 @@ function mountJsonPreview(container: HTMLElement, value: unknown): void {
   }
   render()
 }
-function sidebarRoot(): HTMLElement | undefined { const column = document.querySelector<HTMLElement>('[data-pane="sidebar"], [class*="sidebarCol"]'); return column?.querySelector<HTMLElement>('[class*="logoRow"]')?.parentElement ?? column?.firstElementChild as HTMLElement | undefined }
-function menuAnchor(root: HTMLElement): Element | undefined { const button = root.querySelector<HTMLButtonElement>('button[class*="newSession"]'); const row = button?.closest('[class*="logoRow"]'); return (row !== null && row?.parentElement === root ? row : button) ?? undefined }
 function icon(menu: MenuId): string {
   const paths: Record<MenuId, string> = {
     dashboard: '<rect x="3" y="3" width="5.5" height="5.5" rx="1"/><rect x="11.5" y="3" width="5.5" height="3.5" rx="1"/><rect x="3" y="11.5" width="5.5" height="5.5" rx="1"/><rect x="11.5" y="9.5" width="5.5" height="7.5" rx="1"/>',
@@ -104,60 +189,230 @@ function icon(menu: MenuId): string {
   return `<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[menu]}</svg>`
 }
 
+/** The `项目开发` group fold, persisted per browser so a reload keeps the user's choice. */
+const GROUP_STATE_KEY = 'dsh-e2e-dev-sdd.group-collapsed'
+
+function readStoredGroupState(): boolean {
+  try { return globalThis.localStorage?.getItem(GROUP_STATE_KEY) === 'true' } catch { return false }
+}
+
+function writeStoredGroupState(collapsed: boolean): void {
+  try { globalThis.localStorage?.setItem(GROUP_STATE_KEY, collapsed ? 'true' : 'false') } catch { /* storage may be unavailable */ }
+}
+
+/** One `main` panel instance: the workbench DOM is created inside React's container. */
+function SddPanel(props: Readonly<Record<string, unknown>>): unknown {
+  const workbench = props.workbench as SddWorkbench
+  const menu = props.menu as MenuId
+  const host = React.useRef<HTMLDivElement | null>(null)
+  React.useEffect(() => { workbench.attachStyles() }, [workbench])
+  React.useEffect(() => {
+    workbench.activate(menu, host.current)
+    return () => { workbench.detach(host.current) }
+  }, [workbench, menu])
+  // Re-render whenever the workbench publishes new state.
+  const subscribe = React.useCallback((listener: () => void): (() => void) => workbench.subscribe(listener), [workbench])
+  const snapshot = React.useCallback((): number => workbench.version(), [workbench])
+  React.useSyncExternalStore(subscribe, snapshot, snapshot)
+  return React.createElement('div', { className: 'dsh-sdd-panel', ref: host })
+}
+
+/** One `sidebar.panellist` entry: a stage glyph only, matching the sidebar's own rows. */
+function SddPanelIcon(props: Readonly<Record<string, unknown>>): unknown {
+  const menu = props.menu as MenuId
+  return React.createElement('svg', {
+    viewBox: '0 0 20 20', width: 18, height: 18, fill: 'none', stroke: 'currentColor',
+    strokeWidth: 1.5, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': 'true',
+    dangerouslySetInnerHTML: { __html: iconPaths(menu) },
+  })
+}
+
+function iconPaths(menu: MenuId): string {
+  const svg = icon(menu)
+  const start = svg.indexOf('>') + 1
+  return svg.slice(start, svg.lastIndexOf('</svg>'))
+}
+
+/** The `项目开发` glyph: a project board outline, distinct from the stage glyphs. */
+const GROUP_ICON = '<rect x="2.5" y="3" width="15" height="14" rx="2"/><path d="M2.5 7.5h15M7.5 7.5V17"/><path d="m10.5 10.5 1.4 1.4 2.6-2.9"/>'
+
+/**
+ * The shell's global panel list container, located through one labelled row we own.
+ * The shell renders `sidebar.panellist` inside a `<nav>`; tagging that node lets the
+ * plugin stylesheet indent and fold our seven rows without touching shell code.
+ */
+function sidebarPanelList(): HTMLElement | null {
+  const row = document.querySelector<HTMLElement>('button[aria-label="项目看板"]')
+  const list = row?.parentElement
+  return list instanceof HTMLElement ? list : null
+}
+
+/**
+ * The `项目开发` sidebar group header.
+ *
+ * The shell renders `sidebar.panellist` as a flat list with no nesting support, so the group is
+ * composed from the two seats the sidebar itself owns: this header registers into
+ * `sidebar.workspaces` (rendered directly below the panel list, above the workspace browser) and
+ * the seven SDD entries stay in `sidebar.panellist`. The plugin stylesheet pins the header to the
+ * top of its region with an explicit flex `order`, and the chevron folds the entries through one
+ * root attribute — no shell DOM is moved or restyled.
+ */
+function SddSidebarGroup(props: Readonly<Record<string, unknown>>): unknown {
+  const workbench = props.workbench as SddWorkbench
+  React.useEffect(() => { workbench.attachStyles(); workbench.observePanelList() }, [workbench])
+  const subscribe = React.useCallback((listener: () => void): (() => void) => workbench.subscribe(listener), [workbench])
+  const snapshot = React.useCallback((): number => workbench.version(), [workbench])
+  React.useSyncExternalStore(subscribe, snapshot, snapshot)
+  // Read the live fold state; a value captured at registration would never change.
+  const collapsed = workbench.isGroupCollapsed()
+  const wide = props.wide !== false
+  if (!wide) return null
+  return React.createElement('div', { className: 'dsh-sdd-group' },
+    React.createElement('button', {
+      type: 'button',
+      className: 'dsh-sdd-group-header',
+      'data-dsh-sdd-group-header': '',
+      'aria-expanded': collapsed ? 'false' : 'true',
+      title: '项目开发',
+      onClick: () => { workbench.toggleGroup() },
+      onKeyDown: (event: { key?: string; preventDefault?: () => void }) => {
+        if (event.key !== 'ArrowLeft') return
+        event.preventDefault?.()
+        workbench.setGroupCollapsed(true)
+      },
+    },
+      React.createElement('span', { className: 'dsh-sdd-group-glyph', 'aria-hidden': 'true' },
+        React.createElement('svg', {
+          viewBox: '0 0 20 20', width: 16, height: 16, fill: 'none', stroke: 'currentColor',
+          strokeWidth: 1.5, strokeLinecap: 'round', strokeLinejoin: 'round',
+          dangerouslySetInnerHTML: { __html: GROUP_ICON },
+        })),
+      React.createElement('span', { className: 'dsh-sdd-group-title' }, '项目开发'),
+      React.createElement('span', { className: 'dsh-sdd-group-chevron', 'aria-hidden': 'true' },
+        React.createElement('svg', {
+          viewBox: '0 0 20 20', width: 14, height: 14, fill: 'none', stroke: 'currentColor',
+          strokeWidth: 1.6, strokeLinecap: 'round', strokeLinejoin: 'round',
+          dangerouslySetInnerHTML: { __html: '<path d="m6.5 8 3.5 3.5L13.5 8"/>' },
+        })),
+    ))
+}
+
 class SddWorkbench {
   private readonly state: RuntimeState = { menu: 'dashboard', selected: new Set(), loading: false, dashboardQuery: '', dashboardKind: 'all', dashboardStatus: 'all' }
   private container?: HTMLDivElement
-  private menuButtons = new Map<MenuId, HTMLButtonElement>()
-  private waitObserver?: MutationObserver
   private workspaceUnsubscribe?: () => void
   private readonly trackedRuns = new Map<string, () => void>()
+  private readonly listeners = new Set<() => void>()
+  private revision = 0
+  private stylesMounted = false
+  private groupCollapsed = false
+  private panelListObserver?: MutationObserver
 
-  constructor(private readonly workspaces: IWorkspaces, private readonly sessions: ISessions) {}
+  constructor(
+    private readonly workspaces: ClientWorkspacesFacade,
+    private readonly sessions: ClientSessionsService,
+    private readonly uiWorkspace: ClientWorkspaceNavigation,
+    private readonly selectPanel: (panelId: string | null) => void,
+  ) { this.groupCollapsed = readStoredGroupState() }
 
-  start(): () => void {
-    const style = document.createElement('style'); style.dataset.dshSddStyle = ''; style.textContent = CSS; document.head.appendChild(style)
-    this.ensureMounted(); this.waitObserver = new MutationObserver(() => this.ensureMounted()); this.waitObserver.observe(document.body, { childList: true, subtree: true })
+  /** External-store contract for the panel components. */
+  subscribe(listener: () => void): () => void { this.listeners.add(listener); return () => { this.listeners.delete(listener) } }
+  version(): number { return this.revision }
+  private publish(): void { this.revision += 1; for (const listener of this.listeners) listener() }
+
+  /** Whether the `项目开发` group is folded. */
+  isGroupCollapsed(): boolean { return this.groupCollapsed }
+
+  setGroupCollapsed(collapsed: boolean): void {
+    if (this.groupCollapsed === collapsed) return
+    this.groupCollapsed = collapsed
+    writeStoredGroupState(collapsed)
+    this.applyGroupState()
+    this.publish()
+  }
+
+  toggleGroup(): void { this.setGroupCollapsed(!this.groupCollapsed) }
+
+  /** Mount the plugin stylesheet once, from whichever panel renders first. */
+  attachStyles(): void {
+    if (this.stylesMounted) return
+    const existing = document.querySelector('style[data-dsh-sdd-style]')
+    if (existing === null) { const style = document.createElement('style'); style.dataset.dshSddStyle = ''; style.textContent = CSS; document.head.appendChild(style) }
+    this.applyGroupState()
+    this.stylesMounted = true
+  }
+
+  /** Project the fold state onto the shell: one root attribute drives the panel-list CSS. */
+  applyGroupState(): void {
+    document.documentElement.toggleAttribute('data-dsh-sdd-group-collapsed', this.groupCollapsed)
+    const list = sidebarPanelList()
+    if (list !== null) list.classList.add('dsh-sdd-panel-list')
+  }
+
+  /** Watch the shell's panel list so the group styling survives list re-renders. */
+  observePanelList(): void {
+    if (this.panelListObserver !== undefined) return
+    this.applyGroupState()
+    const observer = new MutationObserver(() => { this.applyGroupState() })
+    observer.observe(document.body, { childList: true, subtree: true })
+    this.panelListObserver = observer
+  }
+
+  /** Rebind the workbench to the panel currently on screen. */
+  activate(menu: MenuId, container: HTMLDivElement | null): void {
+    if (container === null) return
+    this.container = container
+    if (this.state.menu !== menu) {
+      this.state.menu = menu
+      this.state.selected.clear()
+      this.state.targetArtifactUid = undefined
+    }
+    this.workspaceUnsubscribe?.()
     this.workspaceUnsubscribe = this.workspaces.list.subscribe(() => { if (this.state.workspaceId === undefined) this.chooseDefaultWorkspace(); this.render() })
     this.chooseDefaultWorkspace()
-    return () => { this.waitObserver?.disconnect(); this.workspaceUnsubscribe?.(); this.trackedRuns.forEach(dispose => dispose()); this.trackedRuns.clear(); this.menuButtons.forEach(button => button.remove()); this.menuButtons.clear(); this.container?.remove(); style.remove(); document.documentElement.removeAttribute(ACTIVE_ATTR) }
+    if (this.state.workspaceId === undefined) { this.render(); return }
+    const snapshot = this.state.snapshot
+    if (snapshot !== undefined && snapshot.workspace.workspaceId === this.state.workspaceId) { this.reconcileSelection(snapshot); this.render(); return }
+    void this.refresh()
+  }
+
+  /** Release the panel binding; the workbench keeps its data for the next activation. */
+  detach(container: HTMLDivElement | null): void {
+    if (container !== null && this.container !== container) return
+    this.workspaceUnsubscribe?.()
+    this.workspaceUnsubscribe = undefined
+    this.container = undefined
+    for (const dispose of this.trackedRuns.values()) dispose()
+    this.trackedRuns.clear()
+  }
+
+  /** Unload the workbench with the plugin (panel unmount already released the container). */
+  deactivate(): void {
+    this.panelListObserver?.disconnect()
+    this.panelListObserver = undefined
+    this.detach(null)
   }
 
   private chooseDefaultWorkspace(): void {
     const snapshot = this.workspaces.list.getSnapshot()
     if (this.state.workspaceId !== undefined && snapshot.items.some(item => item.workspaceId === this.state.workspaceId)) return
-    const current = snapshot.items.find(item => item.sessionIds.includes(this.sessions.list.getSnapshot().current as never))
-    this.state.workspaceId = (current?.workspaceId ?? snapshot.recentWorkspaceId ?? snapshot.items[0]?.workspaceId) as string | undefined
+    const sessionId = this.currentSessionId()
+    const current = sessionId === undefined ? undefined : snapshot.items.find(item => item.sessionIds.includes(sessionId))
+    this.state.workspaceId = current?.workspaceId ?? snapshot.items[0]?.workspaceId
   }
 
-  private ensureMounted(): void {
-    this.mountMenus()
-    if (this.container !== undefined && this.container.isConnected) return
-    const column = document.querySelector<HTMLElement>('[data-pane="conversation"], [class*="centerCol"]'); if (column === null) return
-    this.container = document.createElement('div'); this.container.dataset.dshSddView = ''; this.container.dataset.dshPlugin = 'e2e-dev-sdd'; column.appendChild(this.container); this.render()
+  private currentSessionId(): string | undefined {
+    const uiSession = this.sessions.uiSession
+    const fromUi = uiSession?.current?.getSnapshot()
+    if (typeof fromUi?.sessionId === 'string') return fromUi.sessionId
+    const list = this.sessions.list.getSnapshot()
+    const first = list.ids[0]
+    return first === undefined ? undefined : String(first)
   }
 
-  private mountMenus(): void {
-    const root = sidebarRoot(); if (root === undefined) return
-    const anchor = menuAnchor(root); if (anchor === undefined) return
-    let insertBefore = anchor.nextElementSibling
-    MENUS.forEach(menu => {
-      let button = this.menuButtons.get(menu.id)
-      if (button === undefined) { button = document.createElement('button'); button.type = 'button'; button.className = 'dsh-sdd-menu'; button.dataset.dshSddMenu = menu.id; button.title = menu.label; button.innerHTML = `${icon(menu.id)}<span>${menu.label}</span>`; button.addEventListener('click', () => this.open(menu.id)); this.menuButtons.set(menu.id, button) }
-      if (button.parentElement !== root) root.insertBefore(button, insertBefore); insertBefore = button.nextElementSibling
-    })
-  }
-
-  private open(menu: MenuId): void {
-    this.state.menu = menu; this.state.selected.clear(); this.state.targetArtifactUid = undefined
-    document.documentElement.setAttribute(ACTIVE_ATTR, ''); this.syncMenus()
-    const snapshot = this.state.snapshot
-    if (snapshot !== undefined && snapshot.workspace.workspaceId === this.state.workspaceId) {
-      this.reconcileSelection(snapshot); this.render(); return
-    }
-    void this.refresh()
-  }
-  private close(): void { document.documentElement.removeAttribute(ACTIVE_ATTR); this.menuButtons.forEach(button => delete button.dataset.active) }
-  private syncMenus(): void { this.menuButtons.forEach((button, id) => { if (document.documentElement.hasAttribute(ACTIVE_ATTR) && id === this.state.menu) button.dataset.active = 'true'; else delete button.dataset.active }) }
+  /** Switch the main panel to another stage; the panel list owns the selection. */
+  private open(menu: MenuId): void { this.selectPanel(menu) }
+  private close(): void { this.selectPanel(null) }
 
   private async refresh(): Promise<void> {
     if (this.state.workspaceId === undefined) return this.render()
@@ -224,6 +479,7 @@ class SddWorkbench {
     const busy = this.state.loading && snapshot !== undefined ? '<div class="dsh-sdd-busy" role="status">正在应用变更并更新项目状态，当前页面可以继续查看…</div>' : ''
     this.container.innerHTML = `<div class="dsh-sdd-page"${this.state.loading ? ' aria-busy="true"' : ''}><header class="dsh-sdd-header"><button class="dsh-sdd-button" data-action="close">返回对话</button><h1>${title}</h1><select class="dsh-sdd-select" data-action="workspace">${options}</select>${workItemSelect}<button class="dsh-sdd-button" data-action="refresh">刷新</button></header>${this.state.error ? `<div class="dsh-sdd-error">${escapeHtml(this.state.error)}</div>` : ''}${busy}${body}</div>`
     this.bind()
+    this.publish()
   }
 
   private updateBusy(active: boolean, message = '正在应用变更并更新项目状态，当前页面可以继续查看…'): void {
@@ -544,7 +800,7 @@ class SddWorkbench {
       this.state.workItemUid = button.dataset.matrixWorkItem; this.state.menu = button.dataset.matrixStage as StageId; this.state.targetArtifactUid = button.dataset.matrixArtifact
       const artifact = this.state.snapshot?.artifacts.find(item => item.uid === this.state.targetArtifactUid)
       this.state.selected = artifact === undefined && this.state.snapshot !== undefined ? this.defaultInputs(this.state.snapshot, this.state.menu as StageId) : new Set([...(artifact?.basedOn.map(item => item.uid) ?? []), ...(artifact?.derivedFrom.map(item => item.uid) ?? [])])
-      this.syncMenus(); this.render()
+      this.render()
     }))
   }
 
@@ -1320,18 +1576,18 @@ class SddWorkbench {
     if (existing !== undefined) return this.resumeRun(existing.uid, false)
     this.state.loading = true; this.state.error = undefined; this.render()
     try {
-      const sessionId = await this.workspaces.connectWorkspace(this.state.workspaceId as WorkspaceId); const inputs = this.selectedInputs()
+      const sessionId = await this.uiWorkspace.connectWorkspace(this.state.workspaceId as string); const inputs = this.selectedInputs()
       const response = await call({ kind: 'bind-session', workspaceId: this.state.workspaceId!, stage: this.state.menu, artifactUid: this.state.targetArtifactUid, sessionId: sessionId as string, artifactUids: inputs.artifacts, sourceUids: inputs.sources })
       if (!response.ok) throw new Error(response.error); if (!('prompt' in response)) throw new Error('Host returned an unexpected response')
       const binding = this.sessions.binding(sessionId); if (binding === undefined) throw new Error('新会话尚未在客户端就绪')
-      if (response.run !== undefined) this.trackRun(binding.session, response.run, this.state.workspaceId!)
+      if (response.run !== undefined) this.trackRun(binding.session, sessionId, response.run, this.state.workspaceId!)
       const accepted = await binding.session.prompt([{ type: 'text', text: response.prompt }], 'queue'); if (!accepted.ok) throw new Error(`${accepted.error.code}: ${accepted.error.message}`)
       const artifact = this.state.snapshot?.artifacts.find(item => item.uid === this.state.targetArtifactUid)
       if (artifact) {
         const prefix = artifact.revision?.kind === 'upstream' ? '[SDD变更·上游]' : artifact.revision?.kind === 'user-intent' ? '[SDD变更·主动]' : '[SDD]'
         void binding.session.rename(`${prefix} ${artifact.key} v${artifact.version} ${artifact.title}`)
       }
-      this.sessions.open(sessionId); this.close()
+      this.uiWorkspace.openSession(String(sessionId)); this.close()
     } catch (error) { this.state.error = error instanceof Error ? error.message : String(error) }
     finally { this.state.loading = false; this.render() }
   }
@@ -1342,13 +1598,13 @@ class SddWorkbench {
     try {
       const binding = this.sessions.binding(run.sessionId as never); if (binding === undefined) throw new Error('绑定会话不在当前 DSH 会话列表中')
       const response = await call({ kind: 'bind-session', workspaceId: this.state.workspaceId!, runUid: run.uid, stage: run.stage, artifactUid: run.artifactUid, sessionId: run.sessionId, artifactUids: run.inputArtifactUids, sourceUids: run.sourceUids })
-      if (!response.ok) throw new Error(response.error); if (!('prompt' in response)) throw new Error('Host returned an unexpected response'); if (response.run !== undefined) this.trackRun(binding.session, response.run, this.state.workspaceId!)
+      if (!response.ok) throw new Error(response.error); if (!('prompt' in response)) throw new Error('Host returned an unexpected response'); if (response.run !== undefined) this.trackRun(binding.session, run.sessionId, response.run, this.state.workspaceId!)
       const text = synchronize ? '同步当前对话中所有已确认结论到绑定交付件。重新读取交付件，补齐遗漏，保留未确认项；完成后报告修改内容。' : '恢复当前 SDD 阶段运行。重新读取绑定交付件和当前质量状态，概括已完成内容、待决问题，并继续与我协作。'
       const completion = synchronize ? this.waitForTurn(binding.session) : undefined
       const accepted = await binding.session.prompt([{ type: 'text', text }], 'queue'); if (!accepted.ok) throw new Error(`${accepted.error.code}: ${accepted.error.message}`)
-      this.sessions.open(run.sessionId as never); this.close()
+      this.uiWorkspace.openSession(String(run.sessionId)); this.close()
       if (completion !== undefined) await completion
-    } catch (error) { this.state.error = error instanceof Error ? error.message : String(error); document.documentElement.setAttribute(ACTIVE_ATTR, '') }
+    } catch (error) { this.state.error = error instanceof Error ? error.message : String(error) }
     finally { this.state.loading = false; this.render() }
   }
 
@@ -1356,8 +1612,8 @@ class SddWorkbench {
     return new Promise((resolve, reject) => { let seen = session.getSnapshot().running; const timeout = window.setTimeout(() => { dispose(); reject(new Error('等待 AI 同步超时')) }, 10 * 60 * 1000); const dispose = session.subscribe(() => { const running = session.getSnapshot().running; seen ||= running; if (seen && !running) { window.clearTimeout(timeout); dispose(); resolve() } }) })
   }
 
-  private trackRun(session: { sessionId: unknown; getSnapshot(): { running: boolean }; subscribe(listener: () => void): () => void }, run: StageRun, workspaceId: string): void {
-    const key = String(session.sessionId); this.trackedRuns.get(key)?.()
+  private trackRun(session: ClientSessionBinding['session'], sessionId: unknown, run: StageRun, workspaceId: string): void {
+    const key = String(sessionId); this.trackedRuns.get(key)?.()
     let seenRunning = session.getSnapshot().running
     const dispose = session.subscribe(() => {
       const running = session.getSnapshot().running
@@ -1463,7 +1719,7 @@ class SddWorkbench {
     try {
       const accepted = await binding.session.prompt([{ type: 'text', text: prompt }], 'queue')
       if (!accepted.ok) { this.state.error = `${accepted.error.code}: ${accepted.error.message}`; return this.render() }
-      this.sessions.open(run.sessionId as never); this.close()
+      this.uiWorkspace.openSession(String(run.sessionId)); this.close()
     } catch (error) {
       this.state.error = `无法将测试任务发送给开发会话：${error instanceof Error ? error.message : String(error)}`
       this.render()
@@ -1504,4 +1760,39 @@ class SddWorkbench {
   }
 }
 
-export function apply(ctx: ClientContext): () => void { const workbench = new SddWorkbench(ctx.workspaces, ctx.sessions as unknown as ISessions); return workbench.start() }
+/**
+ * DSH 0.2 client entry: the `项目开发` group header in `sidebar.footer.action` — a list seat, so
+ * it never competes with the workspace browser occupying the single `sidebar.workspaces` seat —
+ * plus seven `sidebar.panellist` rows, each addressing the matching key in the layout's
+ * root-scoped `main` keyed slot. One workbench instance is shared by the panel components so
+ * project state survives switching between stages.
+ */
+export function apply(ctx: Context): () => void {
+  const services = clientServices(ctx)
+  if (services === undefined) return () => {}
+  const workbench = new SddWorkbench(services.workspaces, services.sessions, services.uiWorkspace, panelId => { services.layout.selectPanel(panelId) })
+  const disposers: Array<() => void> = [
+    services.slots.register(
+      { name: 'sidebar.footer.action', id: 'e2e-dev-sdd-group', order: -1000, label: '项目开发' },
+      (props: Readonly<Record<string, unknown>>) => SddSidebarGroup({ ...props, workbench }),
+    ),
+  ]
+  MENUS.forEach((menu, index) => {
+    const panelId = String(menu.id)
+    disposers.push(
+      services.slots.register(
+        { name: 'sidebar.panellist', id: panelId, order: 100 + index, label: menu.label },
+        (props: Readonly<Record<string, unknown>>) => SddPanelIcon({ ...props, menu: menu.id }),
+      ),
+      services.slots.register(
+        { name: 'main', key: panelId, label: menu.label },
+        (props: Readonly<Record<string, unknown>>) => SddPanel({ ...props, workbench, menu: menu.id }),
+      ),
+    )
+  })
+  return () => {
+    for (const disposer of disposers.splice(0)) disposer()
+    document.documentElement.removeAttribute('data-dsh-sdd-group-collapsed')
+    workbench.deactivate()
+  }
+}

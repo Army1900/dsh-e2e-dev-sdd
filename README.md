@@ -38,15 +38,17 @@ DeepSeek Harness Web 的五阶段 SDD（Specification-Driven Development）工�
 
 ## 安装
 
+插件面向 DSH 0.2 的客户端契约（`dsh.client.platform`、`dsh-client-modules` 模块表与 slot 渲染）编写，`package.json` 中声明 `dsh.engines.dsh: ">=0.2.0-rc.1"`。DeepSeek Harness 桌面版内置的 0.2.0-rc.2 运行时即为目标环境。
+
 ### npm
 
-发布后安装到 Web profile：
+发布后安装到 Web profile（桌面版请在应用的插件管理页安装）：
 
 ```sh
 dsh plugin --profile web add dsh-e2e-dev-sdd@latest
 ```
 
-重启 `dsh web` 后，侧边栏会出现五个阶段入口。
+重启 `dsh web` 后，侧边栏会出现项目看板、五个阶段和项目设置入口；点击任一条目会在主面板打开对应页面。
 
 ### 本地开发
 

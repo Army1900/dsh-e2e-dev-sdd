@@ -1,10 +1,20 @@
 import { defineConfig } from 'tsdown'
 
 const PACKAGE_ID = 'dsh-e2e-dev-sdd'
+/**
+ * Modules the DSH 0.2 web shell seeds in its static module table
+ * (`createClientModuleSystem({ staticModules })`). They must stay external so the
+ * browser resolves the shell's single React/Cordis instance instead of a bundled copy.
+ */
 const PLATFORM_MODULES = [
+  'react',
+  'react/jsx-runtime',
+  'react-dom',
+  'react-dom/client',
   '@deepseek-ai/cordis',
-  '@deepseek-ai/dsh-client-runtime',
-  '@deepseek-ai/dsh-client-runtime/client',
+  '@deepseek-ai/dsh-client-store',
+  '@deepseek-ai/dsh-client-ui-slots',
+  '@deepseek-ai/dsh-client-ui-primitives',
 ] as const
 
 export default defineConfig([
@@ -18,7 +28,7 @@ export default defineConfig([
     fixedExtension: false,
     dts: false,
     clean: false,
-    external: ['@deepseek-ai/cordis', '@deepseek-ai/dsh-agent', '@deepseek-ai/dsh-session', '@deepseek-ai/dsh-system-prompt', '@deepseek-ai/dsh-tools', '@deepseek-ai/dsh-host-apiproxy', '@deepseek-ai/dsh-host-webserver'],
+    external: ['@deepseek-ai/cordis', '@deepseek-ai/dsh-agent', '@deepseek-ai/dsh-session', '@deepseek-ai/dsh-system-prompt', '@deepseek-ai/dsh-tools', '@deepseek-ai/dsh-host-webserver'],
   },
   {
     name: `${PACKAGE_ID}/client`,

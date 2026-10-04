@@ -2,8 +2,8 @@ import { createHash, randomUUID } from 'node:crypto'
 import { spawn } from 'node:child_process'
 import { access, copyFile, cp, mkdir, readFile, readdir, realpath, rename, stat, unlink, writeFile } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
-import type { ApiProxy, RpcId } from '@deepseek-ai/dsh-host-apiproxy'
 import { parse, stringify } from 'yaml'
+import type { SessionControllerService, WorkspaceRegistryService } from './dsh-services.ts'
 import {
   STAGES,
   type ArtifactManifest,
@@ -77,10 +77,6 @@ const BUSINESS_GUIDE = `# 项目业务扩展
 
 完整开发说明见 dsh-e2e-dev-sdd 插件的 \`docs/business-development-guide.md\`。
 `
-
-function request<T>(payload: T) {
-  return { rpcId: `sdd-${randomUUID()}` as RpcId, payload }
-}
 
 function slug(value: string): string {
   const normalized = value.trim().toLowerCase().replace(/[^a-z0-9\u4e00-\u9fff]+/g, '-').replace(/^-|-$/g, '')
@@ -393,7 +389,8 @@ export class SddProjectService {
   private openSpecCliCache?: { expiresAt: number; value: { installed: boolean; version?: string } }
 
   constructor(
-    private readonly api: ApiProxy,
+    private readonly workspaces: WorkspaceRegistryService,
+    private readonly sessionControllerService?: SessionControllerService,
     private readonly sourceRegistry?: SddSourceRegistry,
     private readonly sessionController?: StageSessionController,
     private readonly git = new GitDevelopmentService(),
@@ -409,11 +406,16 @@ export class SddProjectService {
   }
 
   private async workspace(workspaceId: string): Promise<{ workspaceId: string; title: string; path: string }> {
-    const response = await this.api.workspace.list(request({}))
-    if (!response.result.ok) throw new Error(`${response.result.error.code}: ${response.result.error.message}`)
-    const item = response.result.value.items.find(row => row.workspaceId === workspaceId)
-    if (item === undefined) throw new Error(`workspace not found: ${workspaceId}`)
-    return { workspaceId, title: item.title, path: await realpath(item.path) }
+    const entity = this.workspaces.get(workspaceId) ?? this.workspaces.list().find(item => item.id === workspaceId)
+    if (entity === undefined) throw new Error(`workspace not found: ${workspaceId}`)
+    return { workspaceId, title: entity.title, path: await realpath(entity.path) }
+  }
+
+  /** Open one validated path with the desktop's OS association. The capability is optional:
+   * profiles without the session controller keep every preview action, only "open in app" fails. */
+  private async openPath(path: string): Promise<void> {
+    if (this.sessionControllerService === undefined) throw new Error('当前运行环境不支持由主机打开文件路径')
+    await this.sessionControllerService.openPath(path, AbortSignal.timeout(15_000))
   }
 
   /** Resolve the single OpenSpec working copy used by every SDD stage. Before development it lives in .sdd;
@@ -1172,8 +1174,7 @@ export class SddProjectService {
     const path = resolve(root, requestedPath || '.')
     if (!contained(root, path)) throw new Error('artifact path escapes its directory')
     await access(path)
-    const response = await this.api.host.openPath(request({ path }), AbortSignal.timeout(15_000))
-    if (!response.result.ok) throw new Error(`${response.result.error.code}: ${response.result.error.message}`)
+    await this.openPath(path)
   }
 
   private async readStageTemplate(workspaceId: string, stage: StageId): Promise<StageTemplatePreview> {
@@ -1192,8 +1193,7 @@ export class SddProjectService {
     const path = target === 'directory' ? template.directory : resolve(snapshot.workspace.path, target === 'config' ? template.configRelative : template.contentRelative)
     const root = resolve(snapshot.workspace.path, '.sdd', 'templates')
     if (!contained(root, path)) throw new Error('template path escapes .sdd/templates')
-    const response = await this.api.host.openPath(request({ path }), AbortSignal.timeout(15_000))
-    if (!response.result.ok) throw new Error(`${response.result.error.code}: ${response.result.error.message}`)
+    await this.openPath(path)
   }
 
   private async installOpenSpec(workspaceId: string, workItemUid: string): Promise<void> {
@@ -1296,8 +1296,7 @@ export class SddProjectService {
     const openSpecRoot = resolve(repository.path, configured.path)
     const schemaPath = resolve(openSpecRoot, 'schemas', normalizedSchema)
     if (!contained(openSpecRoot, schemaPath) || !(await exists(schemaPath))) throw new Error(`project-local OpenSpec schema not found: ${normalizedSchema}`)
-    const response = await this.api.host.openPath(request({ path: schemaPath }), AbortSignal.timeout(15_000))
-    if (!response.result.ok) throw new Error(`${response.result.error.code}: ${response.result.error.message}`)
+    await this.openPath(schemaPath)
   }
 
   private async inspectOpenSpecTemplates(workspaceId: string, artifactUid: string, schema: string): Promise<OpenSpecTemplatesPreview> {
@@ -1445,8 +1444,7 @@ export class SddProjectService {
     const workspace = await this.openSpecWorkspace(snapshot, workItem, true)
     const target = path.trim() === '' ? workspace.openSpecRoot : resolve(workspace.openSpecRoot, path.replaceAll('\\', '/').replace(/^\/+/, ''))
     if (!contained(workspace.openSpecRoot, target) || !(await exists(target))) throw new Error('OpenSpec 路径不存在或超出工作区')
-    const response = await this.api.host.openPath(request({ path: target }), AbortSignal.timeout(15_000))
-    if (!response.result.ok) throw new Error(`${response.result.error.code}: ${response.result.error.message}`)
+    await this.openPath(target)
   }
 
   private async updateWorkItemSettings(

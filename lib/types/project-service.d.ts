@@ -1,20 +1,24 @@
-import type { ApiProxy } from '@deepseek-ai/dsh-host-apiproxy';
+import type { SessionControllerService, WorkspaceRegistryService } from './dsh-services.ts';
 import { type ArtifactFileSummary, type ImportPreview, type OpenSpecFilePreview, type OpenSpecTemplatesPreview, type ProjectSnapshot, type RepositoryInspection, type RevisionPreview, type SddAction, type SourceImportDetail, type StageRun, type StageTemplatePreview } from './protocol.ts';
 import { type SddSourceRegistry } from './extensions.ts';
 import { ConnectorCatalog } from './connector-catalog.ts';
 import { GitDevelopmentService, ProjectGitService } from './git-service.ts';
 import type { StageSessionController } from './session-controller.ts';
 export declare class SddProjectService {
-    private readonly api;
+    private readonly workspaces;
+    private readonly sessionControllerService?;
     private readonly sourceRegistry?;
     private readonly sessionController?;
     private readonly git;
     private readonly projectGit;
     private readonly connectors;
     private openSpecCliCache?;
-    constructor(api: ApiProxy, sourceRegistry?: SddSourceRegistry | undefined, sessionController?: StageSessionController | undefined, git?: GitDevelopmentService, projectGit?: ProjectGitService, connectors?: ConnectorCatalog);
+    constructor(workspaces: WorkspaceRegistryService, sessionControllerService?: SessionControllerService | undefined, sourceRegistry?: SddSourceRegistry | undefined, sessionController?: StageSessionController | undefined, git?: GitDevelopmentService, projectGit?: ProjectGitService, connectors?: ConnectorCatalog);
     private openSpecCli;
     private workspace;
+    /** Open one validated path with the desktop's OS association. The capability is optional:
+     * profiles without the session controller keep every preview action, only "open in app" fails. */
+    private openPath;
     /** Resolve the single OpenSpec working copy used by every SDD stage. Before development it lives in .sdd;
      * once the configured isolated repository exists, that repository copy becomes authoritative. */
     private openSpecWorkspace;

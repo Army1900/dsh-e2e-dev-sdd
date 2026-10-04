@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto'
 import { chmod, mkdir, mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { ApiProxy } from '@deepseek-ai/dsh-host-apiproxy'
+import type { SessionControllerService, WorkspaceRegistryService } from '../src/dsh-services.ts'
 import { describe, expect, it, vi } from 'vitest'
 import { parse, stringify } from 'yaml'
 import { SddProjectService } from '../src/project-service.ts'
@@ -12,15 +12,19 @@ import type { StageSessionController } from '../src/session-controller.ts'
 import type { SourceBundle } from '../src/protocol.ts'
 import { ManualSourceProvider } from '../src/providers/manual-source.ts'
 
-function api(path: string, opened: string[] = []): ApiProxy {
+/** DSH 0.2 host services: a single-workspace registry plus a recording path opener. */
+function host(path: string, opened: string[] = []): { workspaces: WorkspaceRegistryService; sessionController: SessionControllerService } {
+  const entity = { id: 'w1', path, title: 'Demo', createdAt: new Date(0).toISOString(), updatedAt: new Date(0).toISOString(), sessionIds: [] as string[] }
   return {
-    workspace: {
-      list: async (request: any) => ({ rpcId: request.rpcId, result: { ok: true, value: { archivedSessionIds: [], items: [{ workspaceId: 'w1', path, title: 'Demo', sessionIds: [], createdAt: new Date(0).toISOString(), updatedAt: new Date(0).toISOString() }] } } }),
-    },
-    host: {
-      openPath: async (request: any) => { opened.push(request.payload.path); return { rpcId: request.rpcId, result: { ok: true, value: { opened: true } } } },
-    },
-  } as unknown as ApiProxy
+    workspaces: { get: (id: string) => (id === 'w1' ? entity : undefined), list: () => [entity] },
+    sessionController: { openPath: async (target: string): Promise<void> => { opened.push(target) } },
+  }
+}
+
+/** Constructor order of `SddProjectService`: workspaces, sessionController, sources, sessions. */
+function hostArgs(path: string, opened: string[] = []): [WorkspaceRegistryService, SessionControllerService] {
+  const services = host(path, opened)
+  return [services.workspaces, services.sessionController]
 }
 
 describe('SddProjectService', () => {
@@ -42,7 +46,7 @@ process.exit(1)\n`)
     process.env.PATH = `${bin}${process.platform === 'win32' ? ';' : ':'}${process.env.PATH ?? ''}`
     const provider = new ManualSourceProvider()
     const sources = { names: () => ['manual'], fetch: async (_name: string, request: any) => provider.get({ ...request, signal: request.signal ?? AbortSignal.timeout(1000) }) } as unknown as SddSourceRegistry
-    const service = new SddProjectService(api(root), sources)
+    const service = new SddProjectService(...hostArgs(root), sources)
     await service.execute({ kind: 'import-source', workspaceId: 'w1', provider: 'manual', sourceKind: 'requirement', key: 'REQ-OPEN-SPEC', input: { title: 'OpenSpec 初始化' } })
     let snapshot = await service.snapshot('w1')
     const workItem = snapshot.workItems[0]!
@@ -107,7 +111,7 @@ process.exit(1)\n`)
       const provider = new ManualSourceProvider()
       const sources = { names: () => ['manual'], fetch: async (_name: string, request: any) => provider.get({ ...request, signal: request.signal ?? AbortSignal.timeout(1000) }) } as unknown as SddSourceRegistry
       const sessions = { bind: vi.fn() } as unknown as StageSessionController
-      const service = new SddProjectService(api(root), sources, sessions)
+      const service = new SddProjectService(...hostArgs(root), sources, sessions)
       await service.execute({ kind: 'import-source', workspaceId: 'w1', provider: 'manual', sourceKind: 'requirement', key: 'PLAN-1', input: { title: '跨阶段规格' } })
       let snapshot = await service.snapshot('w1'); const workItem = snapshot.workItems[0]!
       await service.execute({ kind: 'create-draft', workspaceId: 'w1', stage: 'requirements', title: workItem.title, basedOn: [], sourceUids: [workItem.sourceUid!], workItemUid: workItem.uid })
@@ -139,7 +143,7 @@ process.exit(1)\n`)
     const root = await mkdtemp(join(tmpdir(), 'dsh-sdd-'))
     const provider = new ManualSourceProvider()
     const sources = { names: () => ['manual'], fetch: async (_name: string, request: any) => provider.get({ ...request, signal: request.signal ?? AbortSignal.timeout(1000) }) } as unknown as SddSourceRegistry
-    const service = new SddProjectService(api(root), sources)
+    const service = new SddProjectService(...hostArgs(root), sources)
     const preview = await service.execute({ kind: 'preview-source-import', workspaceId: 'w1', provider: 'manual', sourceKind: 'requirement', key: 'MANUAL-1', input: { title: '订单部分退款', description: '规则待讨论' } })
     if (!('schema' in preview)) throw new Error('expected import preview')
     const snapshotCalls = vi.spyOn(service, 'snapshot')
@@ -154,7 +158,7 @@ process.exit(1)\n`)
     const root = await mkdtemp(join(tmpdir(), 'dsh-sdd-light-preview-'))
     const provider = new ManualSourceProvider()
     const sources = { names: () => ['manual'], fetch: async (_name: string, request: any) => provider.get({ ...request, signal: request.signal ?? AbortSignal.timeout(1000) }) } as unknown as SddSourceRegistry
-    const service = new SddProjectService(api(root), sources)
+    const service = new SddProjectService(...hostArgs(root), sources)
     await service.initialize('w1')
     const snapshot = vi.spyOn(service, 'snapshot').mockRejectedValue(new Error('full snapshot should not run'))
     const preview = await service.execute({ kind: 'preview-source-import', workspaceId: 'w1', provider: 'manual', sourceKind: 'requirement', key: 'FAST-1', input: { title: '快速预览', description: '无需 Git、OpenSpec 和质量统计。' } })
@@ -168,7 +172,7 @@ process.exit(1)\n`)
     const root = await mkdtemp(join(tmpdir(), 'dsh-sdd-attached-defect-'))
     const provider = new ManualSourceProvider()
     const sources = { names: () => ['manual'], fetch: async (_name: string, request: any) => provider.get({ ...request, signal: request.signal ?? AbortSignal.timeout(1000) }) } as unknown as SddSourceRegistry
-    const service = new SddProjectService(api(root), sources)
+    const service = new SddProjectService(...hostArgs(root), sources)
     await service.execute({ kind: 'import-source', workspaceId: 'w1', provider: 'manual', sourceKind: 'requirement', key: 'REQ-1', input: { title: '支付升级', description: '支持新的支付流程' } })
     let snapshot = await service.snapshot('w1')
     const requirement = snapshot.workItems[0]!
@@ -197,7 +201,7 @@ process.exit(1)\n`)
     const root = await mkdtemp(join(tmpdir(), 'dsh-sdd-legacy-work-item-'))
     const provider = new ManualSourceProvider()
     const sources = { names: () => ['manual'], fetch: async (_name: string, request: any) => provider.get({ ...request, signal: request.signal ?? AbortSignal.timeout(1000) }) } as unknown as SddSourceRegistry
-    const service = new SddProjectService(api(root), sources)
+    const service = new SddProjectService(...hostArgs(root), sources)
     await service.execute({ kind: 'import-source', workspaceId: 'w1', provider: 'manual', sourceKind: 'defect', key: 'OLD-BUG-1', input: { title: '历史独立缺陷' } })
     let snapshot = await service.snapshot('w1')
     const workItem = snapshot.workItems[0]!
@@ -217,7 +221,7 @@ process.exit(1)\n`)
     const root = await mkdtemp(join(tmpdir(), 'dsh-sdd-key-conflict-'))
     const provider = new ManualSourceProvider()
     const sources = { names: () => ['manual'], fetch: async (_name: string, request: any) => provider.get({ ...request, signal: request.signal ?? AbortSignal.timeout(1000) }) } as unknown as SddSourceRegistry
-    const service = new SddProjectService(api(root), sources)
+    const service = new SddProjectService(...hostArgs(root), sources)
     await service.execute({ kind: 'import-source', workspaceId: 'w1', provider: 'manual', sourceKind: 'requirement', key: 'ITEM-1', input: { title: '需求一' } })
     await service.execute({ kind: 'import-source', workspaceId: 'w1', provider: 'manual', sourceKind: 'requirement', key: 'ITEM-2', input: { title: '需求二' } })
     let snapshot = await service.snapshot('w1')
@@ -237,7 +241,7 @@ process.exit(1)\n`)
     const root = await mkdtemp(join(tmpdir(), 'dsh-sdd-'))
     const provider = new ManualSourceProvider()
     const sources = { names: () => ['manual'], fetch: async (_name: string, request: any) => provider.get({ ...request, signal: request.signal ?? AbortSignal.timeout(1000) }) } as unknown as SddSourceRegistry
-    const service = new SddProjectService(api(root), sources)
+    const service = new SddProjectService(...hostArgs(root), sources)
     await service.execute({ kind: 'import-source', workspaceId: 'w1', provider: 'manual', sourceKind: 'requirement', key: 'SIMPLE-1', input: { title: '简单后端修复' } })
     let snapshot = await service.snapshot('w1')
     const workItem = snapshot.workItems[0]!
@@ -253,7 +257,7 @@ process.exit(1)\n`)
 
   it('initializes a project and creates an accepted artifact', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-sdd-'))
-    const service = new SddProjectService(api(root))
+    const service = new SddProjectService(...hostArgs(root))
     await service.initialize('w1')
     await writeFile(join(root, '.sdd/business/connectors/demo-system.yaml'), 'command: [node, adapter.mjs]\n')
     await service.execute({ kind: 'create-draft', workspaceId: 'w1', stage: 'requirements', title: '支付需求', basedOn: [] })
@@ -316,7 +320,7 @@ process.exit(1)\n`)
   })
 
   it('detects accepted upstream hash changes before creating a downstream revision', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'dsh-sdd-revision-')); const service = new SddProjectService(api(root))
+    const root = await mkdtemp(join(tmpdir(), 'dsh-sdd-revision-')); const service = new SddProjectService(...hostArgs(root))
     const complete = async (uid: string, note: string) => {
       const artifact = (await service.snapshot('w1')).artifacts.find(item => item.uid === uid)!
       const path = join(root, artifact.relativeDirectory, 'deliverable.md')
@@ -348,7 +352,7 @@ process.exit(1)\n`)
 
   it('uses editable project templates, snapshots them, and safely opens package paths', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-sdd-')); const opened: string[] = []
-    const service = new SddProjectService(api(root, opened))
+    const service = new SddProjectService(...hostArgs(root, opened))
     await service.initialize('w1')
     const configPath = join(root, '.sdd/templates/requirements/template.yaml')
     const contentPath = join(root, '.sdd/templates/requirements/deliverable.md')
@@ -368,7 +372,7 @@ process.exit(1)\n`)
 
   it('pins only accepted upstream artifacts', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-sdd-'))
-    const service = new SddProjectService(api(root))
+    const service = new SddProjectService(...hostArgs(root))
     await service.execute({ kind: 'create-draft', workspaceId: 'w1', stage: 'requirements', title: '需求', basedOn: [] })
     const input = (await service.snapshot('w1')).artifacts[0]!
     await expect(service.execute({ kind: 'create-draft', workspaceId: 'w1', stage: 'prototype', title: '原型', basedOn: [input.uid] }))
@@ -377,7 +381,7 @@ process.exit(1)\n`)
 
   it('always allocates the plugin stage prefix independently of enterprise identifiers', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-sdd-'))
-    const service = new SddProjectService(api(root))
+    const service = new SddProjectService(...hostArgs(root))
     await service.execute({ kind: 'create-draft', workspaceId: 'w1', stage: 'requirements', title: '需求', basedOn: [] })
     await service.execute({ kind: 'create-draft', workspaceId: 'w1', stage: 'requirements', title: '另一需求', basedOn: [] })
     const snapshot = await service.snapshot('w1')
@@ -387,7 +391,7 @@ process.exit(1)\n`)
 
   it('reports invalid project configuration and preserves a backup when reinitializing', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-sdd-'))
-    const service = new SddProjectService(api(root))
+    const service = new SddProjectService(...hostArgs(root))
     await service.initialize('w1')
     await writeFile(join(root, '.sdd/project.yaml'), 'schema: wrong\nproject: []\n')
     let snapshot = await service.snapshot('w1')
@@ -410,7 +414,7 @@ process.exit(1)\n`)
         items: [{ schema: 'dsh-sdd/source@1' as const, uid: 'source-1', provider: 'memory', kind: request.kind, externalKey: request.key, title: 'Imported requirement', fetchedAt: new Date(0).toISOString(), content: { description: 'Pay safely.' } }],
       }),
     } as unknown as SddSourceRegistry
-    const service = new SddProjectService(api(root), sources)
+    const service = new SddProjectService(...hostArgs(root), sources)
     await service.execute({ kind: 'import-source', workspaceId: 'w1', provider: 'memory', sourceKind: 'requirement', key: 'EXT-7' })
     let snapshot = await service.snapshot('w1')
     expect(snapshot.sources[0]).toMatchObject({ uid: 'source-1', externalKey: 'EXT-7', validationErrors: [] })
@@ -434,7 +438,7 @@ process.exit(1)\n`)
       relations: [{ from: 'REQ-1', to: 'EPIC-1', type: 'child-of' }, { from: 'REQ-2', to: 'EPIC-1', type: 'child-of' }],
     }
     const sources = { names: () => ['memory'], fetch: async () => bundle } as unknown as SddSourceRegistry
-    const service = new SddProjectService(api(root), sources)
+    const service = new SddProjectService(...hostArgs(root), sources)
     const firstResult = await service.execute({ kind: 'preview-source-import', workspaceId: 'w1', provider: 'memory', sourceKind: 'requirement', key: 'EPIC-1' })
     if (!('schema' in firstResult)) throw new Error('expected preview')
     expect(firstResult.items.map(item => item.change)).toEqual(['added', 'added'])
@@ -499,7 +503,7 @@ process.exit(1)\n`)
   it('persists one session binding for one target artifact and resumes it', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-sdd-')); const bindings: unknown[] = []
     const sessions = { bind: (binding: unknown) => { bindings.push(binding) }, unbind: () => {} } as unknown as StageSessionController
-    const service = new SddProjectService(api(root), undefined, sessions)
+    const service = new SddProjectService(...hostArgs(root), undefined, sessions)
     await service.execute({ kind: 'create-draft', workspaceId: 'w1', stage: 'requirements', title: '绑定需求', basedOn: [] })
     const artifact = (await service.snapshot('w1')).artifacts[0]!
     const started = await service.execute({ kind: 'bind-session', workspaceId: 'w1', stage: 'requirements', artifactUid: artifact.uid, sessionId: 'session-1', artifactUids: [] })
@@ -527,7 +531,7 @@ process.exit(1)\n`)
     await mkdir(source); execFileSync('git', ['init', '-b', 'main'], { cwd: source }); execFileSync('git', ['config', 'user.email', 'sdd@example.test'], { cwd: source }); execFileSync('git', ['config', 'user.name', 'SDD Test'], { cwd: source })
     await writeFile(join(source, 'README.md'), '# Existing system\n'); execFileSync('git', ['add', 'README.md'], { cwd: source }); execFileSync('git', ['commit', '-m', 'initial'], { cwd: source })
     const sessions = { bind: (binding: unknown) => { bindings.push(binding) }, unbind: () => {} } as unknown as StageSessionController
-    const service = new SddProjectService(api(root), undefined, sessions)
+    const service = new SddProjectService(...hostArgs(root), undefined, sessions)
     await service.initialize('w1')
     await service.execute({ kind: 'add-project-repository', workspaceId: 'w1', id: 'existing-system', source, baseBranch: 'main' })
     await service.execute({ kind: 'create-draft', workspaceId: 'w1', stage: 'architecture', title: '存量系统设计', basedOn: [] })
@@ -544,7 +548,7 @@ process.exit(1)\n`)
     const root = await mkdtemp(join(tmpdir(), 'dsh-sdd-product-'))
     const provider = new ManualSourceProvider()
     const sources = { names: () => ['manual'], fetch: async (_name: string, request: any) => provider.get({ ...request, signal: request.signal ?? AbortSignal.timeout(1000) }) } as unknown as SddSourceRegistry
-    const service = new SddProjectService(api(root), sources)
+    const service = new SddProjectService(...hostArgs(root), sources)
     await service.execute({ kind: 'import-source', workspaceId: 'w1', provider: 'manual', sourceKind: 'requirement', key: 'ORDER-1', input: { title: '订单部分退款', description: '允许一个订单分批退款。' } })
     let snapshot = await service.snapshot('w1'); const workItem = snapshot.workItems[0]!
     await service.execute({ kind: 'create-draft', workspaceId: 'w1', stage: 'development', title: workItem.title, basedOn: [], sourceUids: [workItem.sourceUid!], workItemUid: workItem.uid })

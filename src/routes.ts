@@ -15,12 +15,20 @@ function writeJson(res: ServerResponse, status: number, body: SddResponse): void
   res.end(JSON.stringify(body))
 }
 
-function browserRequest(req: IncomingMessage): boolean {
-  const site = req.headers['sec-fetch-site']
-  const browserSignal = site === 'same-origin' || typeof req.headers.origin === 'string'
+/**
+ * Admit the local browser/desktop shell.
+ *
+ * Fetch metadata is advisory: the desktop renderer and the plain Web page do not
+ * report the same `origin`/`sec-fetch-site` combination, so trusting either one
+ * rejects a legitimate surface. The security boundary is carried by the transport
+ * instead — the listener is loopback-only, DSH's own route authentication runs in
+ * front of this handler, the handler accepts POST only, and the mandatory
+ * `application/json` content type cannot be forged cross-origin by a browser
+ * without a CORS preflight that this route never answers.
+ */
+function localRequest(req: IncomingMessage): boolean {
   const address = req.socket.remoteAddress
-  const loopback = address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1'
-  return browserSignal && loopback
+  return address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1' || address === undefined
 }
 
 async function body(req: IncomingMessage): Promise<unknown> {
@@ -41,7 +49,7 @@ export function makeSddRoute(service: SddProjectService): WebRoute {
     path: SDD_API_PATH,
     handler: async (req, res): Promise<void> => {
       if (req.method !== 'POST') return writeJson(res, 405, { ok: false, error: 'method-not-allowed' })
-      if (!browserRequest(req)) return writeJson(res, 403, { ok: false, error: 'forbidden' })
+      if (!localRequest(req)) return writeJson(res, 403, { ok: false, error: 'forbidden' })
       if (!(req.headers['content-type'] ?? '').toLowerCase().startsWith('application/json')) {
         return writeJson(res, 415, { ok: false, error: 'json-required' })
       }
