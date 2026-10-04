@@ -42,13 +42,68 @@ DeepSeek Harness Web 的五阶段 SDD（Specification-Driven Development）工�
 
 ### npm
 
-发布后安装到 Web profile（桌面版请在应用的插件管理页安装）：
+发布后安装到 Web profile（桌面版见下一节）：
 
 ```sh
 dsh plugin --profile web add dsh-e2e-dev-sdd@latest
 ```
 
-重启 `dsh web` 后，侧边栏会出现项目看板、五个阶段和项目设置入口；点击任一条目会在主面板打开对应页面。
+重启 `dsh web` 后，侧边栏会出现「项目开发」分组以及其下的项目看板、五个阶段和项目设置入口；点击任一条目会在主面板打开对应页面。
+
+### 桌面版（DeepSeek Harness.app）
+
+桌面版内置 0.2.0-rc.2 运行时，profile 由应用独占管理（`dsh --profile desktop` 会被拒绝），因此不能用 `dsh plugin` 安装。手工把插件挂到桌面 profile。**先备份**要改的两个文件：
+
+```sh
+DshHome="${DSH_HOME:-$HOME/.dsh}"
+ProfileDir="$DshHome/profiles/desktop"
+PluginDir=/path/to/dsh-e2e-dev-sdd          # 本仓库的绝对路径
+
+cd "$ProfileDir"
+cp cordis.patch.yml cordis.patch.yml.bak
+cp package.json package.json.bak
+
+# 1) 让 profile 能解析到插件包
+ln -sfn "$PluginDir" "$ProfileDir/node_modules/dsh-e2e-dev-sdd"
+
+# 2) 登记依赖（便于以后重装或核对）
+#    在 $ProfileDir/package.json 的 dependencies 中加入：
+#      "dsh-e2e-dev-sdd": "link:/path/to/dsh-e2e-dev-sdd"
+
+# 3) 在 $ProfileDir/cordis.patch.yml 末尾追加一行装载项：
+#      - insert:
+#          - id: e2e-dev-sdd
+#            name: dsh-e2e-dev-sdd
+```
+
+Windows 下第 1 步改为 PowerShell 的目录联接或复制：
+
+```powershell
+$DshHome = if ($env:DSH_HOME) { $env:DSH_HOME } else { Join-Path $HOME '.dsh' }
+$ProfileDir = Join-Path $DshHome 'profiles\desktop'
+New-Item -ItemType Junction -Path (Join-Path $ProfileDir 'node_modules\dsh-e2e-dev-sdd') -Target 'C:\path\to\dsh-e2e-dev-sdd'
+```
+
+注意：`desktop` profile 的 `~/.dsh/profiles/desktop/node_modules/dsh-news-wall` 是同一套做法，可以对照。改完 `package.json` 或补丁文件后**必须完全退出并重新打开应用**，只刷新页面不生效。
+
+`link:` 安装指向源码目录：改动代码后要 `pnpm build`，再重启应用。**回滚**只需还原两个文件并删除链接：
+
+```sh
+cd "$ProfileDir"
+cp cordis.patch.yml.bak cordis.patch.yml
+cp package.json.bak package.json
+rm node_modules/dsh-e2e-dev-sdd
+```
+
+验证安装是否生效：应用启动后，页面侧边栏应出现「项目开发」分组。`dsh --profile desktop --dump-config` 会被应用独占检查拒绝，需要验证补丁层时可以先把 profile 目录复制成另一个名字再 dump：
+
+```sh
+DshHome="${DSH_HOME:-$HOME/.dsh}"
+cp -R "$DshHome/profiles/desktop" "$DshHome/profiles/desktopcheck"
+dsh --profile desktopcheck --dump-config | grep -A1 'e2e-dev-sdd'
+```
+
+输出中应出现 `id: e2e-dev-sdd` 与 `name: dsh-e2e-dev-sdd`；用完删除 `desktopcheck` 目录即可。
 
 ### 本地开发
 
