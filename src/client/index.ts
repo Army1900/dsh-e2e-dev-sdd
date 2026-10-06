@@ -3,6 +3,7 @@ import * as React from 'react'
 import DOMPurify from 'dompurify'
 import { marked } from 'marked'
 import { STAGES, STAGE_ARTIFACT_TEMPLATES, type ArtifactSummary, type BurnupPoint, type DeliveryCellStatus, type OpenSpecFilePreview, type ProjectSnapshot, type RepositoryInspection, type SddAction, type SddResponse, type SourceImportDetail, type SourceSummary, type StageId, type StageRun, type StageTemplatePreview } from '../protocol.ts'
+import { CLIENT_BUILD } from './build-stamp.ts'
 import { jsonPreviewHtml } from './json-preview.ts'
 import { preferredSourceSelection } from './source-selection.ts'
 
@@ -71,8 +72,6 @@ interface ClientSlotApi {
 
 interface ClientLayoutApi {
   selectPanel(panelId: string | null): void
-  /** Root store of the central-panel selection; `activePanelId` is null for the Conversation. */
-  panelInfo?: StoreLike<{ activePanelId: string | null }>
 }
 
 /** Resolve the 0.2 client services by name; Cordis resolves services by name at runtime. */
@@ -303,11 +302,7 @@ class SddWorkbench {
   private panelListObserver?: MutationObserver
   /** The panel rows this plugin owns; only these fold and indent with the group. */
   private readonly ownPanelLabels: string[]
-  /** The panel ids this plugin owns; a selection among them folds the group. */
-  private readonly ownPanelIds: Set<string>
   private panelClickBound = false
-  private panelSelectionBound = false
-  private panelUnsubscribe?: () => void
 
   constructor(
     private readonly workspaces: ClientWorkspacesFacade,
@@ -318,7 +313,6 @@ class SddWorkbench {
   ) {
     this.groupCollapsed = readStoredGroupState()
     this.ownPanelLabels = ownPanels.map(panel => panel.label)
-    this.ownPanelIds = new Set(ownPanels.map(panel => panel.id))
   }
 
   /** External-store contract for the panel components. */
@@ -345,25 +339,7 @@ class SddWorkbench {
     const existing = document.querySelector('style[data-dsh-sdd-style]')
     if (existing === null) { const style = document.createElement('style'); style.dataset.dshSddStyle = ''; style.textContent = CSS; document.head.appendChild(style) }
     this.applyGroupState()
-    this.followPanelSelection()
     this.stylesMounted = true
-  }
-
-  /**
-   * Fold the group whenever one of its own panels becomes the selected main panel.
-   *
-   * The shell's own selection store is the fact to follow: it does not depend on which element a
-   * click landed on, on marker attributes being present yet, or on listener ordering. Reading it
-   * also covers every way a child can be opened — the row, a keyboard activation, or a shortcut.
-   */
-  private followPanelSelection(): void {
-    const panelInfo = this.layoutApi.panelInfo
-    if (panelInfo === undefined || this.panelSelectionBound) return
-    this.panelSelectionBound = true
-    this.panelUnsubscribe = panelInfo.subscribe(() => {
-      const active = panelInfo.getSnapshot().activePanelId
-      if (active !== null && this.ownPanelIds.has(active)) this.setGroupCollapsed(true)
-    })
   }
 
   /** Project the fold state onto the shell: one root attribute plus our own tagged rows. */
@@ -376,8 +352,10 @@ class SddWorkbench {
   observePanelList(): void {
     if (this.panelListObserver !== undefined) return
     this.applyGroupState()
-    // The group header row is an ordinary panel row whose panel id has no main entry, so it must
-    // fold instead of selecting. Bound once on the document so re-rendered rows keep working.
+    // Folding is user-driven: only the group header row toggles it, and selecting a child panel
+    // leaves the group open. The header is an ordinary panel row whose panel id has no main entry,
+    // so its click must fold instead of selecting; bound once on the document so re-rendered rows
+    // keep working.
     if (!this.panelClickBound) {
       this.panelClickBound = true
       document.addEventListener('click', event => {
@@ -423,9 +401,6 @@ class SddWorkbench {
   deactivate(): void {
     this.panelListObserver?.disconnect()
     this.panelListObserver = undefined
-    this.panelUnsubscribe?.()
-    this.panelUnsubscribe = undefined
-    this.panelSelectionBound = false
     this.detach(null)
   }
 
@@ -1805,6 +1780,10 @@ class SddWorkbench {
 export function apply(ctx: Context): () => void {
   const services = clientServices(ctx)
   if (services === undefined) return () => {}
+  // Build marker: proves which client bundle the running page actually loaded, so a stale
+  // `link:` install (app not restarted after a rebuild) is visible instead of silent.
+  console.info(`[dsh-e2e-dev-sdd] client ${CLIENT_BUILD} loaded`)
+  document.documentElement.setAttribute('data-dsh-sdd-client', CLIENT_BUILD)
   const workbench = new SddWorkbench(
     services.workspaces,
     services.sessions,

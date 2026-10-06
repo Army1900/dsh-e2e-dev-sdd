@@ -56,7 +56,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "node scripts/clean.mjs && tsc -p tsconfig.build.json && tsdown",
+    "build": "node scripts/clean.mjs && node scripts/build-stamp.mjs && tsc -p tsconfig.build.json && tsdown",
     "prepublishOnly": "pnpm build",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"

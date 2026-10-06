@@ -168,18 +168,17 @@ describe('SDD client slot wiring', () => {
     expect(document.documentElement.hasAttribute('data-dsh-sdd-group-collapsed')).toBe(true)
     expect(plugin.selected).toEqual([])
 
-    // Reopening and selecting one of the plugin's own panels folds the group again, whichever
-    // route opened it: the plugin follows the shell's selection store, not the click target.
+    // Folding is user-driven only: switching panels — this plugin's or another's — leaves the
+    // group exactly as the user left it.
     rowOf('项目开发').dispatchEvent(new MouseEvent('click', { bubbles: true }))
     expect(document.documentElement.hasAttribute('data-dsh-sdd-group-collapsed')).toBe(false)
     act(() => { plugin.selectPanel('requirements') })
-    expect(document.documentElement.hasAttribute('data-dsh-sdd-group-collapsed')).toBe(true)
-    // Selecting another plugin's panel must not touch the fold state.
-    act(() => { plugin.selectPanel(null) })
-    expect(document.documentElement.hasAttribute('data-dsh-sdd-group-collapsed')).toBe(true)
-    rowOf('项目开发').dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    expect(document.documentElement.hasAttribute('data-dsh-sdd-group-collapsed')).toBe(false)
     act(() => { plugin.selectPanel('news-wall') })
     expect(document.documentElement.hasAttribute('data-dsh-sdd-group-collapsed')).toBe(false)
+    // Only the header row folds it.
+    rowOf('项目开发').dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    expect(document.documentElement.hasAttribute('data-dsh-sdd-group-collapsed')).toBe(true)
 
     const style = (document.querySelector('style[data-dsh-sdd-style]') as HTMLStyleElement).textContent ?? ''
     expect(style).toContain('[data-dsh-sdd-child]{display:none}')

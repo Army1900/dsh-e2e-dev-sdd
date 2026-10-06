@@ -9,3 +9,4 @@ lib/*.map
 
 # Local verification scratch (sandboxed test homes, probe repos, package caches).
 .tmp/
+src/client/build-stamp.ts
