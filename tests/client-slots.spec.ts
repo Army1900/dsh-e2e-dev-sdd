@@ -155,6 +155,16 @@ describe('SDD client slot wiring', () => {
     expect(document.documentElement.hasAttribute('data-dsh-sdd-group-collapsed')).toBe(true)
     expect(plugin.selected).toEqual([])
 
+    // Reopening and picking a child folds the group again, like a menu that closes on use.
+    rowOf('项目开发').dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    expect(document.documentElement.hasAttribute('data-dsh-sdd-group-collapsed')).toBe(false)
+    rowOf('需求讨论').dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    expect(document.documentElement.hasAttribute('data-dsh-sdd-group-collapsed')).toBe(true)
+    // A row this plugin does not own must not touch the fold state.
+    rowOf('项目开发').dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    rowOf('时事大屏').dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    expect(document.documentElement.hasAttribute('data-dsh-sdd-group-collapsed')).toBe(false)
+
     const style = (document.querySelector('style[data-dsh-sdd-style]') as HTMLStyleElement).textContent ?? ''
     expect(style).toContain('[data-dsh-sdd-child]{display:none}')
     expect(style).not.toContain('.dsh-sdd-panel-list>*{display:none}')

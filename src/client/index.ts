@@ -301,7 +301,7 @@ class SddWorkbench {
   private panelListObserver?: MutationObserver
   /** The panel rows this plugin owns; only these fold and indent with the group. */
   private readonly ownPanelLabels: string[]
-  private panelListClickBound = false
+  private panelClickBound = false
 
   constructor(
     private readonly workspaces: ClientWorkspacesFacade,
@@ -351,19 +351,19 @@ class SddWorkbench {
   observePanelList(): void {
     if (this.panelListObserver !== undefined) return
     this.applyGroupState()
-    // The header is an ordinary panel row, so its own click would select a panel that does not
-    // exist. Capture the intent on the list itself: the marker attribute is already on the row,
-    // and stopping the event before React's delegated handler keeps the fold the only effect.
-    const list = sidebarPanelList()
-    if (list !== null && !this.panelListClickBound) {
-      this.panelListClickBound = true
-      list.addEventListener('click', event => {
+    // Two interactions on the plugin's own panel rows, bound once on the document so they also
+    // cover re-rendered rows:
+    // - the group header row is an ordinary panel row, so its own click would select a panel that
+    //   does not exist; it folds instead.
+    // - selecting a child folds the group again, so the menu reads as a menu that closes on use.
+    if (!this.panelClickBound) {
+      this.panelClickBound = true
+      document.addEventListener('click', event => {
         const target = event.target
-        if (!(target instanceof Element) || target.closest('[data-dsh-sdd-group-header]') === null) return
-        event.preventDefault()
-        event.stopImmediatePropagation()
-        this.toggleGroup()
-      }, true)
+        if (!(target instanceof Element)) return
+        if (target.closest('[data-dsh-sdd-group-header]') !== null) { this.toggleGroup(); return }
+        if (target.closest('[data-dsh-sdd-child]') !== null) this.setGroupCollapsed(true)
+      })
     }
     const observer = new MutationObserver(() => { this.applyGroupState() })
     observer.observe(document.body, { childList: true, subtree: true })
