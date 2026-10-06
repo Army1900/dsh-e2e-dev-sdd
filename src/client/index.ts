@@ -90,15 +90,14 @@ function clientServices(ctx: Context): { workspaces: ClientWorkspacesFacade; ses
 
 const CSS = `
 .dsh-sdd-panel{position:relative;box-sizing:border-box;width:100%;height:100%;overflow:auto;padding-top:var(--dsh-frame-top-clearance,48px);background:var(--dsw-alias-bg-base,#fff);color:var(--dsw-alias-label-primary,#0f1115);font-family:var(--dsw-font-family,-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei","Helvetica Neue",Helvetica,Arial,sans-serif);font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
-/* 项目开发 group: header pinned above the sidebar footer + the panel rows indented beneath it. */
-.dsh-sdd-group{flex-direction:column;flex:none;display:flex;width:100%}
-.dsh-sdd-group-header{box-sizing:border-box;display:flex;align-items:center;gap:8px;width:100%;min-height:36px;margin:0 2px;padding:7px 8px;border:0;border-radius:var(--dsw-radius-md,8px);background:0 0;color:var(--dsw-alias-label-secondary,#61666b);cursor:pointer;font:inherit;line-height:22px;text-align:left;transition:background-color .16s ease,color .16s ease}
-.dsh-sdd-group-header:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(38,49,72,.04));color:var(--dsw-alias-label-primary,#0f1115)}
-.dsh-sdd-group-header:focus-visible{outline:var(--dsw-focus-ring-width,2px) solid var(--dsw-alias-state-business-primary,rgba(38,49,72,.3));outline-offset:-2px}
-.dsh-sdd-group-glyph{flex:none;justify-content:center;align-items:center;display:inline-flex}
-.dsh-sdd-group-title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500}
-.dsh-sdd-group-chevron{flex:none;margin-left:auto;display:inline-flex;opacity:.75;transition:transform .16s var(--ds-ease-in-out,ease)}
+/* 项目开发 group: one shell-rendered panel row above its indented child rows. */
+.dsh-sdd-group-glyph{flex:none;justify-content:center;align-items:center;display:inline-flex;gap:3px}
+.dsh-sdd-group-chevron{display:inline-flex;opacity:.7;transition:transform .16s var(--ds-ease-in-out,ease)}
 html:not([data-dsh-sdd-group-collapsed]) .dsh-sdd-group-chevron{transform:rotate(180deg)}
+[data-dsh-sdd-group-header] [class*='panelGlyph']{gap:3px}
+.dsh-sdd-group-state{font-size:11px;line-height:16px;color:var(--dsw-alias-label-secondary,#61666b);white-space:nowrap}
+html[data-dsh-sdd-group-collapsed] .dsh-sdd-group-state [data-dsh-sdd-group-label='expanded']{display:none}
+html:not([data-dsh-sdd-group-collapsed]) .dsh-sdd-group-state [data-dsh-sdd-group-label='collapsed']{display:none}
 /* Only this plugin's tagged panel rows indent and fold; other plugins sharing the list stay. */
 .dsh-sdd-panel-list>[data-dsh-sdd-child]{padding-left:26px}
 .dsh-sdd-panel-list>[data-dsh-sdd-child] [class*='panelGlyph']{opacity:.85}
@@ -188,6 +187,9 @@ function icon(menu: MenuId): string {
   return `<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[menu]}</svg>`
 }
 
+/** Accessible name of the group header row; the fold targets rows by this name. */
+const GROUP_LABEL = '项目开发'
+
 /** The `项目开发` group fold, persisted per browser so a reload keeps the user's choice. */
 const GROUP_STATE_KEY = 'dsh-e2e-dev-sdd.group-collapsed'
 
@@ -247,33 +249,38 @@ function sidebarPanelList(): HTMLElement | null {
 }
 
 /**
- * Tag only the panel rows this plugin registered.
+ * Tag the group header row and only the panel rows this plugin registered.
  *
  * The panel list is shared with every other global-panel plugin, so the fold must not target
  * `nav > *`: an unrelated entry that happens to share the list would disappear with the group.
  * Rows are matched by the accessible names this plugin declared, which is the one handle the
  * shell exposes for a row it renders itself.
  */
-function tagOwnPanelRows(labels: readonly string[]): void {
+function tagOwnPanelRows(groupLabel: string, childLabels: readonly string[]): void {
   const list = sidebarPanelList()
   if (list === null) return
   list.classList.add('dsh-sdd-panel-list')
-  const own = new Set(labels)
+  const children = new Set(childLabels)
   for (const row of list.querySelectorAll<HTMLElement>('button[aria-label]')) {
     const label = row.getAttribute('aria-label')
-    if (label !== null && own.has(label)) row.setAttribute('data-dsh-sdd-child', '')
+    if (label === null) continue
+    if (label === groupLabel) { row.setAttribute('data-dsh-sdd-group-header', ''); row.setAttribute('aria-expanded', String(!isCollapsedMarker())) }
+    else if (children.has(label)) row.setAttribute('data-dsh-sdd-child', '')
   }
+}
+
+function isCollapsedMarker(): boolean {
+  return document.documentElement.hasAttribute('data-dsh-sdd-group-collapsed')
 }
 
 /**
  * The `项目开发` sidebar group header.
  *
- * The shell renders `sidebar.panellist` as a flat list with no nesting support, so the group is
- * composed from the two seats the sidebar itself owns: this header registers into
- * `sidebar.workspaces` (rendered directly below the panel list, above the workspace browser) and
- * the seven SDD entries stay in `sidebar.panellist`. The plugin stylesheet pins the header to the
- * top of its region with an explicit flex `order`, and the chevron folds the entries through one
- * root attribute — no shell DOM is moved or restyled.
+ * The shell renders `sidebar.panellist` as a flat list with no nesting support. The header is one
+ * more entry in that same list with the lowest order, so it renders as a sibling row directly
+ * above the seven SDD entries: the shell owns the row button, accessible name and tooltip, and
+ * the plugin contributes only the glyph and chevron. `applyGroupState` tags the header row and
+ * the seven child rows, and the stylesheet indents and folds just the tagged children.
  */
 function SddSidebarGroup(props: Readonly<Record<string, unknown>>): unknown {
   const workbench = props.workbench as SddWorkbench
@@ -283,36 +290,22 @@ function SddSidebarGroup(props: Readonly<Record<string, unknown>>): unknown {
   React.useSyncExternalStore(subscribe, snapshot, snapshot)
   // Read the live fold state; a value captured at registration would never change.
   const collapsed = workbench.isGroupCollapsed()
-  const wide = props.wide !== false
-  if (!wide) return null
-  return React.createElement('div', { className: 'dsh-sdd-group' },
-    React.createElement('button', {
-      type: 'button',
-      className: 'dsh-sdd-group-header',
-      'data-dsh-sdd-group-header': '',
-      'aria-expanded': collapsed ? 'false' : 'true',
-      title: '项目开发',
-      onClick: () => { workbench.toggleGroup() },
-      onKeyDown: (event: { key?: string; preventDefault?: () => void }) => {
-        if (event.key !== 'ArrowLeft') return
-        event.preventDefault?.()
-        workbench.setGroupCollapsed(true)
-      },
-    },
-      React.createElement('span', { className: 'dsh-sdd-group-glyph', 'aria-hidden': 'true' },
+  return React.createElement(React.Fragment, null,
+    React.createElement('span', { className: 'dsh-sdd-group-glyph', 'aria-hidden': 'true' },
+      React.createElement('svg', {
+        viewBox: '0 0 20 20', width: 16, height: 16, fill: 'none', stroke: 'currentColor',
+        strokeWidth: 1.5, strokeLinecap: 'round', strokeLinejoin: 'round',
+        dangerouslySetInnerHTML: { __html: GROUP_ICON },
+      }),
+      React.createElement('span', { className: 'dsh-sdd-group-chevron' },
         React.createElement('svg', {
-          viewBox: '0 0 20 20', width: 16, height: 16, fill: 'none', stroke: 'currentColor',
-          strokeWidth: 1.5, strokeLinecap: 'round', strokeLinejoin: 'round',
-          dangerouslySetInnerHTML: { __html: GROUP_ICON },
-        })),
-      React.createElement('span', { className: 'dsh-sdd-group-title' }, '项目开发'),
-      React.createElement('span', { className: 'dsh-sdd-group-chevron', 'aria-hidden': 'true' },
-        React.createElement('svg', {
-          viewBox: '0 0 20 20', width: 14, height: 14, fill: 'none', stroke: 'currentColor',
-          strokeWidth: 1.6, strokeLinecap: 'round', strokeLinejoin: 'round',
+          viewBox: '0 0 20 20', width: 12, height: 12, fill: 'none', stroke: 'currentColor',
+          strokeWidth: 1.8, strokeLinecap: 'round', strokeLinejoin: 'round',
           dangerouslySetInnerHTML: { __html: '<path d="m6.5 8 3.5 3.5L13.5 8"/>' },
-        })),
-    ))
+        }))),
+    React.createElement('span', { className: 'dsh-sdd-group-state', 'aria-hidden': 'true' },
+      React.createElement('span', { 'data-dsh-sdd-group-label': 'expanded' }, '收起'),
+      React.createElement('span', { 'data-dsh-sdd-group-label': 'collapsed' }, '展开')))
 }
 
 class SddWorkbench {
@@ -327,6 +320,7 @@ class SddWorkbench {
   private panelListObserver?: MutationObserver
   /** The panel rows this plugin owns; only these fold and indent with the group. */
   private readonly ownPanelLabels: string[]
+  private panelListClickBound = false
 
   constructor(
     private readonly workspaces: ClientWorkspacesFacade,
@@ -369,13 +363,27 @@ class SddWorkbench {
   /** Project the fold state onto the shell: one root attribute plus our own tagged rows. */
   applyGroupState(): void {
     document.documentElement.toggleAttribute('data-dsh-sdd-group-collapsed', this.groupCollapsed)
-    tagOwnPanelRows(this.ownPanelLabels)
+    tagOwnPanelRows(GROUP_LABEL, this.ownPanelLabels)
   }
 
   /** Watch the shell's panel list so the group styling survives list re-renders. */
   observePanelList(): void {
     if (this.panelListObserver !== undefined) return
     this.applyGroupState()
+    // The header is an ordinary panel row, so its own click would select a panel that does not
+    // exist. Capture the intent on the list itself: the marker attribute is already on the row,
+    // and stopping the event before React's delegated handler keeps the fold the only effect.
+    const list = sidebarPanelList()
+    if (list !== null && !this.panelListClickBound) {
+      this.panelListClickBound = true
+      list.addEventListener('click', event => {
+        const target = event.target
+        if (!(target instanceof Element) || target.closest('[data-dsh-sdd-group-header]') === null) return
+        event.preventDefault()
+        event.stopImmediatePropagation()
+        this.toggleGroup()
+      }, true)
+    }
     const observer = new MutationObserver(() => { this.applyGroupState() })
     observer.observe(document.body, { childList: true, subtree: true })
     this.panelListObserver = observer
@@ -1784,11 +1792,10 @@ class SddWorkbench {
 }
 
 /**
- * DSH 0.2 client entry: the `项目开发` group header in `sidebar.footer.action` — a list seat, so
- * it never competes with the workspace browser occupying the single `sidebar.workspaces` seat —
- * plus seven `sidebar.panellist` rows, each addressing the matching key in the layout's
- * root-scoped `main` keyed slot. One workbench instance is shared by the panel components so
- * project state survives switching between stages.
+ * DSH 0.2 client entry: the `项目开发` header row plus its seven child rows, all registered in
+ * `sidebar.panellist` so they render as one contiguous group, and seven `main` panels keyed by the
+ * same panel ids. One workbench instance is shared by the panel components so project state
+ * survives switching between stages.
  */
 export function apply(ctx: Context): () => void {
   const services = clientServices(ctx)
@@ -1802,8 +1809,9 @@ export function apply(ctx: Context): () => void {
     MENUS.map(menu => menu.label),
   )
   const disposers: Array<() => void> = [
+    // Same list seat as the seven entries, so the header sits directly above them.
     services.slots.register(
-      { name: 'sidebar.footer.action', id: 'e2e-dev-sdd-group', order: -1000, label: '项目开发' },
+      { name: 'sidebar.panellist', id: 'e2e-dev-sdd-group', order: MENUS.length + 100, label: GROUP_LABEL },
       (props: Readonly<Record<string, unknown>>) => SddSidebarGroup({ ...props, workbench }),
     ),
   ]

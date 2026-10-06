@@ -4,10 +4,9 @@ export declare const name = "dsh-e2e-dev-sdd-client";
  * `uiWorkspace` opens a session in the main panel, and `slots`/`layout` render the UI. */
 export declare const inject: string[];
 /**
- * DSH 0.2 client entry: the `项目开发` group header in `sidebar.footer.action` — a list seat, so
- * it never competes with the workspace browser occupying the single `sidebar.workspaces` seat —
- * plus seven `sidebar.panellist` rows, each addressing the matching key in the layout's
- * root-scoped `main` keyed slot. One workbench instance is shared by the panel components so
- * project state survives switching between stages.
+ * DSH 0.2 client entry: the `项目开发` header row plus its seven child rows, all registered in
+ * `sidebar.panellist` so they render as one contiguous group, and seven `main` panels keyed by the
+ * same panel ids. One workbench instance is shared by the panel components so project state
+ * survives switching between stages.
  */
 export declare function apply(ctx: Context): () => void;

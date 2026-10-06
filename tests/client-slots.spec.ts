@@ -35,7 +35,7 @@ afterEach(() => {
  * through the documented client services. Rendering uses the real React runtime so the group
  * header's effects and click handler run for real.
  */
-function loadPlugin(): { sidebar: Registration[]; main: Registration[]; group: Registration[]; disposer: () => void; selected: string[] } {
+function loadPlugin(): { sidebar: Registration[]; main: Registration[]; disposer: () => void; selected: string[] } {
   const registrations: Registration[] = []
   const selected: string[] = []
   const services = {
@@ -64,7 +64,6 @@ function loadPlugin(): { sidebar: Registration[]; main: Registration[]; group: R
   return {
     sidebar: registrations.filter(entry => entry.options.name === 'sidebar.panellist'),
     main: registrations.filter(entry => entry.options.name === 'main'),
-    group: registrations.filter(entry => entry.options.name === 'sidebar.footer.action'),
     disposer: plugin.apply({ get: (name: string) => (services as Record<string, unknown>)[name] }),
     selected,
   }
@@ -78,41 +77,26 @@ function mount(component: Component): ReactTestRenderer {
 }
 
 describe('SDD client slot wiring', () => {
-  it('registers the 项目开发 header plus the seven SDD panels', () => {
+  it('registers the 项目开发 header and its seven children in one list', () => {
     const plugin = loadPlugin()
-    expect(plugin.group.map(entry => entry.options.name)).toEqual(['sidebar.footer.action'])
-    expect(plugin.group[0]!.options.label).toBe('项目开发')
-    expect(plugin.sidebar.map(entry => entry.options.id)).toEqual(['dashboard', 'requirements', 'prototype', 'architecture', 'specification', 'development', 'settings'])
+    // The header shares the panel list with its children, ordered after them so it renders above.
+    expect(plugin.sidebar.map(entry => entry.options.id)).toEqual(['e2e-dev-sdd-group', 'dashboard', 'requirements', 'prototype', 'architecture', 'specification', 'development', 'settings'])
+    expect(plugin.sidebar[0]!.options.label).toBe('项目开发')
+    expect(plugin.sidebar[0]!.options.order).toBeGreaterThan(plugin.sidebar[1]!.options.order!)
     expect(plugin.main.map(entry => entry.options.key)).toEqual(['dashboard', 'requirements', 'prototype', 'architecture', 'specification', 'development', 'settings'])
   })
 
-  it('mounts the stylesheet and publishes the fold marker once the header renders', () => {
+  it('mounts the stylesheet and publishes the fold marker once the header glyph renders', () => {
     const plugin = loadPlugin()
     expect(document.querySelector('style[data-dsh-sdd-style]')).toBeNull()
-    const header = plugin.group[0]!
-    const renderer = mount(header.component as Component)
+    const renderer = mount(plugin.sidebar[0]!.component as Component)
     const style = document.querySelector('style[data-dsh-sdd-style]') as HTMLStyleElement | null
     expect(style).not.toBeNull()
-    expect(style!.textContent).toContain('.dsh-sdd-group-header')
     expect(style!.textContent).toContain('data-dsh-sdd-group-collapsed')
-    // Expanded is the default: the marker is absent and the chevron is rotated by CSS.
+    expect(style!.textContent).toContain('[data-dsh-sdd-child]')
     expect(document.documentElement.hasAttribute('data-dsh-sdd-group-collapsed')).toBe(false)
-    const button = renderer.root.findByType('button')
-    expect(button.props['aria-expanded']).toBe('true')
-    expect(String(button.props.title)).toBe('项目开发')
-    renderer.unmount()
-  })
-
-  it('folds and unfolds the group from the header click', () => {
-    const plugin = loadPlugin()
-    const renderer = mount(plugin.group[0]!.component as Component)
-    const button = renderer.root.findByType('button')
-    act(() => { button.props.onClick() })
-    expect(document.documentElement.hasAttribute('data-dsh-sdd-group-collapsed')).toBe(true)
-    expect(renderer.root.findByType('button').props['aria-expanded']).toBe('false')
-    act(() => { renderer.root.findByType('button').props.onClick() })
-    expect(document.documentElement.hasAttribute('data-dsh-sdd-group-collapsed')).toBe(false)
-    expect(renderer.root.findByType('button').props['aria-expanded']).toBe('true')
+    // The row button and its label belong to the shell; the plugin contributes the glyph.
+    expect(renderer.root.findAllByType('svg')).toHaveLength(2)
     renderer.unmount()
   })
 
@@ -123,11 +107,11 @@ describe('SDD client slot wiring', () => {
     renderer.unmount()
   })
 
-  it('tags only its own panel rows, leaving other plugins sharing the list alone', () => {
+  it('tags the header and only its own panel rows, leaving other plugins alone', () => {
     // The shell's panel list also holds rows registered by unrelated global-panel plugins.
     const nav = document.createElement('nav')
     const labels = ['项目看板', '需求讨论', '原型输出', '系统设计', '规格设计', '开发测试', '项目设置']
-    for (const label of [...labels, '时事大屏', '插件管理']) {
+    for (const label of ['项目开发', ...labels, '时事大屏', '插件管理']) {
       const button = document.createElement('button')
       button.setAttribute('aria-label', label)
       nav.appendChild(button)
@@ -136,16 +120,23 @@ describe('SDD client slot wiring', () => {
     const rowOf = (label: string) => nav.querySelector<HTMLElement>(`button[aria-label="${label}"]`)!
 
     const plugin = loadPlugin()
-    const renderer = mount(plugin.group[0]!.component as Component)
+    const renderer = mount(plugin.sidebar[0]!.component as Component)
 
     expect(nav.classList.contains('dsh-sdd-panel-list')).toBe(true)
+    expect(rowOf('项目开发').hasAttribute('data-dsh-sdd-group-header')).toBe(true)
+    expect(rowOf('项目开发').getAttribute('aria-expanded')).toBe('true')
     for (const label of labels) expect(rowOf(label).hasAttribute('data-dsh-sdd-child')).toBe(true)
     // Rows this plugin does not own must stay untagged, so the fold CSS cannot hide them.
     expect(rowOf('时事大屏').hasAttribute('data-dsh-sdd-child')).toBe(false)
     expect(rowOf('插件管理').hasAttribute('data-dsh-sdd-child')).toBe(false)
 
+    // The fold is driven by the header row's own click, which must not select a panel.
+    rowOf('项目开发').dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    expect(document.documentElement.hasAttribute('data-dsh-sdd-group-collapsed')).toBe(true)
+    expect(plugin.selected).toEqual([])
+
     const style = (document.querySelector('style[data-dsh-sdd-style]') as HTMLStyleElement).textContent ?? ''
-    expect(style).toContain('.dsh-sdd-panel-list>[data-dsh-sdd-child]{display:none}')
+    expect(style).toContain('[data-dsh-sdd-child]{display:none}')
     expect(style).not.toContain('.dsh-sdd-panel-list>*{display:none}')
 
     renderer.unmount()
