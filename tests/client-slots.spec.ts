@@ -79,10 +79,12 @@ function mount(component: Component): ReactTestRenderer {
 describe('SDD client slot wiring', () => {
   it('registers the 项目开发 header and its seven children in one list', () => {
     const plugin = loadPlugin()
-    // The header shares the panel list with its children, ordered after them so it renders above.
     expect(plugin.sidebar.map(entry => entry.options.id)).toEqual(['e2e-dev-sdd-group', 'dashboard', 'requirements', 'prototype', 'architecture', 'specification', 'development', 'settings'])
     expect(plugin.sidebar[0]!.options.label).toBe('项目开发')
-    expect(plugin.sidebar[0]!.options.order).toBeGreaterThan(plugin.sidebar[1]!.options.order!)
+    // The shell sorts the list by order ascending, so the header must sort below its children
+    // (and below the shipped panels, which register from 100 upward) to render at the top.
+    expect(plugin.sidebar[0]!.options.order).toBe(0)
+    for (const child of plugin.sidebar.slice(1)) expect(child.options.order!).toBeGreaterThan(0)
     expect(plugin.main.map(entry => entry.options.key)).toEqual(['dashboard', 'requirements', 'prototype', 'architecture', 'specification', 'development', 'settings'])
   })
 
@@ -95,8 +97,12 @@ describe('SDD client slot wiring', () => {
     expect(style!.textContent).toContain('data-dsh-sdd-group-collapsed')
     expect(style!.textContent).toContain('[data-dsh-sdd-child]')
     expect(document.documentElement.hasAttribute('data-dsh-sdd-group-collapsed')).toBe(false)
-    // The row button and its label belong to the shell; the plugin contributes the glyph.
-    expect(renderer.root.findAllByType('svg')).toHaveLength(2)
+    // The row button, its label and tooltip belong to the shell; the plugin contributes the glyph
+    // only — no chevron and no expand/collapse copy.
+    expect(renderer.root.findAllByType('svg')).toHaveLength(1)
+    const markup = JSON.stringify(renderer.toJSON())
+    expect(markup).not.toContain('收起')
+    expect(markup).not.toContain('展开')
     renderer.unmount()
   })
 
@@ -105,6 +111,20 @@ describe('SDD client slot wiring', () => {
     const renderer = mount(plugin.main[1]!.component as Component)
     expect(renderer.toJSON()).toMatchObject({ props: { className: 'dsh-sdd-panel' } })
     renderer.unmount()
+  })
+
+  it('sorts above other plugins in the shell panel list', () => {
+    const plugin = loadPlugin()
+    // Other global-panel plugins register from 100 upward; the shell sorts ascending by order.
+    const panels = [
+      ...plugin.sidebar.map(entry => ({ id: String(entry.options.id), order: entry.options.order ?? 0 })),
+      { id: 'news-wall', order: 100 },
+      { id: 'plugin-manager', order: 200 },
+    ].sort((left, right) => left.order - right.order)
+    expect(panels.map(panel => panel.id)).toEqual([
+      'e2e-dev-sdd-group', 'dashboard', 'requirements', 'prototype', 'architecture',
+      'specification', 'development', 'settings', 'news-wall', 'plugin-manager',
+    ])
   })
 
   it('tags the header and only its own panel rows, leaving other plugins alone', () => {

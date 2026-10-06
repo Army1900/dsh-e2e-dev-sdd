@@ -91,13 +91,7 @@ function clientServices(ctx: Context): { workspaces: ClientWorkspacesFacade; ses
 const CSS = `
 .dsh-sdd-panel{position:relative;box-sizing:border-box;width:100%;height:100%;overflow:auto;padding-top:var(--dsh-frame-top-clearance,48px);background:var(--dsw-alias-bg-base,#fff);color:var(--dsw-alias-label-primary,#0f1115);font-family:var(--dsw-font-family,-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei","Helvetica Neue",Helvetica,Arial,sans-serif);font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
 /* 项目开发 group: one shell-rendered panel row above its indented child rows. */
-.dsh-sdd-group-glyph{flex:none;justify-content:center;align-items:center;display:inline-flex;gap:3px}
-.dsh-sdd-group-chevron{display:inline-flex;opacity:.7;transition:transform .16s var(--ds-ease-in-out,ease)}
-html:not([data-dsh-sdd-group-collapsed]) .dsh-sdd-group-chevron{transform:rotate(180deg)}
-[data-dsh-sdd-group-header] [class*='panelGlyph']{gap:3px}
-.dsh-sdd-group-state{font-size:11px;line-height:16px;color:var(--dsw-alias-label-secondary,#61666b);white-space:nowrap}
-html[data-dsh-sdd-group-collapsed] .dsh-sdd-group-state [data-dsh-sdd-group-label='expanded']{display:none}
-html:not([data-dsh-sdd-group-collapsed]) .dsh-sdd-group-state [data-dsh-sdd-group-label='collapsed']{display:none}
+.dsh-sdd-group-glyph{flex:none;justify-content:center;align-items:center;display:inline-flex}
 /* Only this plugin's tagged panel rows indent and fold; other plugins sharing the list stay. */
 .dsh-sdd-panel-list>[data-dsh-sdd-child]{padding-left:26px}
 .dsh-sdd-panel-list>[data-dsh-sdd-child] [class*='panelGlyph']{opacity:.85}
@@ -285,27 +279,14 @@ function isCollapsedMarker(): boolean {
 function SddSidebarGroup(props: Readonly<Record<string, unknown>>): unknown {
   const workbench = props.workbench as SddWorkbench
   React.useEffect(() => { workbench.attachStyles(); workbench.observePanelList() }, [workbench])
-  const subscribe = React.useCallback((listener: () => void): (() => void) => workbench.subscribe(listener), [workbench])
-  const snapshot = React.useCallback((): number => workbench.version(), [workbench])
-  React.useSyncExternalStore(subscribe, snapshot, snapshot)
-  // Read the live fold state; a value captured at registration would never change.
-  const collapsed = workbench.isGroupCollapsed()
-  return React.createElement(React.Fragment, null,
-    React.createElement('span', { className: 'dsh-sdd-group-glyph', 'aria-hidden': 'true' },
-      React.createElement('svg', {
-        viewBox: '0 0 20 20', width: 16, height: 16, fill: 'none', stroke: 'currentColor',
-        strokeWidth: 1.5, strokeLinecap: 'round', strokeLinejoin: 'round',
-        dangerouslySetInnerHTML: { __html: GROUP_ICON },
-      }),
-      React.createElement('span', { className: 'dsh-sdd-group-chevron' },
-        React.createElement('svg', {
-          viewBox: '0 0 20 20', width: 12, height: 12, fill: 'none', stroke: 'currentColor',
-          strokeWidth: 1.8, strokeLinecap: 'round', strokeLinejoin: 'round',
-          dangerouslySetInnerHTML: { __html: '<path d="m6.5 8 3.5 3.5L13.5 8"/>' },
-        }))),
-    React.createElement('span', { className: 'dsh-sdd-group-state', 'aria-hidden': 'true' },
-      React.createElement('span', { 'data-dsh-sdd-group-label': 'expanded' }, '收起'),
-      React.createElement('span', { 'data-dsh-sdd-group-label': 'collapsed' }, '展开')))
+  // The shell owns the row button, its label and its hover tooltip; the group contributes the
+  // glyph only, and folds when that row is activated.
+  return React.createElement('span', { className: 'dsh-sdd-group-glyph', 'aria-hidden': 'true' },
+    React.createElement('svg', {
+      viewBox: '0 0 20 20', width: 16, height: 16, fill: 'none', stroke: 'currentColor',
+      strokeWidth: 1.5, strokeLinecap: 'round', strokeLinejoin: 'round',
+      dangerouslySetInnerHTML: { __html: GROUP_ICON },
+    }))
 }
 
 class SddWorkbench {
@@ -1809,9 +1790,10 @@ export function apply(ctx: Context): () => void {
     MENUS.map(menu => menu.label),
   )
   const disposers: Array<() => void> = [
-    // Same list seat as the seven entries, so the header sits directly above them.
+    // Same list as the seven entries; a lower order sorts it above them (and above other plugins'
+    // entries, which the shipped panels register from 100 upward).
     services.slots.register(
-      { name: 'sidebar.panellist', id: 'e2e-dev-sdd-group', order: MENUS.length + 100, label: GROUP_LABEL },
+      { name: 'sidebar.panellist', id: 'e2e-dev-sdd-group', order: 0, label: GROUP_LABEL },
       (props: Readonly<Record<string, unknown>>) => SddSidebarGroup({ ...props, workbench }),
     ),
   ]
@@ -1819,7 +1801,7 @@ export function apply(ctx: Context): () => void {
     const panelId = String(menu.id)
     disposers.push(
       services.slots.register(
-        { name: 'sidebar.panellist', id: panelId, order: 100 + index, label: menu.label },
+        { name: 'sidebar.panellist', id: panelId, order: 1 + index, label: menu.label },
         (props: Readonly<Record<string, unknown>>) => SddPanelIcon({ ...props, menu: menu.id }),
       ),
       services.slots.register(
