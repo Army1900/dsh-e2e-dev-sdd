@@ -71,6 +71,8 @@ interface ClientSlotApi {
 
 interface ClientLayoutApi {
   selectPanel(panelId: string | null): void
+  /** Root store of the central-panel selection; `activePanelId` is null for the Conversation. */
+  panelInfo?: StoreLike<{ activePanelId: string | null }>
 }
 
 /** Resolve the 0.2 client services by name; Cordis resolves services by name at runtime. */
@@ -301,17 +303,22 @@ class SddWorkbench {
   private panelListObserver?: MutationObserver
   /** The panel rows this plugin owns; only these fold and indent with the group. */
   private readonly ownPanelLabels: string[]
+  /** The panel ids this plugin owns; a selection among them folds the group. */
+  private readonly ownPanelIds: Set<string>
   private panelClickBound = false
+  private panelSelectionBound = false
+  private panelUnsubscribe?: () => void
 
   constructor(
     private readonly workspaces: ClientWorkspacesFacade,
     private readonly sessions: ClientSessionsService,
     private readonly uiWorkspace: ClientWorkspaceNavigation,
-    private readonly selectPanel: (panelId: string | null) => void,
-    ownPanelLabels: readonly string[] = [],
+    private readonly layoutApi: ClientLayoutApi,
+    ownPanels: ReadonlyArray<{ id: string; label: string }> = [],
   ) {
     this.groupCollapsed = readStoredGroupState()
-    this.ownPanelLabels = [...ownPanelLabels]
+    this.ownPanelLabels = ownPanels.map(panel => panel.label)
+    this.ownPanelIds = new Set(ownPanels.map(panel => panel.id))
   }
 
   /** External-store contract for the panel components. */
@@ -338,7 +345,25 @@ class SddWorkbench {
     const existing = document.querySelector('style[data-dsh-sdd-style]')
     if (existing === null) { const style = document.createElement('style'); style.dataset.dshSddStyle = ''; style.textContent = CSS; document.head.appendChild(style) }
     this.applyGroupState()
+    this.followPanelSelection()
     this.stylesMounted = true
+  }
+
+  /**
+   * Fold the group whenever one of its own panels becomes the selected main panel.
+   *
+   * The shell's own selection store is the fact to follow: it does not depend on which element a
+   * click landed on, on marker attributes being present yet, or on listener ordering. Reading it
+   * also covers every way a child can be opened — the row, a keyboard activation, or a shortcut.
+   */
+  private followPanelSelection(): void {
+    const panelInfo = this.layoutApi.panelInfo
+    if (panelInfo === undefined || this.panelSelectionBound) return
+    this.panelSelectionBound = true
+    this.panelUnsubscribe = panelInfo.subscribe(() => {
+      const active = panelInfo.getSnapshot().activePanelId
+      if (active !== null && this.ownPanelIds.has(active)) this.setGroupCollapsed(true)
+    })
   }
 
   /** Project the fold state onto the shell: one root attribute plus our own tagged rows. */
@@ -351,18 +376,14 @@ class SddWorkbench {
   observePanelList(): void {
     if (this.panelListObserver !== undefined) return
     this.applyGroupState()
-    // Two interactions on the plugin's own panel rows, bound once on the document so they also
-    // cover re-rendered rows:
-    // - the group header row is an ordinary panel row, so its own click would select a panel that
-    //   does not exist; it folds instead.
-    // - selecting a child folds the group again, so the menu reads as a menu that closes on use.
+    // The group header row is an ordinary panel row whose panel id has no main entry, so it must
+    // fold instead of selecting. Bound once on the document so re-rendered rows keep working.
     if (!this.panelClickBound) {
       this.panelClickBound = true
       document.addEventListener('click', event => {
         const target = event.target
         if (!(target instanceof Element)) return
-        if (target.closest('[data-dsh-sdd-group-header]') !== null) { this.toggleGroup(); return }
-        if (target.closest('[data-dsh-sdd-child]') !== null) this.setGroupCollapsed(true)
+        if (target.closest('[data-dsh-sdd-group-header]') !== null) this.toggleGroup()
       })
     }
     const observer = new MutationObserver(() => { this.applyGroupState() })
@@ -402,6 +423,9 @@ class SddWorkbench {
   deactivate(): void {
     this.panelListObserver?.disconnect()
     this.panelListObserver = undefined
+    this.panelUnsubscribe?.()
+    this.panelUnsubscribe = undefined
+    this.panelSelectionBound = false
     this.detach(null)
   }
 
@@ -422,9 +446,9 @@ class SddWorkbench {
     return first === undefined ? undefined : String(first)
   }
 
-  /** Switch the main panel to another stage; the panel list owns the selection. */
-  private open(menu: MenuId): void { this.selectPanel(menu) }
-  private close(): void { this.selectPanel(null) }
+  /** Switch the main panel to another stage; the layout service owns the selection. */
+  private open(menu: MenuId): void { this.layoutApi.selectPanel(String(menu)) }
+  private close(): void { this.layoutApi.selectPanel(null) }
 
   private async refresh(): Promise<void> {
     if (this.state.workspaceId === undefined) return this.render()
@@ -1785,9 +1809,9 @@ export function apply(ctx: Context): () => void {
     services.workspaces,
     services.sessions,
     services.uiWorkspace,
-    panelId => { services.layout.selectPanel(panelId) },
-    // Only rows carrying these accessible names belong to the group; the list is shared.
-    MENUS.map(menu => menu.label),
+    services.layout,
+    // Only these panel identities belong to the group; the panel list is shared with other plugins.
+    MENUS.map(menu => ({ id: String(menu.id), label: menu.label })),
   )
   const disposers: Array<() => void> = [
     // Same list as the seven entries; a lower order sorts it above them (and above other plugins'

@@ -35,9 +35,21 @@ afterEach(() => {
  * through the documented client services. Rendering uses the real React runtime so the group
  * header's effects and click handler run for real.
  */
-function loadPlugin(): { sidebar: Registration[]; main: Registration[]; disposer: () => void; selected: string[] } {
+function loadPlugin(): { sidebar: Registration[]; main: Registration[]; disposer: () => void; selected: string[]; selectPanel: (panelId: string | null) => void } {
   const registrations: Registration[] = []
   const selected: string[] = []
+  // The shell's central-panel selection store; the plugin follows it to fold the group.
+  let activePanelId: string | null = null
+  const panelListeners = new Set<() => void>()
+  const panelInfo = {
+    getSnapshot: () => ({ activePanelId }),
+    subscribe: (listener: () => void) => { panelListeners.add(listener); return () => { panelListeners.delete(listener) } },
+  }
+  const selectPanel = (panelId: string | null): void => {
+    selected.push(String(panelId))
+    activePanelId = panelId
+    for (const listener of panelListeners) listener()
+  }
   const services = {
     slots: {
       register(options: Registration['options'], component: Component): () => void {
@@ -46,7 +58,7 @@ function loadPlugin(): { sidebar: Registration[]; main: Registration[]; disposer
       },
       inject(_ownerKey: string, callback: () => void): () => void { callback(); return () => {} },
     },
-    layout: { selectPanel: (panelId: string | null) => { selected.push(String(panelId)) } },
+    layout: { selectPanel, panelInfo },
     workspaces: { list: { getSnapshot: () => ({ items: [], archivedSessionIds: [] }), subscribe: () => () => {} } },
     sessions: { list: { getSnapshot: () => ({ ids: [], byId: {} }), subscribe: () => () => {} }, binding: () => undefined },
     uiWorkspace: { connectWorkspace: async () => 's1', openSession() {} },
@@ -66,6 +78,7 @@ function loadPlugin(): { sidebar: Registration[]; main: Registration[]; disposer
     main: registrations.filter(entry => entry.options.name === 'main'),
     disposer: plugin.apply({ get: (name: string) => (services as Record<string, unknown>)[name] }),
     selected,
+    selectPanel,
   }
 }
 
@@ -155,14 +168,17 @@ describe('SDD client slot wiring', () => {
     expect(document.documentElement.hasAttribute('data-dsh-sdd-group-collapsed')).toBe(true)
     expect(plugin.selected).toEqual([])
 
-    // Reopening and picking a child folds the group again, like a menu that closes on use.
+    // Reopening and selecting one of the plugin's own panels folds the group again, whichever
+    // route opened it: the plugin follows the shell's selection store, not the click target.
     rowOf('项目开发').dispatchEvent(new MouseEvent('click', { bubbles: true }))
     expect(document.documentElement.hasAttribute('data-dsh-sdd-group-collapsed')).toBe(false)
-    rowOf('需求讨论').dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    act(() => { plugin.selectPanel('requirements') })
     expect(document.documentElement.hasAttribute('data-dsh-sdd-group-collapsed')).toBe(true)
-    // A row this plugin does not own must not touch the fold state.
+    // Selecting another plugin's panel must not touch the fold state.
+    act(() => { plugin.selectPanel(null) })
+    expect(document.documentElement.hasAttribute('data-dsh-sdd-group-collapsed')).toBe(true)
     rowOf('项目开发').dispatchEvent(new MouseEvent('click', { bubbles: true }))
-    rowOf('时事大屏').dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    act(() => { plugin.selectPanel('news-wall') })
     expect(document.documentElement.hasAttribute('data-dsh-sdd-group-collapsed')).toBe(false)
 
     const style = (document.querySelector('style[data-dsh-sdd-style]') as HTMLStyleElement).textContent ?? ''
