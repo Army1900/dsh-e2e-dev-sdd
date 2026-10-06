@@ -99,11 +99,10 @@ const CSS = `
 .dsh-sdd-group-title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500}
 .dsh-sdd-group-chevron{flex:none;margin-left:auto;display:inline-flex;opacity:.75;transition:transform .16s var(--ds-ease-in-out,ease)}
 html:not([data-dsh-sdd-group-collapsed]) .dsh-sdd-group-chevron{transform:rotate(180deg)}
-/* The seven SDD entries in the shell's panel list, indented under the group header. */
-.dsh-sdd-panel-list{flex-direction:column;flex:none;display:flex;gap:4px;margin-bottom:8px}
-.dsh-sdd-panel-list>*{padding-left:26px}
-.dsh-sdd-panel-list>* [class*='panelGlyph']{opacity:.85}
-html[data-dsh-sdd-group-collapsed] .dsh-sdd-panel-list>*{display:none}
+/* Only this plugin's tagged panel rows indent and fold; other plugins sharing the list stay. */
+.dsh-sdd-panel-list>[data-dsh-sdd-child]{padding-left:26px}
+.dsh-sdd-panel-list>[data-dsh-sdd-child] [class*='panelGlyph']{opacity:.85}
+html[data-dsh-sdd-group-collapsed] .dsh-sdd-panel-list>[data-dsh-sdd-child]{display:none}
 .dsh-sdd-page{box-sizing:border-box;width:100%;min-height:100%;padding:20px;max-width:1220px;margin:0 auto}.dsh-sdd-header{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:18px}.dsh-sdd-header h1{font-size:22px;line-height:31px;font-weight:700;margin:0;margin-right:auto;letter-spacing:-.01em}.dsh-sdd-header .dsh-sdd-select{min-width:0;max-width:min(360px,100%)}.dsh-sdd-select,.dsh-sdd-input{box-sizing:border-box;min-height:34px;padding:6px 10px;border:1px solid var(--dsw-alias-border-l2,rgba(0,0,0,.1));border-radius:8px;background:var(--dsw-specific-input-major,var(--dsw-alias-bg-base,#fff));color:var(--dsw-alias-label-primary,#0f1115);font-family:inherit;font-size:13px;font-weight:400;line-height:20px;transition:border-color .16s ease,box-shadow .16s ease}.dsh-sdd-select:focus,.dsh-sdd-input:focus{outline:0;border-color:var(--dsw-alias-border-l3,rgba(15,17,21,.28));box-shadow:0 0 0 2px rgba(38,49,72,.06)}.dsh-sdd-button{box-sizing:border-box;min-height:34px;padding:6px 12px;border:1px solid var(--dsw-alias-border-l2,rgba(0,0,0,.1));border-radius:8px;background:var(--dsw-alias-bg-base,#fff);color:var(--dsw-alias-label-primary,#0f1115);cursor:pointer;font-family:inherit;font-size:13px;font-weight:400;line-height:20px;transition:background-color .16s ease,border-color .16s ease,opacity .16s ease}.dsh-sdd-button:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover,rgba(38,49,72,.04))}.dsh-sdd-button:focus-visible{outline:2px solid var(--dsw-alias-focus-ring,rgba(38,49,72,.18));outline-offset:1px}.dsh-sdd-button.primary{background:var(--dsw-alias-button-primary-fill,#0f1115);border-color:transparent;color:var(--dsw-alias-label-primary-foreground,#fff);font-weight:500}.dsh-sdd-button.primary:hover:not(:disabled){background:var(--dsw-alias-button-primary-fill-hover,#272a2f)}.dsh-sdd-button:disabled{opacity:.4;cursor:not-allowed}
 .dsh-sdd-grid{display:grid;grid-template-columns:minmax(0,.8fr) minmax(0,1.2fr);gap:14px}@media(max-width:850px){.dsh-sdd-grid{grid-template-columns:minmax(0,1fr)}}.dsh-sdd-card{min-width:0;border:1px solid var(--dsw-alias-border-l1,rgba(0,0,0,.04));border-radius:12px;background:var(--dsw-alias-bg-layer-2,#fff);padding:14px}.dsh-sdd-card h2{font-size:15px;line-height:22px;font-weight:600;margin:0 0 10px}.dsh-sdd-muted{font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary,#61666b);overflow-wrap:anywhere}.dsh-sdd-list{display:flex;min-width:0;flex-direction:column;gap:8px}.dsh-sdd-row{display:grid;min-width:0;grid-template-columns:auto minmax(0,1fr) auto;align-items:start;gap:9px;padding:10px;border:1px solid var(--dsw-alias-border-l1,rgba(0,0,0,.04));border-radius:8px;background:var(--dsw-alias-bg-base,#fff)}.dsh-sdd-row>span{min-width:0}.dsh-sdd-row strong{display:block;font-size:13px;line-height:20px;font-weight:600;overflow-wrap:anywhere}.dsh-sdd-badge{display:inline-block;max-width:100%;font-size:11px;line-height:16px;padding:1px 6px;border-radius:999px;background:var(--dsw-alias-interactive-bg-hover,rgba(38,49,72,.06));color:var(--dsw-alias-label-secondary,#61666b);margin:0 0 4px 4px;overflow-wrap:anywhere}.dsh-sdd-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}.dsh-sdd-error{padding:9px;border-radius:8px;background:rgba(197,48,48,.08);color:#c53030;font-size:12px;line-height:18px;overflow-wrap:anywhere}.dsh-sdd-empty{padding:18px;text-align:center;color:var(--dsw-alias-label-secondary,#61666b);font-size:13px;line-height:20px}
 .dsh-sdd-busy{position:sticky;top:8px;z-index:20;display:flex;align-items:center;gap:9px;margin:0 0 12px;padding:9px 12px;border:1px solid var(--dsw-alias-border-l2,#bbb);border-radius:9px;background:var(--dsw-alias-bg-base,#fff);box-shadow:0 4px 16px #0002;font-size:12px}.dsh-sdd-busy::before{content:"";width:12px;height:12px;flex:none;border:2px solid var(--dsw-alias-border-l2,#bbb);border-top-color:var(--dsw-alias-label-primary,#222);border-radius:50%;animation:dsh-sdd-spin .8s linear infinite}@keyframes dsh-sdd-spin{to{transform:rotate(360deg)}}
@@ -239,12 +238,31 @@ const GROUP_ICON = '<rect x="2.5" y="3" width="15" height="14" rx="2"/><path d="
 /**
  * The shell's global panel list container, located through one labelled row we own.
  * The shell renders `sidebar.panellist` inside a `<nav>`; tagging that node lets the
- * plugin stylesheet indent and fold our seven rows without touching shell code.
+ * plugin stylesheet indent and fold our rows without touching shell code.
  */
 function sidebarPanelList(): HTMLElement | null {
   const row = document.querySelector<HTMLElement>('button[aria-label="项目看板"]')
   const list = row?.parentElement
   return list instanceof HTMLElement ? list : null
+}
+
+/**
+ * Tag only the panel rows this plugin registered.
+ *
+ * The panel list is shared with every other global-panel plugin, so the fold must not target
+ * `nav > *`: an unrelated entry that happens to share the list would disappear with the group.
+ * Rows are matched by the accessible names this plugin declared, which is the one handle the
+ * shell exposes for a row it renders itself.
+ */
+function tagOwnPanelRows(labels: readonly string[]): void {
+  const list = sidebarPanelList()
+  if (list === null) return
+  list.classList.add('dsh-sdd-panel-list')
+  const own = new Set(labels)
+  for (const row of list.querySelectorAll<HTMLElement>('button[aria-label]')) {
+    const label = row.getAttribute('aria-label')
+    if (label !== null && own.has(label)) row.setAttribute('data-dsh-sdd-child', '')
+  }
 }
 
 /**
@@ -307,13 +325,19 @@ class SddWorkbench {
   private stylesMounted = false
   private groupCollapsed = false
   private panelListObserver?: MutationObserver
+  /** The panel rows this plugin owns; only these fold and indent with the group. */
+  private readonly ownPanelLabels: string[]
 
   constructor(
     private readonly workspaces: ClientWorkspacesFacade,
     private readonly sessions: ClientSessionsService,
     private readonly uiWorkspace: ClientWorkspaceNavigation,
     private readonly selectPanel: (panelId: string | null) => void,
-  ) { this.groupCollapsed = readStoredGroupState() }
+    ownPanelLabels: readonly string[] = [],
+  ) {
+    this.groupCollapsed = readStoredGroupState()
+    this.ownPanelLabels = [...ownPanelLabels]
+  }
 
   /** External-store contract for the panel components. */
   subscribe(listener: () => void): () => void { this.listeners.add(listener); return () => { this.listeners.delete(listener) } }
@@ -342,11 +366,10 @@ class SddWorkbench {
     this.stylesMounted = true
   }
 
-  /** Project the fold state onto the shell: one root attribute drives the panel-list CSS. */
+  /** Project the fold state onto the shell: one root attribute plus our own tagged rows. */
   applyGroupState(): void {
     document.documentElement.toggleAttribute('data-dsh-sdd-group-collapsed', this.groupCollapsed)
-    const list = sidebarPanelList()
-    if (list !== null) list.classList.add('dsh-sdd-panel-list')
+    tagOwnPanelRows(this.ownPanelLabels)
   }
 
   /** Watch the shell's panel list so the group styling survives list re-renders. */
@@ -1770,7 +1793,14 @@ class SddWorkbench {
 export function apply(ctx: Context): () => void {
   const services = clientServices(ctx)
   if (services === undefined) return () => {}
-  const workbench = new SddWorkbench(services.workspaces, services.sessions, services.uiWorkspace, panelId => { services.layout.selectPanel(panelId) })
+  const workbench = new SddWorkbench(
+    services.workspaces,
+    services.sessions,
+    services.uiWorkspace,
+    panelId => { services.layout.selectPanel(panelId) },
+    // Only rows carrying these accessible names belong to the group; the list is shared.
+    MENUS.map(menu => menu.label),
+  )
   const disposers: Array<() => void> = [
     services.slots.register(
       { name: 'sidebar.footer.action', id: 'e2e-dev-sdd-group', order: -1000, label: '项目开发' },

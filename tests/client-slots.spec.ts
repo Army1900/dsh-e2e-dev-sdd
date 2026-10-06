@@ -122,4 +122,33 @@ describe('SDD client slot wiring', () => {
     expect(renderer.toJSON()).toMatchObject({ props: { className: 'dsh-sdd-panel' } })
     renderer.unmount()
   })
+
+  it('tags only its own panel rows, leaving other plugins sharing the list alone', () => {
+    // The shell's panel list also holds rows registered by unrelated global-panel plugins.
+    const nav = document.createElement('nav')
+    const labels = ['项目看板', '需求讨论', '原型输出', '系统设计', '规格设计', '开发测试', '项目设置']
+    for (const label of [...labels, '时事大屏', '插件管理']) {
+      const button = document.createElement('button')
+      button.setAttribute('aria-label', label)
+      nav.appendChild(button)
+    }
+    document.body.appendChild(nav)
+    const rowOf = (label: string) => nav.querySelector<HTMLElement>(`button[aria-label="${label}"]`)!
+
+    const plugin = loadPlugin()
+    const renderer = mount(plugin.group[0]!.component as Component)
+
+    expect(nav.classList.contains('dsh-sdd-panel-list')).toBe(true)
+    for (const label of labels) expect(rowOf(label).hasAttribute('data-dsh-sdd-child')).toBe(true)
+    // Rows this plugin does not own must stay untagged, so the fold CSS cannot hide them.
+    expect(rowOf('时事大屏').hasAttribute('data-dsh-sdd-child')).toBe(false)
+    expect(rowOf('插件管理').hasAttribute('data-dsh-sdd-child')).toBe(false)
+
+    const style = (document.querySelector('style[data-dsh-sdd-style]') as HTMLStyleElement).textContent ?? ''
+    expect(style).toContain('.dsh-sdd-panel-list>[data-dsh-sdd-child]{display:none}')
+    expect(style).not.toContain('.dsh-sdd-panel-list>*{display:none}')
+
+    renderer.unmount()
+    nav.remove()
+  })
 })
