@@ -97,6 +97,34 @@ const CSS = `
 .dsh-sdd-panel-list>[data-dsh-sdd-child]{padding-left:26px}
 .dsh-sdd-panel-list>[data-dsh-sdd-child] [class*='panelGlyph']{opacity:.85}
 html[data-dsh-sdd-group-collapsed] .dsh-sdd-panel-list>[data-dsh-sdd-child]{display:none}
+/* Dashboard: lead with what needs a decision, fold the rest away. */
+.dsh-sdd-toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:14px}
+.dsh-sdd-toolbar-note{margin-left:auto;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary,#61666b);overflow-wrap:anywhere}
+.dsh-sdd-stats-compact{margin-bottom:14px}
+.dsh-sdd-stats-more{grid-template-columns:repeat(6,minmax(0,1fr));margin:12px 0}
+.dsh-sdd-stat[data-alert="true"]{border-color:rgba(197,48,48,.35);background:rgba(197,48,48,.04)}
+.dsh-sdd-inbox{margin-bottom:14px}
+.dsh-sdd-inbox h2{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.dsh-sdd-inbox-count{display:inline-flex;align-items:center;justify-content:center;min-width:22px;height:20px;padding:0 7px;border-radius:999px;background:var(--dsw-alias-interactive-bg-hover,rgba(38,49,72,.08));font-size:12px;font-weight:600}
+.dsh-sdd-badge[data-fail]{background:rgba(197,48,48,.12);color:#c53030}
+.dsh-sdd-inbox-list{display:flex;flex-direction:column;gap:6px;max-height:320px;overflow:auto;overscroll-behavior:contain}
+.dsh-sdd-inbox-row{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:10px;padding:9px 10px;border:1px solid var(--dsw-alias-border-l1,rgba(0,0,0,.05));border-radius:9px;background:var(--dsw-alias-bg-base,#fff)}
+.dsh-sdd-inbox-row[data-severity="blocking"]{border-left:3px solid #c53030}
+.dsh-sdd-inbox-row[data-severity="attention"]{border-left:3px solid var(--dsw-alias-brand-primary,#3b63f3)}
+.dsh-sdd-inbox-body{display:flex;flex-direction:column;gap:2px;min-width:0}
+.dsh-sdd-inbox-body strong{font-size:13px;line-height:20px;font-weight:600;overflow-wrap:anywhere}
+.dsh-sdd-matrix-card{margin-top:0}
+.dsh-sdd-next-cell{width:158px;min-width:158px}
+.dsh-sdd-next{padding:5px 9px;border:1px solid var(--dsw-alias-border-l2,rgba(0,0,0,.1));border-radius:7px;background:var(--dsw-alias-bg-layer-2,#fafafa);color:var(--dsw-alias-label-primary,#0f1115);cursor:pointer;font:500 12px/18px var(--dsw-font-family,system-ui);white-space:nowrap}
+.dsh-sdd-next:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(38,49,72,.06))}
+.dsh-sdd-more{margin-top:14px;padding:0 14px 14px;border:1px solid var(--dsw-alias-border-l1,rgba(0,0,0,.05));border-radius:12px;background:var(--dsw-alias-bg-layer-2,#fff)}
+.dsh-sdd-more>summary{cursor:pointer;padding:13px 2px;font-size:15px;line-height:22px;font-weight:600;list-style:none}
+.dsh-sdd-more>summary::-webkit-details-marker{display:none}
+.dsh-sdd-more>summary::before{content:"▸";display:inline-block;width:18px;transition:transform .16s var(--ds-ease-in-out,ease)}
+.dsh-sdd-more[open]>summary::before{transform:rotate(90deg)}
+.dsh-sdd-more .dsh-sdd-card{margin-top:12px}
+@media(max-width:1000px){.dsh-sdd-stats-more{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media(max-width:700px){.dsh-sdd-stats-more{grid-template-columns:repeat(2,minmax(0,1fr))}.dsh-sdd-toolbar-note{margin-left:0;width:100%}}
 .dsh-sdd-page{box-sizing:border-box;width:100%;min-height:100%;padding:20px;max-width:1220px;margin:0 auto}.dsh-sdd-header{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:18px}.dsh-sdd-header h1{font-size:22px;line-height:31px;font-weight:700;margin:0;margin-right:auto;letter-spacing:-.01em}.dsh-sdd-header .dsh-sdd-select{min-width:0;max-width:min(360px,100%)}.dsh-sdd-select,.dsh-sdd-input{box-sizing:border-box;min-height:34px;padding:6px 10px;border:1px solid var(--dsw-alias-border-l2,rgba(0,0,0,.1));border-radius:8px;background:var(--dsw-specific-input-major,var(--dsw-alias-bg-base,#fff));color:var(--dsw-alias-label-primary,#0f1115);font-family:inherit;font-size:13px;font-weight:400;line-height:20px;transition:border-color .16s ease,box-shadow .16s ease}.dsh-sdd-select:focus,.dsh-sdd-input:focus{outline:0;border-color:var(--dsw-alias-border-l3,rgba(15,17,21,.28));box-shadow:0 0 0 2px rgba(38,49,72,.06)}.dsh-sdd-button{box-sizing:border-box;min-height:34px;padding:6px 12px;border:1px solid var(--dsw-alias-border-l2,rgba(0,0,0,.1));border-radius:8px;background:var(--dsw-alias-bg-base,#fff);color:var(--dsw-alias-label-primary,#0f1115);cursor:pointer;font-family:inherit;font-size:13px;font-weight:400;line-height:20px;transition:background-color .16s ease,border-color .16s ease,opacity .16s ease}.dsh-sdd-button:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover,rgba(38,49,72,.04))}.dsh-sdd-button:focus-visible{outline:2px solid var(--dsw-alias-focus-ring,rgba(38,49,72,.18));outline-offset:1px}.dsh-sdd-button.primary{background:var(--dsw-alias-button-primary-fill,#0f1115);border-color:transparent;color:var(--dsw-alias-label-primary-foreground,#fff);font-weight:500}.dsh-sdd-button.primary:hover:not(:disabled){background:var(--dsw-alias-button-primary-fill-hover,#272a2f)}.dsh-sdd-button:disabled{opacity:.4;cursor:not-allowed}
 .dsh-sdd-grid{display:grid;grid-template-columns:minmax(0,.8fr) minmax(0,1.2fr);gap:14px}@media(max-width:850px){.dsh-sdd-grid{grid-template-columns:minmax(0,1fr)}}.dsh-sdd-card{min-width:0;border:1px solid var(--dsw-alias-border-l1,rgba(0,0,0,.04));border-radius:12px;background:var(--dsw-alias-bg-layer-2,#fff);padding:14px}.dsh-sdd-card h2{font-size:15px;line-height:22px;font-weight:600;margin:0 0 10px}.dsh-sdd-muted{font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary,#61666b);overflow-wrap:anywhere}.dsh-sdd-list{display:flex;min-width:0;flex-direction:column;gap:8px}.dsh-sdd-row{display:grid;min-width:0;grid-template-columns:auto minmax(0,1fr) auto;align-items:start;gap:9px;padding:10px;border:1px solid var(--dsw-alias-border-l1,rgba(0,0,0,.04));border-radius:8px;background:var(--dsw-alias-bg-base,#fff)}.dsh-sdd-row>span{min-width:0}.dsh-sdd-row strong{display:block;font-size:13px;line-height:20px;font-weight:600;overflow-wrap:anywhere}.dsh-sdd-badge{display:inline-block;max-width:100%;font-size:11px;line-height:16px;padding:1px 6px;border-radius:999px;background:var(--dsw-alias-interactive-bg-hover,rgba(38,49,72,.06));color:var(--dsw-alias-label-secondary,#61666b);margin:0 0 4px 4px;overflow-wrap:anywhere}.dsh-sdd-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}.dsh-sdd-error{padding:9px;border-radius:8px;background:rgba(197,48,48,.08);color:#c53030;font-size:12px;line-height:18px;overflow-wrap:anywhere}.dsh-sdd-empty{padding:18px;text-align:center;color:var(--dsw-alias-label-secondary,#61666b);font-size:13px;line-height:20px}
 .dsh-sdd-busy{position:sticky;top:8px;z-index:20;display:flex;align-items:center;gap:9px;margin:0 0 12px;padding:9px 12px;border:1px solid var(--dsw-alias-border-l2,#bbb);border-radius:9px;background:var(--dsw-alias-bg-base,#fff);box-shadow:0 4px 16px #0002;font-size:12px}.dsh-sdd-busy::before{content:"";width:12px;height:12px;flex:none;border:2px solid var(--dsw-alias-border-l2,#bbb);border-top-color:var(--dsw-alias-label-primary,#222);border-radius:50%;animation:dsh-sdd-spin .8s linear infinite}@keyframes dsh-sdd-spin{to{transform:rotate(360deg)}}
@@ -139,6 +167,8 @@ interface RuntimeState {
   dashboardQuery: string
   dashboardKind: 'all' | 'requirement' | 'defect' | 'custom'
   dashboardStatus: 'all' | 'changed' | DeliveryCellStatus
+  /** Completed work items are hidden by default so the board stays actionable. */
+  dashboardIncludeCompleted: boolean
 }
 
 async function call(action: SddAction): Promise<SddResponse> {
@@ -291,7 +321,7 @@ function SddSidebarGroup(props: Readonly<Record<string, unknown>>): unknown {
 }
 
 class SddWorkbench {
-  private readonly state: RuntimeState = { menu: 'dashboard', selected: new Set(), loading: false, dashboardQuery: '', dashboardKind: 'all', dashboardStatus: 'all' }
+  private readonly state: RuntimeState = { menu: 'dashboard', selected: new Set(), loading: false, dashboardQuery: '', dashboardKind: 'all', dashboardStatus: 'all', dashboardIncludeCompleted: false }
   private container?: HTMLDivElement
   private workspaceUnsubscribe?: () => void
   private readonly trackedRuns = new Map<string, () => void>()
@@ -425,6 +455,28 @@ class SddWorkbench {
   private open(menu: MenuId): void { this.layoutApi.selectPanel(String(menu)) }
   private close(): void { this.layoutApi.selectPanel(null) }
 
+  /** Jump from the dashboard into a stage panel for one work item and optional artifact. */
+  private goToStage(stage: StageId, workItemUid?: string, artifactUid?: string): void {
+    if (workItemUid !== undefined) this.state.workItemUid = workItemUid
+    this.state.menu = stage
+    this.state.targetArtifactUid = artifactUid
+    const snapshot = this.state.snapshot
+    const artifact = snapshot?.artifacts.find(item => item.uid === artifactUid)
+    this.state.selected = artifact !== undefined
+      ? new Set([...artifact.basedOn.map(item => item.uid), ...artifact.derivedFrom.map(item => item.uid)])
+      : snapshot === undefined ? new Set() : this.defaultInputs(snapshot, stage)
+    this.layoutApi.selectPanel(stage)
+  }
+
+  /** Act on one dashboard inbox row: settings for setup problems, the stage for the rest. */
+  private handleDashboardAction(id: string): void {
+    const action = this.state.snapshot?.dashboard.actions.find(item => item.id === id)
+    if (action === undefined) return
+    if (action.kind === 'configuration' || action.kind === 'conflict') { this.open('settings'); return }
+    if (action.stage !== undefined) { this.goToStage(action.stage, action.workItemUid, action.artifactUid); return }
+    this.open('dashboard')
+  }
+
   private async refresh(): Promise<void> {
     if (this.state.workspaceId === undefined) return this.render()
     this.state.loading = true; this.state.error = undefined; this.render()
@@ -512,17 +564,50 @@ class SddWorkbench {
 
   private dashboardHtml(snapshot: ProjectSnapshot): string {
     const dashboard = snapshot.dashboard
-    const stat = (label: string, value: string, note: string) => `<div class="dsh-sdd-stat"><span class="dsh-sdd-muted">${label}</span><b>${value}</b><span class="dsh-sdd-muted">${note}</span></div>`
     const repositoryCount = snapshot.project?.development.repositories.length ?? 0
     const projectGit = snapshot.projectRepository
-    const gitNote = projectGit?.isRepository !== true ? '当前工作空间尚未初始化 Git 仓库'
-      : !projectGit.exactWorkspaceRoot ? '当前工作空间不是 Git 仓库根目录'
+    const gitNote = projectGit?.isRepository !== true ? '工作空间尚未初始化 Git 仓库'
+      : !projectGit.exactWorkspaceRoot ? '工作空间不是 Git 仓库根目录'
         : `${projectGit.branch ?? 'detached HEAD'} · ${projectGit.changedFiles} 个本地变更 · ahead ${projectGit.ahead} / behind ${projectGit.behind}${projectGit.keyConflicts.length ? ` · 编号冲突 ${projectGit.keyConflicts.length}` : ''}`
-    return `<div class="dsh-sdd-grid" style="margin-bottom:14px"><section class="dsh-sdd-card"><h2>需求与缺陷管理</h2><p class="dsh-sdd-muted">从这里导入需求包或需要独立推进的缺陷；开发中的需求缺陷请进入对应需求后添加。</p><div class="dsh-sdd-actions"><button class="dsh-sdd-button primary" data-action="import-requirement">获取并预览需求包</button><button class="dsh-sdd-button" data-action="import-standalone-defect">获取并预览独立缺陷</button></div></section><section class="dsh-sdd-card"><h2>项目仓库与设置</h2><p class="dsh-sdd-muted">${escapeHtml(gitNote)}。已登记 ${repositoryCount} 个目标代码仓库；协作远程、同步和仓库规则统一在项目设置维护。</p><div class="dsh-sdd-actions"><button class="dsh-sdd-button" data-action="open-settings">打开项目设置</button></div></section></div>${this.productKnowledgeHtml(snapshot)}<div class="dsh-sdd-stats">${stat('阶段完成度', `${dashboard.overallCompletion}%`, '全部适用阶段的已验收占比')}${stat('需求包', String(dashboard.requirements.packages), `${dashboard.workItems.requirements} 个需求工作单元`)}${stat('独立交付单元', String(dashboard.workItems.total), `需求 ${dashboard.workItems.requirements} · 缺陷 ${dashboard.workItems.standaloneDefects}`)}${stat('缺陷', String(dashboard.defects.total), `独立 ${dashboard.defects.standalone} · 需求内 ${dashboard.defects.attached}`)}${stat('待处理变化', String(dashboard.workItems.pendingChanges), '来源变更、移除或关联缺陷变化')}${stat('交付件', String(dashboard.artifacts.total), `草稿 ${dashboard.artifacts.drafts} · 已验收 ${dashboard.artifacts.accepted}`)}${stat('代码空间', String(dashboard.development.workspaces), `变更文件 ${dashboard.development.changedFiles} · 提交 ${dashboard.development.commits}`)}${stat('测试证据', String(dashboard.development.passingTests + dashboard.development.failingTests), `通过 ${dashboard.development.passingTests} · 失败 ${dashboard.development.failingTests}`)}</div>
-      <div class="dsh-sdd-dashboard-overview">${this.defectOverviewHtml(snapshot)}${this.workloadOverviewHtml(snapshot)}</div>
-      <div class="dsh-sdd-chart-grid">${this.stageFlowHtml(snapshot)}${this.burnupHtml(dashboard.burnup)}</div>
+    const blocking = dashboard.actions.filter(item => item.severity === 'blocking').length
+    const attention = dashboard.actions.length - blocking
+    const waitingAcceptance = snapshot.artifacts.filter(item => (item.status === 'draft' || item.status === 'in-review') && (snapshot.quality[item.uid]?.checks.every(check => check.status !== 'failed') ?? false)).length
+    const failedChecks = Object.values(snapshot.quality).reduce((sum, report) => sum + report.checks.filter(check => check.status === 'failed').length, 0)
+    const stat = (label: string, value: string, note: string, tone?: 'alert') => `<div class="dsh-sdd-stat"${tone === 'alert' && (blocking > 0 || failedChecks > 0) ? ' data-alert="true"' : ''}><span class="dsh-sdd-muted">${label}</span><b>${value}</b><span class="dsh-sdd-muted">${note}</span></div>`
+    return `<div class="dsh-sdd-toolbar">
+        <button class="dsh-sdd-button primary" data-action="import-requirement">导入需求包</button>
+        <button class="dsh-sdd-button" data-action="import-standalone-defect">导入独立缺陷</button>
+        <button class="dsh-sdd-button" data-action="open-settings">项目设置</button>
+        <span class="dsh-sdd-toolbar-note">${escapeHtml(gitNote)} · ${repositoryCount} 个代码仓库</span>
+      </div>
+      ${this.dashboardActionsHtml(snapshot)}
+      <div class="dsh-sdd-stats dsh-sdd-stats-compact">${stat('阶段完成度', `${dashboard.overallCompletion}%`, '适用阶段的已验收占比')}${stat('进行中工作单元', String(dashboard.workItems.total), `需求 ${dashboard.workItems.requirements} · 缺陷 ${dashboard.workItems.standaloneDefects} · 其他 ${dashboard.workItems.custom}`)}${stat('待验收交付件', String(waitingAcceptance), `草稿 ${dashboard.artifacts.drafts - waitingAcceptance} · 已验收 ${dashboard.artifacts.accepted}`)}${stat('需要关注', String(blocking + attention), blocking > 0 ? `阻塞 ${blocking} · 待处理 ${attention}` : failedChecks > 0 ? `失败检查 ${failedChecks}` : '没有阻塞项', 'alert')}</div>
       ${this.deliveryMatrixHtml(snapshot)}
-      <div class="dsh-sdd-grid dsh-sdd-dashboard-columns" style="margin-top:14px"><section class="dsh-sdd-card"><h2>质量与追踪</h2><p>来源追踪覆盖率：<strong>${dashboard.traceability}%</strong></p>${dashboard.blockers.length === 0 ? '<div class="dsh-sdd-empty">当前没有结构化阻塞项</div>' : `<ul class="dsh-sdd-checks">${dashboard.blockers.map(item => `<li data-fail>${escapeHtml(item)}</li>`).join('')}</ul>`}</section><section class="dsh-sdd-card"><h2>最近活动</h2>${dashboard.recentEvents.length === 0 ? '<div class="dsh-sdd-empty">暂无事件</div>' : `<div class="dsh-sdd-list dsh-sdd-scroll-list">${dashboard.recentEvents.slice(0, 10).map(event => `<div class="dsh-sdd-row"><span></span><span><strong>${escapeHtml(event.subject)}</strong><span class="dsh-sdd-muted">${escapeHtml(event.type)} · ${escapeHtml(event.time)}</span></span></div>`).join('')}</div>`}</section></div>${this.traceabilityHtml(snapshot)}`
+      <details class="dsh-sdd-more">
+        <summary>更多数据与趋势</summary>
+        <div class="dsh-sdd-stats dsh-sdd-stats-more">${stat('需求包', String(dashboard.requirements.packages), `${dashboard.workItems.requirements} 个需求工作单元`)}${stat('缺陷', String(dashboard.defects.total), `独立 ${dashboard.defects.standalone} · 需求内 ${dashboard.defects.attached} · 待覆盖 ${dashboard.defects.deliveryPending}`)}${stat('交付件', String(dashboard.artifacts.total), `草稿 ${dashboard.artifacts.drafts} · 已验收 ${dashboard.artifacts.accepted}`)}${stat('代码空间', String(dashboard.development.workspaces), `变更文件 ${dashboard.development.changedFiles} · 提交 ${dashboard.development.commits}`)}${stat('测试证据', String(dashboard.development.passingTests + dashboard.development.failingTests), `失败 ${dashboard.development.failingTests}`)}${stat('来源追踪', `${dashboard.traceability}%`, '原始来源已进入交付件的比例')}</div>
+        <div class="dsh-sdd-chart-grid">${this.stageFlowHtml(snapshot)}${this.burnupHtml(dashboard.burnup)}</div>
+        <div class="dsh-sdd-dashboard-overview">${this.defectOverviewHtml(snapshot)}${this.workloadOverviewHtml(snapshot)}</div>
+        ${this.productKnowledgeHtml(snapshot)}
+        <div class="dsh-sdd-grid dsh-sdd-dashboard-columns"><section class="dsh-sdd-card"><h2>质量与追踪</h2><p>来源追踪覆盖率：<strong>${dashboard.traceability}%</strong></p>${dashboard.blockers.length === 0 ? '<div class="dsh-sdd-empty">当前没有结构化阻塞项</div>' : `<ul class="dsh-sdd-checks">${dashboard.blockers.map(item => `<li data-fail>${escapeHtml(item)}</li>`).join('')}</ul>`}</section><section class="dsh-sdd-card"><h2>最近活动</h2>${dashboard.recentEvents.length === 0 ? '<div class="dsh-sdd-empty">暂无事件</div>' : `<div class="dsh-sdd-list dsh-sdd-scroll-list">${dashboard.recentEvents.slice(0, 10).map(event => `<div class="dsh-sdd-row"><span></span><span><strong>${escapeHtml(event.subject)}</strong><span class="dsh-sdd-muted">${escapeHtml(event.type)} · ${escapeHtml(event.time)}</span></span></div>`).join('')}</div>`}</section></div>
+        ${this.traceabilityHtml(snapshot)}
+      </details>`
+  }
+
+  /** The dashboard's lead: everything a human should act on, each with a jump-in button. */
+  private dashboardActionsHtml(snapshot: ProjectSnapshot): string {
+    const actions = snapshot.dashboard.actions ?? []
+    const kindLabel: Record<string, string> = { change: '来源变更', accept: '待验收', quality: '质量', configuration: '配置', tests: '测试', conflict: '编号冲突', openspec: '规格' }
+    if (actions.length === 0) {
+      return `<section class="dsh-sdd-card dsh-sdd-inbox dsh-sdd-inbox-empty"><h2>需要我处理</h2><div class="dsh-sdd-empty">当前没有需要你处理的事项。可以从上面的按钮导入需求，或进入阶段继续推进。</div></section>`
+    }
+    const blocking = actions.filter(item => item.severity === 'blocking').length
+    const rows = actions.map(action => `<div class="dsh-sdd-inbox-row" data-severity="${action.severity}">
+        <span class="dsh-sdd-badge">${escapeHtml(kindLabel[action.kind] ?? action.kind)}</span>
+        <span class="dsh-sdd-inbox-body"><strong>${escapeHtml(action.title)}</strong>${action.detail === undefined || action.detail === '' ? '' : `<span class="dsh-sdd-muted">${escapeHtml(action.detail)}</span>`}</span>
+        <button class="dsh-sdd-button" data-sdd-action="${escapeHtml(action.id)}">去处理</button>
+      </div>`).join('')
+    return `<section class="dsh-sdd-card dsh-sdd-inbox"><h2>需要我处理 <span class="dsh-sdd-inbox-count">${actions.length}</span>${blocking > 0 ? `<span class="dsh-sdd-badge" data-fail>阻塞 ${blocking}</span>` : ''}</h2><div class="dsh-sdd-inbox-list">${rows}</div></section>`
   }
 
   private productKnowledgeHtml(snapshot: ProjectSnapshot): string {
@@ -594,21 +679,37 @@ class SddWorkbench {
   private deliveryMatrixHtml(snapshot: ProjectSnapshot): string {
     const labels: Record<DeliveryCellStatus, string> = { 'not-started': '未开始', 'not-applicable': '不适用', 'in-progress': '进行中', 'ready-for-review': '待评审', completed: '已验收', blocked: '阻塞/需复审' }
     const query = this.state.dashboardQuery.trim().toLocaleLowerCase()
-    const filtered = snapshot.dashboard.deliveryMatrix.filter(row => {
+    const matched = snapshot.dashboard.deliveryMatrix.filter(row => {
       const kindMatch = this.state.dashboardKind === 'all' || (this.state.dashboardKind === 'custom' ? row.kind !== 'requirement' && row.kind !== 'defect' : row.kind === this.state.dashboardKind)
       const statusMatch = this.state.dashboardStatus === 'all' || (this.state.dashboardStatus === 'changed' ? row.workItemStatus === 'change-pending' || row.workItemStatus === 'removed-pending' : row.cells.some(cell => cell.status === this.state.dashboardStatus))
       return kindMatch && statusMatch && (query === '' || `${row.key} ${row.title}`.toLocaleLowerCase().includes(query))
     })
-    const visible = filtered.slice(0, 200)
+    const completedMatched = matched.filter(row => row.completed)
+    const filtered = this.state.dashboardIncludeCompleted ? matched : matched.filter(row => !row.completed)
+    // Most urgent first: pending changes, then work waiting for acceptance, then active, then new.
+    const rank = (row: (typeof filtered)[number]): number => {
+      if (row.workItemStatus === 'change-pending' || row.workItemStatus === 'removed-pending') return 0
+      const statuses = row.cells.map(cell => cell.status)
+      if (statuses.includes('blocked')) return 1
+      if (statuses.includes('ready-for-review')) return 2
+      if (statuses.includes('in-progress')) return 3
+      if (row.completed) return 5
+      return 4
+    }
+    const sorted = [...filtered].sort((left, right) => rank(left) - rank(right) || left.key.localeCompare(right.key))
+    const visible = sorted.slice(0, 200)
     const typeLabel = (kind: string) => kind === 'requirement' ? '需求' : kind === 'defect' ? '独立缺陷' : kind
     const rows = visible.map(row => {
       const defects = row.attachedDefects.total === 0 ? '' : `<span class="dsh-sdd-badge">需求内缺陷 ${row.attachedDefects.total} · 待覆盖 ${row.attachedDefects.pending}</span>`
-      const changed = row.workItemStatus === 'change-pending' || row.workItemStatus === 'removed-pending' ? '<span class="dsh-sdd-badge">有变化</span>' : ''
-      return `<tr><td><strong class="dsh-sdd-matrix-work" title="${escapeHtml(`${row.key} · ${row.title}`)}">${escapeHtml(row.key)} · ${escapeHtml(row.title)}</strong><span class="dsh-sdd-matrix-meta"><span class="dsh-sdd-badge">${escapeHtml(typeLabel(row.kind))}</span>${defects}${changed}</span></td>${row.cells.map(cell => `<td><button class="dsh-sdd-matrix-cell" data-status="${cell.status}" data-matrix-work-item="${escapeHtml(row.workItemUid)}" data-matrix-stage="${cell.stage}"${cell.artifactUid === undefined ? '' : ` data-matrix-artifact="${escapeHtml(cell.artifactUid)}"`} title="${escapeHtml(`${labels[cell.status]}${cell.artifactKey === undefined ? '' : ` · ${cell.artifactKey} v${cell.version}`}`)}">${escapeHtml(labels[cell.status])}</button></td>`).join('')}</tr>`
+      const changed = row.workItemStatus === 'change-pending' || row.workItemStatus === 'removed-pending' ? '<span class="dsh-sdd-badge" data-fail>有变化</span>' : ''
+      const next = row.nextStep.stage === undefined
+        ? `<span class="dsh-sdd-muted">${escapeHtml(row.nextStep.label)}</span>`
+        : `<button class="dsh-sdd-next" data-matrix-next="${escapeHtml(row.workItemUid)}" data-matrix-stage="${row.nextStep.stage}">${escapeHtml(row.nextStep.label)}</button>`
+      return `<tr><td><strong class="dsh-sdd-matrix-work" title="${escapeHtml(`${row.key} · ${row.title}`)}">${escapeHtml(row.key)} · ${escapeHtml(row.title)}</strong><span class="dsh-sdd-matrix-meta"><span class="dsh-sdd-badge">${escapeHtml(typeLabel(row.kind))}</span>${defects}${changed}</span></td>${row.cells.map(cell => `<td><button class="dsh-sdd-matrix-cell" data-status="${cell.status}" data-matrix-work-item="${escapeHtml(row.workItemUid)}" data-matrix-stage="${cell.stage}"${cell.artifactUid === undefined ? '' : ` data-matrix-artifact="${escapeHtml(cell.artifactUid)}"`} title="${escapeHtml(`${labels[cell.status]}${cell.artifactKey === undefined ? '' : ` · ${cell.artifactKey} v${cell.version}`}`)}">${escapeHtml(labels[cell.status])}</button></td>`).join('')}<td class="dsh-sdd-next-cell">${next}</td></tr>`
     }).join('')
-    const toolbar = `<div class="dsh-sdd-matrix-toolbar"><input class="dsh-sdd-input" data-dashboard-query value="${escapeHtml(this.state.dashboardQuery)}" placeholder="搜索编号或标题"><select class="dsh-sdd-select" data-dashboard-kind><option value="all"${this.state.dashboardKind === 'all' ? ' selected' : ''}>全部类型</option><option value="requirement"${this.state.dashboardKind === 'requirement' ? ' selected' : ''}>需求</option><option value="defect"${this.state.dashboardKind === 'defect' ? ' selected' : ''}>独立缺陷</option><option value="custom"${this.state.dashboardKind === 'custom' ? ' selected' : ''}>其他</option></select><select class="dsh-sdd-select" data-dashboard-status><option value="all"${this.state.dashboardStatus === 'all' ? ' selected' : ''}>全部状态</option><option value="changed"${this.state.dashboardStatus === 'changed' ? ' selected' : ''}>有变化</option>${Object.entries(labels).map(([status, label]) => `<option value="${status}"${this.state.dashboardStatus === status ? ' selected' : ''}>${escapeHtml(label)}</option>`).join('')}</select><button class="dsh-sdd-button" data-action="apply-dashboard-filter">应用筛选</button></div>`
+    const toolbar = `<div class="dsh-sdd-matrix-toolbar"><input class="dsh-sdd-input" data-dashboard-query value="${escapeHtml(this.state.dashboardQuery)}" placeholder="搜索编号或标题"><select class="dsh-sdd-select" data-dashboard-kind><option value="all"${this.state.dashboardKind === 'all' ? ' selected' : ''}>全部类型</option><option value="requirement"${this.state.dashboardKind === 'requirement' ? ' selected' : ''}>需求</option><option value="defect"${this.state.dashboardKind === 'defect' ? ' selected' : ''}>独立缺陷</option><option value="custom"${this.state.dashboardKind === 'custom' ? ' selected' : ''}>其他</option></select><select class="dsh-sdd-select" data-dashboard-status><option value="all"${this.state.dashboardStatus === 'all' ? ' selected' : ''}>全部状态</option><option value="changed"${this.state.dashboardStatus === 'changed' ? ' selected' : ''}>有变化</option>${Object.entries(labels).map(([status, label]) => `<option value="${status}"${this.state.dashboardStatus === status ? ' selected' : ''}>${escapeHtml(label)}</option>`).join('')}</select><button class="dsh-sdd-button" data-action="apply-dashboard-filter">应用筛选</button><button class="dsh-sdd-button" data-action="toggle-dashboard-completed">${this.state.dashboardIncludeCompleted ? '隐藏已完成' : `显示已完成${completedMatched.length > 0 ? `（${completedMatched.length}）` : ''}`}</button></div>`
     const count = `显示 ${visible.length} / ${filtered.length} 条${filtered.length !== snapshot.dashboard.deliveryMatrix.length ? `（总计 ${snapshot.dashboard.deliveryMatrix.length}）` : ''}`
-    return `<section class="dsh-sdd-card" style="margin-top:14px"><h2>交付工作单元矩阵</h2><p class="dsh-sdd-muted">需求、独立缺陷和其他事项各占一行；需求内缺陷汇总到所属需求。点击阶段状态进入工作台。</p>${toolbar}<p class="dsh-sdd-muted">${count}</p>${rows === '' ? `<div class="dsh-sdd-empty">${snapshot.dashboard.deliveryMatrix.length === 0 ? '暂无交付工作单元' : '没有符合筛选条件的工作单元'}</div>` : `<div class="dsh-sdd-matrix-scroll"><table class="dsh-sdd-matrix"><thead><tr><th>交付工作单元</th>${STAGES.map(stage => `<th>${escapeHtml(stage.label)}</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table></div>${filtered.length > 200 ? '<p class="dsh-sdd-muted">为保证页面性能，一次最多渲染 200 条，请使用筛选缩小范围。</p>' : ''}`}</section>`
+    return `<section class="dsh-sdd-card dsh-sdd-matrix-card"><h2>交付工作单元</h2><p class="dsh-sdd-muted">按下一步紧迫程度排序，默认隐藏已完成；点击阶段状态进入工作台，点击“下一步”直接跳到该做的阶段。</p>${toolbar}<p class="dsh-sdd-muted">${count}</p>${rows === '' ? `<div class="dsh-sdd-empty">${snapshot.dashboard.deliveryMatrix.length === 0 ? '暂无交付工作单元' : this.state.dashboardIncludeCompleted ? '没有符合筛选条件的工作单元' : '没有进行中的工作单元，可点“显示已完成”查看历史'}</div>` : `<div class="dsh-sdd-matrix-scroll"><table class="dsh-sdd-matrix"><thead><tr><th>交付工作单元</th>${STAGES.map(stage => `<th>${escapeHtml(stage.label)}</th>`).join('')}<th>下一步</th></tr></thead><tbody>${rows}</tbody></table></div>${filtered.length > 200 ? '<p class="dsh-sdd-muted">为保证页面性能，一次最多渲染 200 条，请使用筛选缩小范围。</p>' : ''}`}</section>`
   }
 
   private traceabilityHtml(snapshot: ProjectSnapshot): string {
@@ -760,6 +861,14 @@ class SddWorkbench {
       this.state.dashboardStatus = (root.querySelector<HTMLSelectElement>('[data-dashboard-status]')?.value ?? 'all') as RuntimeState['dashboardStatus']
       this.render()
     })
+    root.querySelector<HTMLElement>('[data-action="toggle-dashboard-completed"]')?.addEventListener('click', () => {
+      this.state.dashboardIncludeCompleted = !this.state.dashboardIncludeCompleted
+      this.render()
+    })
+    root.querySelectorAll<HTMLButtonElement>('[data-sdd-action]').forEach(button => button.addEventListener('click', () => { this.handleDashboardAction(button.dataset.sddAction ?? '') }))
+    root.querySelectorAll<HTMLButtonElement>('[data-matrix-next]').forEach(button => button.addEventListener('click', () => {
+      this.goToStage(button.dataset.matrixStage as StageId, button.dataset.matrixNext)
+    }))
     root.querySelector<HTMLInputElement>('[data-dashboard-query]')?.addEventListener('keydown', event => {
       if (event.key === 'Enter') root.querySelector<HTMLButtonElement>('[data-action="apply-dashboard-filter"]')?.click()
     })
@@ -808,10 +917,7 @@ class SddWorkbench {
     root.querySelector<HTMLButtonElement>('[data-resolve-removal]')?.addEventListener('click', () => { void this.resolveRemoval() })
     root.querySelectorAll<HTMLButtonElement>('[data-resolve-attached-removal]').forEach(button => button.addEventListener('click', () => { void this.resolveRemoval(button.dataset.resolveAttachedRemoval) }))
     root.querySelectorAll<HTMLButtonElement>('[data-matrix-work-item]').forEach(button => button.addEventListener('click', () => {
-      this.state.workItemUid = button.dataset.matrixWorkItem; this.state.menu = button.dataset.matrixStage as StageId; this.state.targetArtifactUid = button.dataset.matrixArtifact
-      const artifact = this.state.snapshot?.artifacts.find(item => item.uid === this.state.targetArtifactUid)
-      this.state.selected = artifact === undefined && this.state.snapshot !== undefined ? this.defaultInputs(this.state.snapshot, this.state.menu as StageId) : new Set([...(artifact?.basedOn.map(item => item.uid) ?? []), ...(artifact?.derivedFrom.map(item => item.uid) ?? [])])
-      this.render()
+      this.goToStage(button.dataset.matrixStage as StageId, button.dataset.matrixWorkItem, button.dataset.matrixArtifact)
     }))
   }
 

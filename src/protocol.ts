@@ -649,9 +649,33 @@ export interface DeliveryMatrixRow {
   workItemStatus: WorkItem['status']
   attachedDefects: { total: number; pending: number; covered: number }
   cells: DeliveryMatrixCell[]
+  /** True when every applicable stage is accepted. */
+  completed: boolean
+  /** The single next thing a human should do for this work item. */
+  nextStep: { label: string; stage?: StageId }
 }
 
 export interface BurnupPoint { date: string; total: number; completed: number }
+
+export type DashboardActionKind = 'change' | 'accept' | 'quality' | 'configuration' | 'tests' | 'conflict' | 'openspec'
+
+/**
+ * One thing a human can act on right now. The dashboard leads with these so the page answers
+ * "what should I do next" instead of only reporting counts.
+ */
+export interface DashboardAction {
+  id: string
+  kind: DashboardActionKind
+  /** `blocking` items stop delivery; `attention` items are ready for a human decision. */
+  severity: 'blocking' | 'attention'
+  title: string
+  detail?: string
+  workItemUid?: string
+  workItemKey?: string
+  stage?: StageId
+  /** The artifact to open with the stage, when the action is about one deliverable. */
+  artifactUid?: string
+}
 
 export interface DashboardSnapshot {
   overallCompletion: number
@@ -667,6 +691,7 @@ export interface DashboardSnapshot {
   burnup: BurnupPoint[]
   traceability: number
   blockers: string[]
+  actions: DashboardAction[]
   recentEvents: SddEvent[]
 }
 

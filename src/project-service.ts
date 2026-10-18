@@ -12,6 +12,7 @@ import {
   type ArtifactRevision,
   type ArtifactSummary,
   type CodeRepositoryReference,
+  type DashboardAction,
   type DashboardSnapshot,
   type DeliveryArchive,
   type DeliveryCellStatus,
@@ -24,6 +25,7 @@ import {
   type OpenSpecFilePreview,
   type OpenSpecTemplatesPreview,
   type ProjectConfig,
+  type ProjectRepositoryState,
   type ProductFeature,
   type ProductKnowledgeSnapshot,
   type ProjectSnapshot,
@@ -383,6 +385,26 @@ function artifactKeyConflicts(artifacts: ArtifactSummary[], runs: StageRun[], de
       && !artifacts.some(candidate => candidate.supersedes?.uid === item.uid)).map(item => item.uid)
     return [{ stage: items[0]!.stage, key: items[0]!.key, artifactUids: items.map(item => item.uid), lineageUids: lineages, statuses: items.map(item => item.status), renamableArtifactUids }]
   }).sort((left, right) => left.key.localeCompare(right.key))
+}
+
+/** Content gates: a report with no failed check is reviewable even before its checklist is signed. */
+function passedContentGates(report: QualityReport | undefined): boolean {
+  return report !== undefined && report.checks.every(check => check.status !== 'failed')
+}
+
+/** The single next human action for one delivery work item, derived from its stage cells. */
+function nextStepFor(workItem: WorkItem, cells: DeliveryMatrixCell[], completed: boolean): { label: string; stage?: StageId } {
+  if (workItem.status === 'removed-pending') return { label: '确认外部移除', stage: workItem.change?.reviewRequiredStages[0] ?? STAGES[0]!.id }
+  const reviewStage = workItem.change?.reviewRequiredStages[0]
+  if (reviewStage !== undefined) return { label: `重审${stageDefinition(reviewStage).label}`, stage: reviewStage }
+  if (completed) return { label: '已完成' }
+  const cell = cells.find(item => item.status !== 'completed' && item.status !== 'not-applicable')
+  if (cell === undefined) return { label: '已完成' }
+  const label = stageDefinition(cell.stage).label
+  if (cell.status === 'ready-for-review') return { label: `验收${label}`, stage: cell.stage }
+  if (cell.status === 'in-progress') return { label: `继续${label}`, stage: cell.stage }
+  if (cell.status === 'blocked') return { label: `处理${label}阻塞`, stage: cell.stage }
+  return { label: `开始${label}`, stage: cell.stage }
 }
 
 export class SddProjectService {
@@ -817,9 +839,9 @@ export class SddProjectService {
       quality[artifact.uid] = evaluateQuality(artifact, await readFile(join(workspace.path, artifact.relativeDirectory, artifact.entry), 'utf8'), project, partial)
     }
     const recentEvents = await readRecentEvents(workspace.path, 5000)
-    const dashboard = this.dashboard(artifacts, sources, workItems, quality, developmentWorkspaces, recentEvents)
     const projectRepository = await this.projectGit.inspect(workspace.path, project)
     projectRepository.keyConflicts = artifactKeyConflicts(artifacts, runs, developmentWorkspaces)
+    const dashboard = this.dashboard(artifacts, sources, workItems, quality, developmentWorkspaces, recentEvents, { projectRepository, openSpecValidation })
     const productKnowledge = await this.listProductKnowledge(workspace.path)
     return { workspace, initialized: true, configuration: { status: 'valid', path: PROJECT_FILE, errors: [] }, project, artifacts, sources, sourceProviders: this.sourceRegistry?.names() ?? [], connectors, workItems, runs, quality, developmentWorkspaces, openSpecValidation, dashboard, projectRepository, productKnowledge }
   }
@@ -2316,13 +2338,116 @@ export class SddProjectService {
       workItems: { total: 0, requirements: 0, standaloneDefects: 0, custom: 0, pendingChanges: 0, completed: 0 },
       requirements: { packages: 0, total: 0, traced: 0, completed: 0 }, defects: { total: 0, standalone: 0, attached: 0, open: 0, resolved: 0, deliveryPending: 0, deliveryCovered: 0 }, artifacts: { total: 0, drafts: 0, accepted: 0 },
       development: { workspaces: 0, changedFiles: 0, passingTests: 0, failingTests: 0, commits: 0 }, workload: [], stageFlow: [], deliveryMatrix: [], burnup: [],
-      traceability: 100, blockers: [], recentEvents: [],
+      traceability: 100, blockers: [], actions: [], recentEvents: [],
     }
+  }
+
+  /**
+   * Collect the concrete things a human should act on now: source changes to review, artifacts
+   * waiting for acceptance, failed quality checks and tests, missing development configuration,
+   * identifier conflicts, and broken OpenSpec setups. Ordered blocking-first so the dashboard can
+   * lead with what actually stops delivery.
+   */
+  private dashboardActions(input: {
+    artifacts: ArtifactSummary[]
+    workItems: WorkItem[]
+    workItemByUid: Map<string, WorkItem>
+    artifactsByWorkItemStage: Map<string, ArtifactSummary[]>
+    quality: Record<string, QualityReport>
+    workspaces: DevelopmentWorkspace[]
+    context: { projectRepository: ProjectRepositoryState; openSpecValidation: Record<string, OpenSpecValidation> }
+  }): DashboardAction[] {
+    const { artifacts, workItems, workItemByUid, artifactsByWorkItemStage, quality, workspaces, context } = input
+    const artifactByUid = new Map(artifacts.map(item => [item.uid, item]))
+    const actions: DashboardAction[] = []
+    const ownerOf = (artifact: ArtifactSummary) => artifact.workItemUid === undefined ? undefined : workItemByUid.get(artifact.workItemUid)
+    for (const item of workItems) {
+      if (item.change === undefined) continue
+      const removed = item.status === 'removed-pending'
+      actions.push({
+        id: `change:${item.uid}`, kind: 'change', severity: 'blocking',
+        title: removed ? `${item.key} 已被外部移除，需要确认处理` : `${item.key} 来源有变化，需要重审`,
+        detail: removed ? '保留本地成果继续推进，或归档该工作单元' : `需要重审：${item.change.reviewRequiredStages.map(stage => stageDefinition(stage).label).join('、')}`,
+        workItemUid: item.uid, workItemKey: item.key, stage: item.change.reviewRequiredStages[0] ?? STAGES[0]!.id,
+      })
+    }
+    // Every open draft is either blocked by its content gates (fix it) or waiting for a human
+    // decision (review the checklist and accept it). The checklist itself belongs to accepting.
+    for (const artifact of artifacts) {
+      if (artifact.status !== 'draft' && artifact.status !== 'in-review') continue
+      const report = quality[artifact.uid]
+      if (report === undefined) continue
+      const workItem = ownerOf(artifact)
+      const failed = report.checks.filter(check => check.status === 'failed')
+      if (failed.length > 0) {
+        actions.push({
+          id: `quality:${artifact.uid}`, kind: 'quality', severity: 'attention',
+          title: `${stageDefinition(artifact.stage).label} ${artifact.key} v${artifact.version} 质量检查未通过`,
+          detail: failed.slice(0, 3).map(check => check.label).join('；'),
+          workItemUid: workItem?.uid, workItemKey: workItem?.key, stage: artifact.stage, artifactUid: artifact.uid,
+        })
+        continue
+      }
+      actions.push({
+        id: `accept:${artifact.uid}`, kind: 'accept', severity: 'attention',
+        title: `${stageDefinition(artifact.stage).label} ${artifact.key} v${artifact.version} 等待验收`,
+        detail: `${workItem === undefined ? '' : `${workItem.key} · `}${artifact.title}`,
+        workItemUid: workItem?.uid, workItemKey: workItem?.key, stage: artifact.stage, artifactUid: artifact.uid,
+      })
+    }
+    for (const item of workItems) {
+      if ((artifactsByWorkItemStage.get(`${item.uid}:development`) ?? []).length === 0) continue
+      if ((item.developmentTargets ?? []).length > 0) continue
+      actions.push({
+        id: `configuration:${item.uid}`, kind: 'configuration', severity: 'blocking',
+        title: `${item.key} 开发测试尚未配置目标代码仓库`,
+        detail: '先在项目设置登记仓库，再在规格设计确认开发目标',
+        workItemUid: item.uid, workItemKey: item.key, stage: 'development',
+      })
+    }
+    for (const workspace of workspaces) {
+      const artifact = artifactByUid.get(workspace.artifactUid)
+      const workItem = artifact === undefined ? undefined : ownerOf(artifact)
+      for (const repository of workspace.repositories) {
+        for (const test of repository.tests ?? []) {
+          if (test.stale || test.passed) continue
+          actions.push({
+            id: `tests:${test.uid}`, kind: 'tests', severity: 'blocking',
+            title: `测试失败：${test.description}`,
+            detail: `${repository.id}${workItem === undefined ? '' : ` · ${workItem.key}`}`,
+            workItemUid: workItem?.uid, workItemKey: workItem?.key, stage: 'development',
+          })
+        }
+      }
+    }
+    for (const conflict of context.projectRepository.keyConflicts) {
+      actions.push({
+        id: `conflict:${conflict.key}:${conflict.stage}`, kind: 'conflict', severity: 'blocking',
+        title: `交付件编号冲突：${conflict.key}`,
+        detail: `${stageDefinition(conflict.stage).label} · ${conflict.statuses.join('、')}${conflict.renamableArtifactUids.length === 0 ? ' · 需要人工处理' : ''}`,
+        stage: conflict.stage,
+      })
+    }
+    for (const item of workItems) {
+      if (item.openSpec?.enabled !== true) continue
+      const validation = context.openSpecValidation[item.uid]
+      if (validation === undefined || validation.status !== 'invalid') continue
+      actions.push({
+        id: `openspec:${item.uid}`, kind: 'openspec', severity: 'blocking',
+        title: `${item.key} OpenSpec 校验未通过`,
+        detail: validation.message,
+        workItemUid: item.uid, workItemKey: item.key, stage: 'specification',
+      })
+    }
+    return actions
+      .sort((left, right) => left.severity === right.severity ? 0 : left.severity === 'blocking' ? -1 : 1)
+      .slice(0, 30)
   }
 
   private dashboard(
     artifacts: ArtifactSummary[], sources: SourceSummary[], workItems: WorkItem[], quality: Record<string, QualityReport>,
     workspaces: DevelopmentWorkspace[], recentEvents: SddEvent[],
+    context: { projectRepository: ProjectRepositoryState; openSpecValidation: Record<string, OpenSpecValidation> },
   ): DashboardSnapshot {
     const deliveryWorkItems = workItems.filter(item => item.executionMode !== 'attached' && item.status !== 'completed')
     const deliveryWorkItemUids = new Set(deliveryWorkItems.map(item => item.uid))
@@ -2399,7 +2524,7 @@ export class SddProjectService {
         if (artifact === undefined && workItem.stageApplicability?.[stage.id]?.status === 'not-applicable') status = 'not-applicable'
         else if (workItem.change?.reviewRequiredStages.includes(stage.id) === true || (artifact !== undefined && staleInputs(artifact).length > 0)) status = 'blocked'
         else if (artifact?.status === 'accepted') status = 'completed'
-        else if (artifact !== undefined && quality[artifact.uid]?.ready === true) status = 'ready-for-review'
+        else if (artifact !== undefined && passedContentGates(quality[artifact.uid])) status = 'ready-for-review'
         else if (artifact !== undefined) status = 'in-progress'
         const settingsBlocked = artifact !== undefined && stage.id === 'development' && ((workItem.developmentTargets ?? []).length === 0
           || workItem.developmentTargets?.some(id => (workItem.developmentTargetDetails?.[id] ?? '').trim() === ''))
@@ -2409,9 +2534,11 @@ export class SddProjectService {
           ...(artifact === undefined ? {} : { artifactUid: artifact.uid, artifactKey: artifact.key, version: artifact.version }),
         }
       })
+      const completed = cells.every(cell => cell.status === 'completed' || cell.status === 'not-applicable')
       return {
         workItemUid: workItem.uid, key: workItem.key, title: workItem.title, kind: workItem.kind, workItemStatus: workItem.status,
         attachedDefects: { total: children.length, covered, pending: children.length - covered }, cells,
+        completed, nextStep: nextStepFor(workItem, cells, completed),
       }
     })
     const stageFlow = STAGES.map(stage => {
@@ -2457,6 +2584,7 @@ export class SddProjectService {
       ...artifacts.filter(item => item.status === 'accepted').flatMap(item => staleInputs(item).map(label => `${item.key} v${item.version}：${label}，需要创建变更修订`)),
       ...Object.values(quality).flatMap(report => report.checks.filter(item => item.status === 'failed').map(item => `${stageDefinition(report.stage).label}：${item.label}`)),
     ].slice(0, 12)
+    const actions = this.dashboardActions({ artifacts, workItems: deliveryWorkItems, workItemByUid, artifactsByWorkItemStage, quality, workspaces, context })
     const resolvedStatuses = new Set(['resolved', 'done', 'cancelled'])
     const workload = new Map<string, { total: number; completed: number }>()
     for (const source of currentSources) {
@@ -2514,7 +2642,7 @@ export class SddProjectService {
       development: { workspaces: workspaces.length, changedFiles: workspaces.flatMap(item => item.repositories).reduce((sum, item) => sum + item.changedFiles, 0), passingTests: tests.filter(item => item.passed && !item.skipped).length, failingTests: tests.filter(item => !item.passed).length, commits: workspaces.flatMap(item => item.repositories).filter(item => item.headCommit !== item.baseCommit).length },
       workload: [...workload.entries()].sort(([left], [right]) => left.localeCompare(right)).map(([unit, value]) => ({ unit, ...value })),
       stageFlow, deliveryMatrix, burnup,
-      traceability: currentSources.length === 0 ? 100 : Math.round(currentSources.filter(item => tracedSources.has(item.uid)).length / currentSources.length * 100), blockers, recentEvents,
+      traceability: currentSources.length === 0 ? 100 : Math.round(currentSources.filter(item => tracedSources.has(item.uid)).length / currentSources.length * 100), blockers, actions, recentEvents,
     }
   }
 }

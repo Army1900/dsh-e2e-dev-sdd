@@ -116,5 +116,12 @@ export declare class SddProjectService {
     private requireSnapshot;
     private requireArtifact;
     private emptyDashboard;
+    /**
+     * Collect the concrete things a human should act on now: source changes to review, artifacts
+     * waiting for acceptance, failed quality checks and tests, missing development configuration,
+     * identifier conflicts, and broken OpenSpec setups. Ordered blocking-first so the dashboard can
+     * lead with what actually stops delivery.
+     */
+    private dashboardActions;
     private dashboard;
 }

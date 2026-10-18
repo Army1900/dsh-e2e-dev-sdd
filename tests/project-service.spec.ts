@@ -575,4 +575,55 @@ process.exit(1)\n`)
     expect(file).toMatchObject({ productFile: { content: expect.stringContaining('[转测] ORDER-1') } })
     await expect(service.execute({ kind: 'close-delivery', workspaceId: 'w1', workItemUid: workItem.uid, featureName: '订单退款', changeType: 'created', summary: '重复归档' })).rejects.toThrow('already delivered')
   })
+
+  it('leads the dashboard with actionable items and a next step per work item', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-sdd-dashboard-actions-'))
+    const provider = new ManualSourceProvider()
+    const sources = { names: () => ['manual'], fetch: async (_name: string, request: any) => provider.get({ ...request, signal: request.signal ?? AbortSignal.timeout(1000) }) } as unknown as SddSourceRegistry
+    const service = new SddProjectService(...hostArgs(root), sources)
+    await service.execute({ kind: 'import-source', workspaceId: 'w1', provider: 'manual', sourceKind: 'requirement', key: 'NAV-1', input: { title: '导航改版' } })
+    let snapshot = await service.snapshot('w1')
+    // A newly imported requirement has nothing to accept yet: the next step is to start the stage.
+    expect(snapshot.dashboard.actions).toEqual([])
+    expect(snapshot.dashboard.deliveryMatrix[0]).toMatchObject({ completed: false, nextStep: { label: '开始需求讨论', stage: 'requirements' } })
+    const workItem = snapshot.workItems[0]!
+    await service.execute({ kind: 'create-draft', workspaceId: 'w1', stage: 'requirements', title: '导航改版需求', basedOn: [], sourceUids: [workItem.sourceUid!], workItemUid: workItem.uid })
+    snapshot = await service.snapshot('w1')
+    const artifact = snapshot.artifacts[0]!
+    // Template placeholders fail the content gates, so the dashboard asks for a fix, not acceptance.
+    expect(snapshot.dashboard.actions).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'quality', severity: 'attention', stage: 'requirements', workItemKey: 'NAV-1', artifactUid: artifact.uid }),
+    ]))
+    expect(snapshot.dashboard.deliveryMatrix[0]).toMatchObject({ nextStep: { label: '继续需求讨论', stage: 'requirements' } })
+    const deliverable = join(root, artifact.relativeDirectory, 'deliverable.md')
+    await writeFile(deliverable, (await readFile(deliverable, 'utf8')).replaceAll('待补充。', '已确认。'))
+    snapshot = await service.snapshot('w1')
+    // Complete content without a signed checklist is waiting for a human, not blocked.
+    expect(snapshot.dashboard.actions).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'accept', severity: 'attention', stage: 'requirements', workItemKey: 'NAV-1', artifactUid: artifact.uid, title: expect.stringContaining('等待验收') }),
+    ]))
+    expect(snapshot.dashboard.actions.some(action => action.kind === 'quality')).toBe(false)
+    expect(snapshot.dashboard.deliveryMatrix[0]).toMatchObject({
+      completed: false,
+      nextStep: { label: '验收需求讨论', stage: 'requirements' },
+      cells: expect.arrayContaining([expect.objectContaining({ stage: 'requirements', status: 'ready-for-review' })]),
+    })
+  })
+
+  it('raises blocking actions for pending source changes and identifier conflicts', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-sdd-dashboard-blocking-'))
+    const provider = new ManualSourceProvider()
+    const sources = { names: () => ['manual'], fetch: async (_name: string, request: any) => provider.get({ ...request, signal: request.signal ?? AbortSignal.timeout(1000) }) } as unknown as SddSourceRegistry
+    const service = new SddProjectService(...hostArgs(root), sources)
+    await service.execute({ kind: 'import-source', workspaceId: 'w1', provider: 'manual', sourceKind: 'requirement', key: 'CHG-1', input: { title: '结算改版' } })
+    const source = (await service.snapshot('w1')).sources[0]!
+    await service.execute({ kind: 'import-source', workspaceId: 'w1', provider: 'manual', sourceKind: 'requirement', key: 'CHG-1', input: { title: '结算改版（二期）' } })
+    let snapshot = await service.snapshot('w1')
+    const changeAction = snapshot.dashboard.actions.find(action => action.kind === 'change')
+    expect(changeAction).toMatchObject({ severity: 'blocking', workItemKey: 'CHG-1', stage: expect.any(String) })
+    expect(snapshot.dashboard.actions.filter(action => action.severity === 'blocking').length).toBeGreaterThanOrEqual(1)
+    expect(source.title).toBe('结算改版')
+    snapshot = await service.snapshot('w1')
+    expect(snapshot.dashboard.deliveryMatrix[0]).toMatchObject({ workItemStatus: 'change-pending', nextStep: { label: expect.stringContaining('重审') } })
+  })
 })
