@@ -371,6 +371,7 @@ class SddWorkbench {
   /** The panel rows this plugin owns; only these fold and indent with the group. */
   private readonly ownPanelLabels: string[]
   private panelClickBound = false
+  private panelClickHandler?: (event: Event) => void
 
   constructor(
     private readonly workspaces: ClientWorkspacesFacade,
@@ -420,17 +421,22 @@ class SddWorkbench {
   observePanelList(): void {
     if (this.panelListObserver !== undefined) return
     this.applyGroupState()
-    // Folding is user-driven: only the group header row toggles it, and selecting a child panel
-    // leaves the group open. The header is an ordinary panel row whose panel id has no main entry,
-    // so its click must fold instead of selecting; bound once on the document so re-rendered rows
-    // keep working.
+    // The group header is a first-level menu: its click opens the project overview and flips the
+    // group. The row is a shell-rendered panel row whose id has no main entry, so the shell's own
+    // handler would throw trying to select it. Intercept in the capture phase (before React's root
+    // listener) and stop the event there; the header must never reach `selectPanel`.
     if (!this.panelClickBound) {
       this.panelClickBound = true
-      document.addEventListener('click', event => {
+      this.panelClickHandler = (event: Event) => {
         const target = event.target
         if (!(target instanceof Element)) return
-        if (target.closest('[data-dsh-sdd-group-header]') !== null) this.toggleGroup()
-      })
+        if (target.closest('[data-dsh-sdd-group-header]') === null) return
+        event.preventDefault()
+        event.stopImmediatePropagation()
+        this.toggleGroup()
+        this.layoutApi.selectPanel('dashboard')
+      }
+      document.addEventListener('click', this.panelClickHandler, true)
     }
     const observer = new MutationObserver(() => { this.applyGroupState() })
     observer.observe(document.body, { childList: true, subtree: true })
@@ -469,6 +475,11 @@ class SddWorkbench {
   deactivate(): void {
     this.panelListObserver?.disconnect()
     this.panelListObserver = undefined
+    if (this.panelClickHandler !== undefined) {
+      document.removeEventListener('click', this.panelClickHandler, true)
+      this.panelClickHandler = undefined
+      this.panelClickBound = false
+    }
     this.detach(null)
   }
 

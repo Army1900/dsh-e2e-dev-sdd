@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeAll, describe, expect, it, onTestFinished, vi } from 'vitest'
 import * as React from 'react'
 import { act, create, type ReactTestRenderer } from 'react-test-renderer'
 
@@ -72,11 +72,14 @@ function loadPlugin(): { sidebar: Registration[]; main: Registration[]; disposer
     if (specifier === 'react') return React
     throw new Error(`the client bundle requested a non-platform module: ${specifier}`)
   })
-  expect(plugin.apply({ get: (name: string) => (services as Record<string, unknown>)[name] })).toBeTypeOf('function')
+  const disposer = plugin.apply({ get: (name: string) => (services as Record<string, unknown>)[name] })
+  expect(disposer).toBeTypeOf('function')
+  // Each test owns one activation; dispose it so document-level listeners cannot leak between tests.
+  onTestFinished(() => { disposer() })
   return {
     sidebar: registrations.filter(entry => entry.options.name === 'sidebar.panellist'),
     main: registrations.filter(entry => entry.options.name === 'main'),
-    disposer: plugin.apply({ get: (name: string) => (services as Record<string, unknown>)[name] }),
+    disposer,
     selected,
     selectPanel,
   }
@@ -163,14 +166,18 @@ describe('SDD client slot wiring', () => {
     expect(rowOf('时事大屏').hasAttribute('data-dsh-sdd-child')).toBe(false)
     expect(rowOf('插件管理').hasAttribute('data-dsh-sdd-child')).toBe(false)
 
-    // The fold is driven by the header row's own click, which must not select a panel.
-    rowOf('项目开发').dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    // The header row is a first-level menu: its click opens the overview and folds the group.
+    // The shell's own row handler must never run — its panel id has no main entry and would throw.
+    let shellHandled = 0
+    rowOf('项目开发').addEventListener('click', () => { shellHandled += 1 })
+    rowOf('项目开发').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    expect(shellHandled).toBe(0)
     expect(document.documentElement.hasAttribute('data-dsh-sdd-group-collapsed')).toBe(true)
-    expect(plugin.selected).toEqual([])
+    expect(plugin.selected).toEqual(['dashboard'])
 
     // Folding is user-driven only: switching panels — this plugin's or another's — leaves the
     // group exactly as the user left it.
-    rowOf('项目开发').dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    rowOf('项目开发').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
     expect(document.documentElement.hasAttribute('data-dsh-sdd-group-collapsed')).toBe(false)
     act(() => { plugin.selectPanel('requirements') })
     expect(document.documentElement.hasAttribute('data-dsh-sdd-group-collapsed')).toBe(false)

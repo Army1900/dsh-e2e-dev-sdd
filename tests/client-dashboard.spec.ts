@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeAll, describe, expect, it, onTestFinished, vi } from 'vitest'
 import * as React from 'react'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
@@ -61,7 +61,8 @@ function loadDashboardPlugin(): { dashboard: Registration; selected: string[] } 
     if (specifier === 'react') return React
     throw new Error(`unexpected module ${specifier}`)
   })
-  plugin.apply({ get: (name: string) => (services as Record<string, unknown>)[name] })
+  const disposer = plugin.apply({ get: (name: string) => (services as Record<string, unknown>)[name] })
+  onTestFinished(() => { disposer() })
   const dashboard = registrations.find(entry => entry.options.name === 'main' && entry.options.key === 'dashboard')
   if (dashboard === undefined) throw new Error('the dashboard panel was not registered')
   return { dashboard, selected }
