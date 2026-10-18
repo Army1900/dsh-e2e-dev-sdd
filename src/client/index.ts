@@ -5,6 +5,7 @@ import { marked } from 'marked'
 import { STAGES, STAGE_ARTIFACT_TEMPLATES, type ArtifactSummary, type BurnupPoint, type DeliveryCellStatus, type OpenSpecFilePreview, type ProjectSnapshot, type RepositoryInspection, type SddAction, type SddResponse, type SourceImportDetail, type SourceSummary, type StageId, type StageRun, type StageTemplatePreview } from '../protocol.ts'
 import { CLIENT_BUILD } from './build-stamp.ts'
 import { applyMarkdownCommand, itemKeySuggestion, manualTemplate, splitMarkdownSections, type ManualKind, type MarkdownCommand } from './manual-editor.ts'
+import { stageSessionTitle } from './session-title.ts'
 import { jsonPreviewHtml } from './json-preview.ts'
 import { preferredSourceSelection } from './source-selection.ts'
 
@@ -1914,8 +1915,9 @@ class SddWorkbench {
       const accepted = await binding.session.prompt([{ type: 'text', text: response.prompt }], 'queue'); if (!accepted.ok) throw new Error(`${accepted.error.code}: ${accepted.error.message}`)
       const artifact = this.state.snapshot?.artifacts.find(item => item.uid === this.state.targetArtifactUid)
       if (artifact) {
-        const prefix = artifact.revision?.kind === 'upstream' ? '[SDD变更·上游]' : artifact.revision?.kind === 'user-intent' ? '[SDD变更·主动]' : '[SDD]'
-        void binding.session.rename(`${prefix} ${artifact.key} v${artifact.version} ${artifact.title}`)
+        // The artifact key already names the stage and type, so plain runs carry no marker; only a
+        // change revision adds a short one.
+        void binding.session.rename(stageSessionTitle(artifact))
       }
       this.uiWorkspace.openSession(String(sessionId)); this.close()
     } catch (error) { this.state.error = error instanceof Error ? error.message : String(error) }
