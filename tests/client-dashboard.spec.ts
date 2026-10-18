@@ -79,6 +79,7 @@ function snapshotFixture(): Record<string, unknown> {
       schema: 'dsh-sdd/project@1',
       project: { key: 'demo', name: 'Demo' },
       development: { repositories: [], workspaceRoot: '.sdd-workspaces', branchPattern: 'sdd/{key}', mergeStrategy: 'merge' },
+      sources: {},
       dependencies: {},
     },
     artifacts: [{
@@ -174,6 +175,45 @@ describe('project dashboard', () => {
     await act(async () => { action.click() })
     expect(selected).toContain('requirements')
     await act(async () => { root.unmount() })
+  })
+
+  it('opens the manual intake editor with a real editing surface', async () => {
+    const { container, root } = await renderDashboard()
+    const importButton = container.querySelector<HTMLButtonElement>('[data-action="import-requirement"]')!
+    await act(async () => { importButton.click(); await new Promise(resolve => setTimeout(resolve, 0)) })
+    // Step one is only the source setup; the long-form fields are gone.
+    const setup = document.querySelector<HTMLFormElement>('.dsh-sdd-modal')
+    expect(setup).not.toBeNull()
+    expect(setup!.textContent).not.toContain('初始描述')
+    await act(async () => { setup!.requestSubmit(); await new Promise(resolve => setTimeout(resolve, 20)) })
+
+    // Step two is the editor: item list, Markdown toolbar, templates, paste-split and preview.
+    const editor = document.querySelector<HTMLFormElement>('.dsh-sdd-manual-modal')
+    expect(editor).not.toBeNull()
+    const text = editor!.textContent ?? ''
+    expect(text).toContain('手工录入需求')
+    expect(text).toContain('插入结构模板')
+    expect(text).toContain('粘贴 Markdown 拆分')
+    expect(text).toContain('⌘/Ctrl + Enter')
+    const description = editor!.querySelector<HTMLTextAreaElement>('[data-manual-description]')!
+    expect(description.placeholder).toContain('背景')
+
+    // Sub-items live beside the editor and can be added.
+    await act(async () => { editor!.querySelector<HTMLButtonElement>('[data-add-entry]')!.click() })
+    expect(editor!.querySelectorAll('.dsh-sdd-manual-entry')).toHaveLength(2)
+
+    // Validation keeps the user in place instead of failing silently.
+    await act(async () => { editor!.querySelector<HTMLButtonElement>('[type="submit"]')!.click(); await new Promise(resolve => setTimeout(resolve, 0)) })
+    expect(editor!.querySelector('[data-manual-error]')!.textContent).toContain('主需求标题不能为空')
+
+    // Markdown tools act on the description.
+    editor!.querySelector<HTMLInputElement>('[data-manual-title]')!.value = '结算页改版'
+    editor!.querySelector<HTMLInputElement>('[data-manual-title]')!.dispatchEvent(new Event('input', { bubbles: true }))
+    await act(async () => { editor!.querySelector<HTMLButtonElement>('[data-md="h2"]')!.click() })
+    expect(description.value).toBe('## ')
+    expect(editor!.querySelector('.dsh-sdd-manual-entry-main strong')!.textContent).toContain('结算页改版')
+
+    await act(async () => { editor!.querySelector<HTMLButtonElement>('[data-cancel]')!.click(); await act(async () => { root.unmount() }) })
   })
 
   it('filters completed work items out by default and toggles them back', async () => {

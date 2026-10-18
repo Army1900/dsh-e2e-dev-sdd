@@ -4,6 +4,7 @@ import DOMPurify from 'dompurify'
 import { marked } from 'marked'
 import { STAGES, STAGE_ARTIFACT_TEMPLATES, type ArtifactSummary, type BurnupPoint, type DeliveryCellStatus, type OpenSpecFilePreview, type ProjectSnapshot, type RepositoryInspection, type SddAction, type SddResponse, type SourceImportDetail, type SourceSummary, type StageId, type StageRun, type StageTemplatePreview } from '../protocol.ts'
 import { CLIENT_BUILD } from './build-stamp.ts'
+import { applyMarkdownCommand, itemKeySuggestion, manualTemplate, splitMarkdownSections, type ManualKind, type MarkdownCommand } from './manual-editor.ts'
 import { jsonPreviewHtml } from './json-preview.ts'
 import { preferredSourceSelection } from './source-selection.ts'
 
@@ -133,7 +134,43 @@ html[data-dsh-sdd-group-collapsed] .dsh-sdd-panel-list>[data-dsh-sdd-child]{disp
 .dsh-sdd-chart-grid,.dsh-sdd-dashboard-overview{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(320px,.85fr);gap:14px;margin-bottom:14px}.dsh-sdd-dashboard-overview{grid-template-columns:repeat(2,minmax(0,1fr))}.dsh-sdd-chart-legend{display:flex;flex-wrap:wrap;gap:8px 14px;margin-top:10px;font-size:11px;color:var(--dsw-alias-label-secondary,#666)}.dsh-sdd-chart-legend span{display:inline-flex;align-items:center;gap:5px}.dsh-sdd-legend-swatch{width:14px;height:9px;border:1px solid var(--dsw-alias-label-secondary,#666);border-radius:2px}.dsh-sdd-flow-list{display:flex;flex-direction:column;gap:10px}.dsh-sdd-flow-row{display:grid;grid-template-columns:72px minmax(0,1fr) 28px;align-items:center;gap:9px;font-size:12px}.dsh-sdd-flow-bar{display:flex;height:15px;overflow:hidden;border:1px solid var(--dsw-alias-border-l2,#bbb);border-radius:4px;background:var(--dsw-alias-bg-base,#fff)}.dsh-sdd-flow-segment{height:100%;min-width:0}.dsh-sdd-flow-segment[data-status="not-started"],.dsh-sdd-legend-swatch[data-status="not-started"]{background:transparent}.dsh-sdd-flow-segment[data-status="in-progress"],.dsh-sdd-legend-swatch[data-status="in-progress"]{background:var(--dsw-alias-label-tertiary,#aaa)}.dsh-sdd-flow-segment[data-status="ready-for-review"],.dsh-sdd-legend-swatch[data-status="ready-for-review"]{background:repeating-linear-gradient(90deg,var(--dsw-alias-label-secondary,#666) 0 2px,transparent 2px 4px)}.dsh-sdd-flow-segment[data-status="completed"],.dsh-sdd-legend-swatch[data-status="completed"]{background:var(--dsw-alias-label-primary,#222)}.dsh-sdd-flow-segment[data-status="blocked"],.dsh-sdd-legend-swatch[data-status="blocked"]{background:repeating-linear-gradient(135deg,var(--dsw-alias-label-primary,#222) 0 2px,transparent 2px 5px)}.dsh-sdd-burnup{display:block;width:100%;height:auto;min-height:210px;color:var(--dsw-alias-label-primary,#222)}.dsh-sdd-burnup-grid{stroke:var(--dsw-alias-border-l1,#ddd);stroke-width:1}.dsh-sdd-burnup-total{fill:none;stroke:currentColor;stroke-width:2;stroke-dasharray:6 4;opacity:.55}.dsh-sdd-burnup-completed{fill:none;stroke:currentColor;stroke-width:2.5}.dsh-sdd-burnup-point{fill:var(--dsw-alias-bg-base,#fff);stroke:currentColor;stroke-width:2}.dsh-sdd-burnup text{fill:var(--dsw-alias-label-secondary,#666);font:11px var(--dsw-font-family,system-ui)}.dsh-sdd-overview-list{display:flex;flex-direction:column;gap:11px;max-height:210px;overflow:auto}.dsh-sdd-overview-row{display:grid;grid-template-columns:minmax(90px,1fr) minmax(100px,1.4fr) auto;align-items:center;gap:9px;font-size:12px}.dsh-sdd-overview-row strong{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}.dsh-sdd-matrix-toolbar{display:grid;grid-template-columns:minmax(180px,1fr) minmax(130px,.35fr) minmax(150px,.4fr) auto;gap:8px;align-items:center;margin:10px 0}.dsh-sdd-matrix-toolbar .dsh-sdd-input,.dsh-sdd-matrix-toolbar .dsh-sdd-select{width:100%;min-width:0}.dsh-sdd-matrix-scroll{max-height:480px;overflow:auto;overscroll-behavior:contain;border:1px solid var(--dsw-alias-border-l1,#ddd);border-radius:9px}.dsh-sdd-matrix{width:100%;min-width:880px;border-collapse:separate;border-spacing:0;font-size:12px}.dsh-sdd-matrix th,.dsh-sdd-matrix td{padding:7px;border-right:1px solid var(--dsw-alias-border-l1,#ddd);border-bottom:1px solid var(--dsw-alias-border-l1,#ddd);background:var(--dsw-alias-bg-base,#fff)}.dsh-sdd-matrix th{position:sticky;top:0;z-index:2;background:var(--dsw-alias-bg-layer-2,#fafafa);text-align:left}.dsh-sdd-matrix th:first-child,.dsh-sdd-matrix td:first-child{position:sticky;left:0;z-index:1;width:260px;min-width:260px}.dsh-sdd-matrix th:first-child{z-index:3}.dsh-sdd-matrix tr:last-child td{border-bottom:0}.dsh-sdd-matrix th:last-child,.dsh-sdd-matrix td:last-child{border-right:0}.dsh-sdd-matrix-work{display:block;max-width:250px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.dsh-sdd-matrix-meta{display:flex;align-items:center;gap:5px;flex-wrap:wrap;margin-top:4px}.dsh-sdd-matrix-meta .dsh-sdd-badge{margin:0}.dsh-sdd-matrix-cell{box-sizing:border-box;width:100%;min-width:92px;padding:7px 6px;border:1px solid var(--dsw-alias-border-l2,#bbb);border-radius:5px;background:transparent;color:inherit;font-size:11px;cursor:pointer}.dsh-sdd-matrix-cell[data-status="not-started"]{cursor:default;color:var(--dsw-alias-label-tertiary,#999)}.dsh-sdd-matrix-cell[data-status="in-progress"]{background:var(--dsw-alias-interactive-bg-hover,#e5e5e5)}.dsh-sdd-matrix-cell[data-status="ready-for-review"]{background:repeating-linear-gradient(90deg,var(--dsw-alias-interactive-bg-hover,#ddd) 0 3px,transparent 3px 6px)}.dsh-sdd-matrix-cell[data-status="completed"]{background:var(--dsw-alias-label-primary,#222);border-color:var(--dsw-alias-label-primary,#222);color:var(--dsw-alias-bg-base,#fff)}.dsh-sdd-matrix-cell[data-status="blocked"]{border:2px solid var(--dsw-alias-label-primary,#222);background:repeating-linear-gradient(135deg,var(--dsw-alias-interactive-bg-hover,#ddd) 0 3px,transparent 3px 7px)}@media(max-width:900px){.dsh-sdd-chart-grid,.dsh-sdd-dashboard-overview{grid-template-columns:minmax(0,1fr)}.dsh-sdd-matrix-toolbar{grid-template-columns:1fr 1fr}.dsh-sdd-matrix-toolbar .dsh-sdd-input{grid-column:1/-1}}@media(max-width:560px){.dsh-sdd-matrix-toolbar{grid-template-columns:1fr}}
 .dsh-sdd-modal-backdrop{position:fixed;inset:0;z-index:200;display:flex;align-items:center;justify-content:center;padding:20px;background:#0008}.dsh-sdd-modal{box-sizing:border-box;width:min(520px,100%);max-height:min(760px,calc(100vh - 40px));overflow:auto;border:1px solid var(--dsw-alias-border-l1,#ddd);border-radius:14px;background:var(--dsw-alias-bg-base,#fff);box-shadow:0 20px 60px #0005}.dsh-sdd-modal-header{padding:18px 20px 10px}.dsh-sdd-modal-header h2{margin:0 0 6px;font-size:18px}.dsh-sdd-modal-body{display:flex;flex-direction:column;gap:14px;padding:8px 20px 18px}.dsh-sdd-field{display:flex;flex-direction:column;gap:6px}.dsh-sdd-field>label{font-size:13px;font-weight:600}.dsh-sdd-field textarea{min-height:88px;resize:vertical}.dsh-sdd-field[hidden]{display:none}.dsh-sdd-checkbox{display:grid;grid-template-columns:auto 1fr;align-items:start;gap:9px;padding:10px;border:1px solid var(--dsw-alias-border-l1,#ddd);border-radius:9px}.dsh-sdd-checkbox input{margin-top:2px}.dsh-sdd-modal-footer{display:flex;justify-content:flex-end;gap:8px;padding:14px 20px;border-top:1px solid var(--dsw-alias-border-l1,#ddd);background:var(--dsw-alias-bg-layer-2,#fafafa)}.dsh-sdd-checkbox-detail{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:start;gap:8px}.dsh-sdd-checkbox-detail .dsh-sdd-checkbox{height:100%;box-sizing:border-box}.dsh-sdd-source-detail{width:min(1080px,100%)}.dsh-sdd-source-detail-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.dsh-sdd-source-detail-grid[data-columns="1"]{grid-template-columns:minmax(0,1fr)}.dsh-sdd-source-detail-grid>section{min-width:0}.dsh-sdd-source-panel{padding:12px;border:1px solid var(--dsw-alias-border-l1,#ddd);border-radius:9px;background:var(--dsw-alias-bg-layer-2,#fafafa)}.dsh-sdd-source-panel>h3{margin:0 0 10px;font-size:13px}.dsh-sdd-source-detail pre{max-height:52vh;white-space:pre-wrap;overflow:auto;overflow-wrap:anywhere}.dsh-sdd-json-object{display:flex;flex-direction:column;gap:6px;min-width:0}.dsh-sdd-json-row{display:grid;grid-template-columns:minmax(92px,.28fr) minmax(0,.72fr);gap:9px;align-items:start;padding:7px;border-left:2px solid var(--dsw-alias-border-l2,#bbb);background:var(--dsw-alias-bg-base,#fff)}.dsh-sdd-json-key{font:600 11px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace;overflow-wrap:anywhere}.dsh-sdd-json-value{min-width:0;font-size:12px}.dsh-sdd-json-text{white-space:pre-wrap;overflow-wrap:anywhere;max-height:240px;overflow:auto}.dsh-sdd-json-literal{font:12px ui-monospace,SFMono-Regular,Consolas,monospace}.dsh-sdd-json-expand{padding:5px 8px;border:1px dashed var(--dsw-alias-border-l2,#bbb);border-radius:6px;background:transparent;color:inherit;cursor:pointer;font-size:11px;text-align:left}.dsh-sdd-json-html{box-sizing:border-box;max-height:360px;overflow:auto;padding:10px;border:1px solid var(--dsw-alias-border-l1,#ddd);border-radius:7px;background:var(--dsw-alias-bg-base,#fff);line-height:1.6}.dsh-sdd-json-html table{display:block;max-width:100%;overflow:auto;border-collapse:collapse}.dsh-sdd-json-html th,.dsh-sdd-json-html td{padding:5px 7px;border:1px solid var(--dsw-alias-border-l1,#ddd)}.dsh-sdd-json-html-source{margin-top:6px}.dsh-sdd-json-html-source summary{cursor:pointer;font-size:11px;color:var(--dsw-alias-label-secondary,#666)}.dsh-sdd-json-html-source pre{margin-top:6px;max-height:180px}@media(max-width:720px){.dsh-sdd-source-detail-grid{grid-template-columns:1fr}.dsh-sdd-checkbox-detail{grid-template-columns:1fr}.dsh-sdd-checkbox-detail button{justify-self:start}.dsh-sdd-json-row{grid-template-columns:1fr}.dsh-sdd-json-key{border-bottom:1px solid var(--dsw-alias-border-l1,#ddd);padding-bottom:3px}}
 .dsh-sdd-template-modal{width:min(900px,100%)}.dsh-sdd-template-preview{display:block;box-sizing:border-box;width:100%;margin:0;padding:16px;max-height:60vh;overflow:auto;border:1px solid var(--dsw-alias-border-l1,#ddd);border-radius:9px;background:var(--dsw-alias-bg-layer-2,#fafafa);color:inherit;font:12px/1.65 ui-monospace,SFMono-Regular,Consolas,"Liberation Mono",monospace;text-align:left;white-space:pre;word-break:normal;overflow-wrap:normal;tab-size:2;direction:ltr}
-.dsh-sdd-manual-items{display:flex;flex-direction:column;gap:10px}.dsh-sdd-manual-item{display:grid;grid-template-columns:minmax(120px,.35fr) minmax(180px,.65fr) auto;gap:8px;padding:10px;border:1px solid var(--dsw-alias-border-l1,#ddd);border-radius:9px;background:var(--dsw-alias-bg-layer-2,#fafafa)}.dsh-sdd-manual-item textarea{grid-column:1/-1;min-height:100px}.dsh-sdd-manual-item button{align-self:start}@media(max-width:650px){.dsh-sdd-manual-item{grid-template-columns:1fr}.dsh-sdd-manual-item textarea{grid-column:1}.dsh-sdd-manual-item button{justify-self:end}}
+.dsh-sdd-manual-modal{width:min(1120px,100%)}
+.dsh-sdd-manual-body{display:grid;grid-template-columns:250px minmax(0,1fr);height:min(64vh,560px);min-height:340px;border-top:1px solid var(--dsw-alias-border-l1,rgba(0,0,0,.06));border-bottom:1px solid var(--dsw-alias-border-l1,rgba(0,0,0,.06))}
+.dsh-sdd-manual-list{display:flex;flex-direction:column;gap:8px;min-width:0;padding:10px;border-right:1px solid var(--dsw-alias-border-l1,rgba(0,0,0,.06));overflow:hidden}
+.dsh-sdd-manual-list-head{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.dsh-sdd-manual-list-head strong{font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary,#61666b)}
+.dsh-sdd-manual-list-head .dsh-sdd-button{min-height:28px;padding:3px 8px;font-size:12px}
+.dsh-sdd-manual-entries{display:flex;flex:1;flex-direction:column;gap:4px;overflow:auto;overscroll-behavior:contain}
+.dsh-sdd-manual-entry{display:flex;align-items:stretch;gap:2px;border:1px solid transparent;border-radius:8px}
+.dsh-sdd-manual-entry:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(38,49,72,.04))}
+.dsh-sdd-manual-entry.is-active{background:var(--dsw-alias-interactive-bg-selected,rgba(38,49,72,.07));border-color:var(--dsw-alias-border-l2,rgba(0,0,0,.1))}
+.dsh-sdd-manual-entry-main{display:flex;flex:1;min-width:0;flex-direction:column;gap:2px;align-items:flex-start;padding:8px;border:0;background:transparent;color:inherit;font:inherit;text-align:left;cursor:pointer}
+.dsh-sdd-manual-entry-main span{font-size:11px;line-height:16px;color:var(--dsw-alias-label-secondary,#61666b)}
+.dsh-sdd-manual-entry-main strong{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;font-weight:600}
+.dsh-sdd-manual-entry-remove{flex:none;align-self:center;width:26px;height:26px;margin-right:4px;border:0;border-radius:6px;background:transparent;color:var(--dsw-alias-label-secondary,#61666b);cursor:pointer;font-size:15px;line-height:1}
+.dsh-sdd-manual-entry-remove:hover{background:rgba(197,48,48,.12);color:#c53030}
+.dsh-sdd-manual-editor{display:flex;min-width:0;flex-direction:column;gap:8px;padding:10px;overflow:hidden}
+.dsh-sdd-manual-meta{display:grid;grid-template-columns:minmax(0,1fr) 200px;gap:10px}
+.dsh-sdd-manual-meta label{display:flex;min-width:0;flex-direction:column;gap:4px}
+.dsh-sdd-manual-meta label>span{font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary,#61666b)}
+.dsh-sdd-manual-toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.dsh-sdd-manual-tabs{display:inline-flex;overflow:hidden;border:1px solid var(--dsw-alias-border-l2,rgba(0,0,0,.1));border-radius:8px}
+.dsh-sdd-manual-tabs button{padding:4px 10px;border:0;background:transparent;color:var(--dsw-alias-label-secondary,#61666b);font:inherit;font-size:12px;cursor:pointer}
+.dsh-sdd-manual-tabs button.is-active{background:var(--dsw-alias-interactive-bg-selected,rgba(38,49,72,.07));color:var(--dsw-alias-label-primary,#0f1115);font-weight:600}
+.dsh-sdd-manual-toolbar .dsh-sdd-select{width:auto;min-height:30px;padding:3px 8px;font-size:12px}
+.dsh-sdd-manual-toolbar .dsh-sdd-button{min-height:30px;padding:3px 9px;font-size:12px}
+.dsh-sdd-manual-count{margin-left:auto;font-size:11px;line-height:16px;white-space:nowrap}
+.dsh-sdd-manual-paste{display:flex;flex-direction:column;gap:8px;padding:8px;border:1px dashed var(--dsw-alias-border-l2,rgba(0,0,0,.15));border-radius:9px;background:var(--dsw-alias-bg-layer-2,#fafafa)}
+.dsh-sdd-manual-paste textarea{min-height:120px;resize:vertical}
+.dsh-sdd-manual-md{display:flex;gap:4px;flex-wrap:wrap;margin-bottom:6px}
+.dsh-sdd-manual-md button{min-width:30px;padding:3px 7px;border:1px solid var(--dsw-alias-border-l2,rgba(0,0,0,.1));border-radius:6px;background:var(--dsw-alias-bg-base,#fff);color:inherit;font-size:11px;cursor:pointer}
+.dsh-sdd-manual-md button:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(38,49,72,.04))}
+.dsh-sdd-manual-editor>div[data-edit-pane]{display:flex;flex:1;min-height:0;flex-direction:column}
+.dsh-sdd-manual-text{flex:1;min-height:0;font:12px/1.65 ui-monospace,SFMono-Regular,Consolas,"Liberation Mono",monospace;resize:none}
+.dsh-sdd-manual-preview{flex:1;min-height:0;box-sizing:border-box;overflow:auto;padding:12px;border:1px solid var(--dsw-alias-border-l1,rgba(0,0,0,.06));border-radius:9px;background:var(--dsw-alias-bg-base,#fff)}
+.dsh-sdd-manual-hint{margin-right:auto;font-size:11px;line-height:18px}
+.dsh-sdd-manual-error{max-width:46%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+@media(max-width:860px){.dsh-sdd-manual-body{grid-template-columns:minmax(0,1fr);height:auto;max-height:none}.dsh-sdd-manual-list{border-right:0;border-bottom:1px solid var(--dsw-alias-border-l1,rgba(0,0,0,.06));max-height:170px}.dsh-sdd-manual-editor{min-height:420px}.dsh-sdd-manual-meta{grid-template-columns:minmax(0,1fr)}}
 .dsh-sdd-package-modal{width:min(1120px,100%)}.dsh-sdd-package{display:grid;grid-template-columns:minmax(230px,.32fr) minmax(0,1fr);gap:12px;min-height:480px}.dsh-sdd-file-tree{max-height:62vh;overflow:auto;border:1px solid var(--dsw-alias-border-l1,#ddd);border-radius:9px;padding:6px;background:var(--dsw-alias-bg-layer-2,#fafafa)}.dsh-sdd-file-row{display:flex;align-items:center;width:100%;gap:6px;padding:7px 8px;border:0;border-radius:6px;background:transparent;color:inherit;text-align:left;cursor:pointer;font:12px ui-monospace,SFMono-Regular,Consolas,monospace}.dsh-sdd-file-row:hover,.dsh-sdd-file-row[data-selected]{background:var(--dsw-alias-interactive-bg-hover,#e8e8e8)}.dsh-sdd-preview-pane{min-width:0}.dsh-sdd-preview-toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px}.dsh-sdd-preview-toolbar strong{margin-right:auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.dsh-sdd-markdown{box-sizing:border-box;max-height:56vh;overflow:auto;padding:18px;border:1px solid var(--dsw-alias-border-l1,#ddd);border-radius:9px;background:var(--dsw-alias-bg-base,#fff);line-height:1.65}.dsh-sdd-markdown h1,.dsh-sdd-markdown h2,.dsh-sdd-markdown h3{margin-top:1.3em}.dsh-sdd-markdown pre,.dsh-sdd-markdown code{font-family:ui-monospace,SFMono-Regular,Consolas,monospace}.dsh-sdd-markdown pre{overflow:auto;padding:12px;border-radius:7px;background:var(--dsw-alias-bg-layer-2,#f5f5f5)}.dsh-sdd-markdown table{border-collapse:collapse;max-width:100%;display:block;overflow:auto}.dsh-sdd-markdown th,.dsh-sdd-markdown td{border:1px solid var(--dsw-alias-border-l1,#ddd);padding:6px 9px}.dsh-sdd-image-preview{display:flex;align-items:center;justify-content:center;min-height:360px;border:1px solid var(--dsw-alias-border-l1,#ddd);border-radius:9px;background:var(--dsw-alias-bg-layer-2,#fafafa)}.dsh-sdd-image-preview img{max-width:100%;max-height:56vh}.dsh-sdd-file-note{padding:30px;text-align:center;border:1px dashed var(--dsw-alias-border-l1,#ddd);border-radius:9px;color:var(--dsw-alias-label-secondary,#666)}@media(max-width:760px){.dsh-sdd-package{grid-template-columns:1fr}.dsh-sdd-file-tree{max-height:220px}}
 .dsh-sdd-flow-segment[data-status="not-applicable"],.dsh-sdd-legend-swatch[data-status="not-applicable"]{background:repeating-linear-gradient(45deg,transparent 0 3px,var(--dsw-alias-border-l2,#bbb) 3px 4px)}.dsh-sdd-matrix-cell[data-status="not-applicable"]{color:var(--dsw-alias-label-secondary,#666);border-style:dashed;background:transparent}
 .dsh-sdd-bounded-list{max-height:320px;overflow:auto;overscroll-behavior:contain;padding-right:3px}.dsh-sdd-input-summary{max-height:250px}.dsh-sdd-history{margin-top:10px;border-top:1px solid var(--dsw-alias-border-l1,#ddd);padding-top:9px}.dsh-sdd-history summary{cursor:pointer;font-size:12px;color:var(--dsw-alias-label-secondary,#666)}.dsh-sdd-history[open] summary{margin-bottom:9px}.dsh-sdd-settings-grid{align-items:start}.dsh-sdd-settings-grid code{overflow-wrap:anywhere}
@@ -143,7 +180,7 @@ interface DialogOption { value: string; label: string }
 interface DialogField {
   name: string
   label: string
-  type: 'text' | 'textarea' | 'select' | 'checkbox' | 'manual-items'
+  type: 'text' | 'textarea' | 'select' | 'checkbox'
   value?: string | boolean
   placeholder?: string
   help?: string
@@ -1349,7 +1386,6 @@ class SddWorkbench {
         const required = field.required ? ' required' : ''
         const show = field.showWhen === undefined ? '' : ` data-show-field="${escapeHtml(field.showWhen.field)}" data-show-value="${escapeHtml(field.showWhen.value)}"`
         const help = field.help === undefined ? '' : `<span class="dsh-sdd-muted">${escapeHtml(field.help)}</span>`
-        if (field.type === 'manual-items') return `<div class="dsh-sdd-field"${show}><label>${escapeHtml(field.label)}</label>${help}<div class="dsh-sdd-manual-items" data-manual-items="${escapeHtml(field.name)}"></div><button class="dsh-sdd-button" type="button" data-add-manual-item="${escapeHtml(field.name)}">＋ 添加子需求</button></div>`
         if (field.type === 'checkbox') {
           const checkbox = `<label class="dsh-sdd-checkbox"><input type="checkbox" name="${escapeHtml(field.name)}"${field.value === true ? ' checked' : ''}${required}><span>${escapeHtml(field.label)}${help}</span></label>`
           return `<div class="dsh-sdd-field"${show}>${field.detail === undefined ? checkbox : `<div class="dsh-sdd-checkbox-detail">${checkbox}<button class="dsh-sdd-button" type="button" data-dialog-detail="${escapeHtml(field.name)}">查看详情</button></div>`}</div>`
@@ -1365,23 +1401,6 @@ class SddWorkbench {
       this.container!.appendChild(backdrop)
       const form = backdrop.querySelector<HTMLFormElement>('form')!
       const close = (value: DialogValues | undefined) => { backdrop.remove(); resolve(value) }
-      const rowError = (group: HTMLElement | null | undefined, message: string) => {
-        if (group === null || group === undefined) return
-        group.querySelector('[data-manual-error]')?.remove()
-        const error = document.createElement('div'); error.className = 'dsh-sdd-error'; error.dataset.manualError = ''; error.textContent = message; group.appendChild(error)
-      }
-      const addManualItem = (name: string) => {
-        const list = backdrop.querySelector<HTMLElement>(`[data-manual-items="${name}"]`)
-        if (list === null) return
-        const row = document.createElement('div')
-        const noun = config.fields.find(field => field.name === name)?.label.includes('缺陷') === true ? '缺陷' : '子需求'
-        row.className = 'dsh-sdd-manual-item'
-        row.innerHTML = `<input class="dsh-sdd-input" data-manual-key placeholder="${noun}编号（可留空）"><input class="dsh-sdd-input" data-manual-title placeholder="${noun}标题"><button class="dsh-sdd-button" type="button" data-remove-manual-item>删除</button><textarea class="dsh-sdd-input" data-manual-description placeholder="详细描述业务背景、场景、规则、边界、异常、验收想法等；可以输入多行长文本。"></textarea>`
-        list.appendChild(row)
-        row.querySelector<HTMLElement>('[data-remove-manual-item]')!.addEventListener('click', () => row.remove())
-        row.querySelector<HTMLInputElement>('[data-manual-title]')!.focus()
-        updateVisibility()
-      }
       const updateVisibility = () => {
         backdrop.querySelectorAll<HTMLElement>('[data-show-field]').forEach(group => {
           const source = form.elements.namedItem(group.dataset.showField!) as HTMLInputElement | HTMLSelectElement | null
@@ -1392,25 +1411,11 @@ class SddWorkbench {
       }
       form.addEventListener('change', updateVisibility)
       config.fields.filter(field => field.detail !== undefined).forEach(field => backdrop.querySelector<HTMLButtonElement>(`[data-dialog-detail="${field.name}"]`)?.addEventListener('click', () => field.detail!()))
-      backdrop.querySelectorAll<HTMLButtonElement>('[data-add-manual-item]').forEach(button => button.addEventListener('click', () => addManualItem(button.dataset.addManualItem!)))
       form.addEventListener('submit', event => {
         event.preventDefault()
         if (!form.reportValidity()) return
         const values: DialogValues = {}
         for (const field of config.fields) {
-          if (field.type === 'manual-items') {
-            const group = backdrop.querySelector<HTMLElement>(`[data-manual-items="${field.name}"]`)?.closest<HTMLElement>('.dsh-sdd-field')
-            if (group?.hidden === true) continue
-            group?.querySelector('[data-manual-error]')?.remove()
-            const items = [...(group?.querySelectorAll<HTMLElement>('.dsh-sdd-manual-item') ?? [])].map(row => ({
-              key: row.querySelector<HTMLInputElement>('[data-manual-key]')!.value.trim() || undefined,
-              title: row.querySelector<HTMLInputElement>('[data-manual-title]')!.value.trim(),
-              description: row.querySelector<HTMLTextAreaElement>('[data-manual-description]')!.value.trim() || undefined,
-            })).filter(item => item.key !== undefined || item.title !== '' || item.description !== undefined)
-            if (items.some(item => item.title === '')) { rowError(group, `每个${field.label.includes('缺陷') ? '缺陷' : '子需求'}都必须填写标题`); return }
-            values[field.name] = JSON.stringify(items)
-            continue
-          }
           const control = form.elements.namedItem(field.name) as HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement | null
           if (control === null || control.disabled) continue
           values[field.name] = field.type === 'checkbox' ? (control as HTMLInputElement).checked : control.value.trim()
@@ -1421,6 +1426,209 @@ class SddWorkbench {
       backdrop.addEventListener('click', event => { if (event.target === backdrop) close(undefined) })
       updateVisibility()
       window.setTimeout(() => backdrop.querySelector<HTMLElement>('input:not([type="checkbox"]),select,textarea')?.focus(), 0)
+    })
+  }
+
+  /**
+   * Manual intake editor.
+   *
+   * The generic dialog suits one-line settings, not writing a requirement. Manual intake therefore
+   * gets its own full-width surface: the work items on the left, a Markdown editor with preview on
+   * the right, structure templates, paste-and-split, and per-workspace draft persistence so a
+   * closed modal never loses typed content.
+   */
+  private openManualEditor(options: { workspaceId: string; kind: string; mainKey: string }): Promise<{ title: string; description: string; items: Array<{ key?: string; title: string; description?: string }> } | undefined> {
+    interface Entry { key: string; title: string; description: string }
+    return new Promise(resolve => {
+      const kind: ManualKind = options.kind === 'defect' ? 'defect' : options.kind === 'requirement' ? 'requirement' : 'other'
+      const noun = kind === 'defect' ? '缺陷' : '需求'
+      const storageKey = `dsh-e2e-dev-sdd.manual-draft:${options.workspaceId}:${options.kind}`
+      const blank = (key = ''): Entry => ({ key, title: '', description: '' })
+      let entries: Entry[] = [blank(options.mainKey)]
+      let selected = 0
+      let mode: 'edit' | 'preview' = 'edit'
+      let restored = false
+      try {
+        const saved = window.localStorage.getItem(storageKey)
+        if (saved !== null) {
+          const parsed = JSON.parse(saved) as { entries?: Array<Partial<Entry>> }
+          if (Array.isArray(parsed.entries) && parsed.entries.length > 0) {
+            entries = parsed.entries.map(item => ({ key: String(item?.key ?? ''), title: String(item?.title ?? ''), description: String(item?.description ?? '') }))
+            restored = true
+          }
+        }
+      } catch { /* storage unavailable: start blank */ }
+
+      const backdrop = document.createElement('div')
+      backdrop.className = 'dsh-sdd-modal-backdrop'
+      backdrop.innerHTML = `<form class="dsh-sdd-modal dsh-sdd-manual-modal">
+        <header class="dsh-sdd-modal-header"><h2>手工录入${noun} · <code>${escapeHtml(options.mainKey)}</code></h2><p class="dsh-sdd-muted">标题必填，正文支持 Markdown。可插入结构模板，或粘贴 Markdown 后自动拆分为${noun}与子项；编辑内容暂存在本机，关闭后可恢复。</p><p class="dsh-sdd-muted" data-restore${restored ? '' : ' hidden'}>已恢复上次未完成的内容。</p></header>
+        <div class="dsh-sdd-manual-body">
+          <aside class="dsh-sdd-manual-list"><div class="dsh-sdd-manual-list-head"><strong>导入内容</strong><button class="dsh-sdd-button" type="button" data-add-entry>＋ 子项</button></div><div class="dsh-sdd-manual-entries" data-entries></div></aside>
+          <section class="dsh-sdd-manual-editor">
+            <div class="dsh-sdd-manual-meta"><label><span data-scope>主${noun}</span><input class="dsh-sdd-input" data-manual-title placeholder="一句话说清要做什么"></label><label><span>编号</span><input class="dsh-sdd-input" data-manual-key placeholder="留空由系统生成"></label></div>
+            <div class="dsh-sdd-manual-toolbar">
+              <div class="dsh-sdd-manual-tabs"><button type="button" data-mode="edit">编辑</button><button type="button" data-mode="preview">预览</button></div>
+              <select class="dsh-sdd-select" data-template><option value="">插入结构模板…</option><option value="full">当前类型完整模板</option></select>
+              <button class="dsh-sdd-button" type="button" data-paste>粘贴 Markdown 拆分</button>
+              <span class="dsh-sdd-muted dsh-sdd-manual-count" data-count></span>
+            </div>
+            <div class="dsh-sdd-manual-paste" data-paste-panel hidden><textarea class="dsh-sdd-input" data-paste-text placeholder="按 ## 标题 分段粘贴。第一段作为${noun}本身，其余作为子项；没有标题时按空行分段。"></textarea><div class="dsh-sdd-actions"><button class="dsh-sdd-button" type="button" data-paste-cancel>取消</button><button class="dsh-sdd-button primary" type="button" data-paste-apply>拆分并填入</button></div></div>
+            <div data-edit-pane>
+              <div class="dsh-sdd-manual-md"><button type="button" data-md="h2">H2</button><button type="button" data-md="bold">B</button><button type="button" data-md="list">列表</button><button type="button" data-md="check">清单</button><button type="button" data-md="code">代码</button><button type="button" data-md="table">表格</button></div>
+              <textarea class="dsh-sdd-input dsh-sdd-manual-text" data-manual-description placeholder="背景、现状、目标、范围、场景、规则、验收标准、风险……支持 Markdown。"></textarea>
+            </div>
+            <div class="dsh-sdd-manual-preview dsh-sdd-markdown" data-preview hidden></div>
+          </section>
+        </div>
+        <footer class="dsh-sdd-modal-footer"><span class="dsh-sdd-muted dsh-sdd-manual-hint">⌘/Ctrl + Enter 生成预览 · Esc 关闭（内容会暂存）</span><span class="dsh-sdd-error dsh-sdd-manual-error" data-manual-error hidden></span><button class="dsh-sdd-button" type="button" data-cancel>取消</button><button class="dsh-sdd-button primary" type="submit">生成预览</button></footer>
+      </form>`
+      this.container!.appendChild(backdrop)
+      const query = <T extends HTMLElement>(selector: string): T => backdrop.querySelector<T>(selector)!
+      const queryAll = <T extends HTMLElement>(selector: string): T[] => [...backdrop.querySelectorAll<T>(selector)]
+      const form = query<HTMLFormElement>('form')
+      const entriesHost = query<HTMLElement>('[data-entries]')
+      const titleInput = query<HTMLInputElement>('[data-manual-title]')
+      const keyInput = query<HTMLInputElement>('[data-manual-key]')
+      const description = query<HTMLTextAreaElement>('[data-manual-description]')
+      const preview = query<HTMLElement>('[data-preview]')
+      const editPane = query<HTMLElement>('[data-edit-pane]')
+      const pastePanel = query<HTMLElement>('[data-paste-panel]')
+      const pasteText = query<HTMLTextAreaElement>('[data-paste-text]')
+      const count = query<HTMLElement>('[data-count]')
+      const scope = query<HTMLElement>('[data-scope]')
+      let saveTimer: number | undefined
+
+      const showError = (message: string): void => {
+        const error = query<HTMLElement>('[data-manual-error]')
+        error.textContent = message
+        error.hidden = message === ''
+      }
+      const saveSoon = (): void => {
+        if (saveTimer !== undefined) window.clearTimeout(saveTimer)
+        saveTimer = window.setTimeout(() => {
+          try { window.localStorage.setItem(storageKey, JSON.stringify({ entries })) } catch { /* ignore */ }
+        }, 400)
+      }
+      const close = (value: { title: string; description: string; items: Array<{ key?: string; title: string; description?: string }> } | undefined): void => {
+        if (saveTimer !== undefined) window.clearTimeout(saveTimer)
+        backdrop.remove()
+        resolve(value)
+      }
+      const syncCount = (): void => {
+        const value = description.value
+        const characters = value.replace(/\s/g, '').length
+        count.textContent = `${characters} 字 · ${value === '' ? 0 : value.split('\n').length} 行`
+      }
+      const syncMode = (): void => {
+        editPane.hidden = mode !== 'edit'
+        preview.hidden = mode !== 'preview'
+        queryAll<HTMLElement>('[data-mode]').forEach(button => button.classList.toggle('is-active', button.dataset.mode === mode))
+        if (mode === 'preview') preview.innerHTML = description.value.trim() === '' ? '<div class="dsh-sdd-empty">暂无内容</div>' : markdownHtml(description.value)
+      }
+      const renderEntries = (): void => {
+        entriesHost.innerHTML = entries.map((entry, index) => `<div class="dsh-sdd-manual-entry${index === selected ? ' is-active' : ''}"><button class="dsh-sdd-manual-entry-main" type="button" data-entry="${index}"><span>${index === 0 ? `主${noun}` : `子项 ${index}`}</span><strong>${escapeHtml(entry.title.trim() === '' ? '未命名' : entry.title.trim())}</strong></button>${index === 0 ? '' : `<button class="dsh-sdd-manual-entry-remove" type="button" data-remove-entry="${index}" aria-label="删除${noun}">×</button>`}</div>`).join('')
+        queryAll<HTMLElement>('[data-entry]').forEach(button => button.addEventListener('click', () => selectEntry(Number(button.dataset.entry))))
+        queryAll<HTMLElement>('[data-remove-entry]').forEach(button => button.addEventListener('click', () => {
+          entries.splice(Number(button.dataset.removeEntry), 1)
+          selected = Math.min(selected, entries.length - 1)
+          selectEntry(selected)
+          saveSoon()
+        }))
+      }
+      const selectEntry = (index: number): void => {
+        selected = Math.max(0, Math.min(index, entries.length - 1))
+        const entry = entries[selected]!
+        titleInput.value = entry.title
+        keyInput.value = entry.key
+        keyInput.placeholder = selected === 0 ? '主编号（推荐保留）' : itemKeySuggestion(entries[0]?.key || options.mainKey, selected - 1) || '留空由系统生成'
+        description.value = entry.description
+        scope.textContent = selected === 0 ? `主${noun}` : `子项 ${selected}`
+        renderEntries()
+        syncCount()
+        syncMode()
+      }
+
+      titleInput.addEventListener('input', () => { entries[selected]!.title = titleInput.value; renderEntries(); saveSoon() })
+      keyInput.addEventListener('input', () => { entries[selected]!.key = keyInput.value; saveSoon() })
+      description.addEventListener('input', () => {
+        entries[selected]!.description = description.value
+        syncCount()
+        if (mode === 'preview') syncMode()
+        saveSoon()
+      })
+      queryAll<HTMLElement>('[data-mode]').forEach(button => button.addEventListener('click', () => { mode = button.dataset.mode === 'preview' ? 'preview' : 'edit'; syncMode() }))
+      query<HTMLSelectElement>('[data-template]').addEventListener('change', event => {
+        const select = event.currentTarget as HTMLSelectElement
+        if (select.value === '') return
+        const template = manualTemplate(kind)
+        const start = description.selectionStart
+        const before = description.value.slice(0, start)
+        const glue = before === '' || before.endsWith('\n\n') ? '' : before.endsWith('\n') ? '\n' : '\n\n'
+        description.value = before + glue + template + description.value.slice(start)
+        description.selectionStart = description.selectionEnd = (before + glue + template).length
+        entries[selected]!.description = description.value
+        select.value = ''
+        syncCount()
+        syncMode()
+        saveSoon()
+        description.focus()
+      })
+      queryAll<HTMLElement>('[data-md]').forEach(button => button.addEventListener('click', () => {
+        const result = applyMarkdownCommand(description.value, description.selectionStart, description.selectionEnd, button.dataset.md as MarkdownCommand)
+        description.value = result.value
+        description.selectionStart = result.selectionStart
+        description.selectionEnd = result.selectionEnd
+        entries[selected]!.description = description.value
+        syncCount()
+        saveSoon()
+        description.focus()
+      }))
+      query<HTMLElement>('[data-paste]').addEventListener('click', () => { pastePanel.hidden = false; pasteText.focus() })
+      query<HTMLElement>('[data-paste-cancel]').addEventListener('click', () => { pastePanel.hidden = true })
+      query<HTMLElement>('[data-paste-apply]').addEventListener('click', () => {
+        const sections = splitMarkdownSections(pasteText.value)
+        if (sections.length === 0) { showError('没有可拆分的内容，请粘贴带标题或空行分段的文本'); return }
+        showError('')
+        const [first, ...rest] = sections
+        entries = [{ key: entries[0]!.key, title: first!.title, description: first!.body }, ...rest.map(section => ({ key: '', title: section.title, description: section.body }))]
+        selected = 0
+        pasteText.value = ''
+        pastePanel.hidden = true
+        selectEntry(0)
+        saveSoon()
+      })
+      query<HTMLElement>('[data-add-entry]').addEventListener('click', () => { entries.push(blank()); selectEntry(entries.length - 1); saveSoon() })
+      query<HTMLElement>('[data-cancel]').addEventListener('click', () => close(undefined))
+      backdrop.addEventListener('click', event => { if (event.target === backdrop) close(undefined) })
+      backdrop.addEventListener('keydown', event => {
+        if (event.key === 'Escape') {
+          event.preventDefault()
+          if (!pastePanel.hidden) { pastePanel.hidden = true; return }
+          close(undefined)
+          return
+        }
+        if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) { event.preventDefault(); form.requestSubmit() }
+      })
+      form.addEventListener('submit', event => {
+        event.preventDefault()
+        const root = entries[0]!
+        if (root.title.trim() === '') { showError(`主${noun}标题不能为空`); selectEntry(0); return }
+        const invalid = entries.findIndex((entry, index) => index > 0 && entry.title.trim() === '' && (entry.key.trim() !== '' || entry.description.trim() !== ''))
+        if (invalid > 0) { showError(`子项 ${invalid} 缺少标题`); selectEntry(invalid); return }
+        const keys = entries.map(entry => entry.key.trim()).filter(key => key !== '')
+        if (new Set(keys).size !== keys.length) { showError('编号不能重复'); return }
+        showError('')
+        const items = entries.slice(1).filter(entry => entry.title.trim() !== '').map(entry => ({
+          ...(entry.key.trim() === '' ? {} : { key: entry.key.trim() }),
+          title: entry.title.trim(),
+          ...(entry.description.trim() === '' ? {} : { description: entry.description.trim() }),
+        }))
+        try { window.localStorage.removeItem(storageKey) } catch { /* ignore */ }
+        close({ title: root.title.trim(), description: root.description.trim(), items })
+      })
+      selectEntry(0)
+      window.setTimeout(() => titleInput.focus(), 0)
     })
   }
 
@@ -1558,7 +1766,7 @@ class SddWorkbench {
     if (attachToWorkItemUid !== undefined && parent === undefined) { this.state.error = '当前需求工作单元不存在，请刷新后重试'; return this.render() }
     const kinds = [...new Set([defaultKind, 'requirement', 'defect', ...Object.keys(snapshot?.project?.sources ?? {})])]
     const kindLabels: Record<string, string> = { requirement: '需求', defect: '缺陷', issue: '问题' }
-    const configured = snapshot?.project?.sources[defaultKind]
+    const configured = snapshot?.project?.sources?.[defaultKind]
     const connectors = snapshot?.connectors ?? []
     const preferred = preferredSourceSelection(providers, connectors, configured)
     const defaultProvider = preferred.provider
@@ -1572,21 +1780,26 @@ class SddWorkbench {
         { name: 'provider', label: '获取方式', type: 'select', required: true, value: defaultProvider, options: providers.map(value => ({ value, label: value === 'manual' ? '手工录入（无需适配器）' : value === 'command' ? '业务适配器（command）' : `已安装适配器：${value}` })), help: '手工录入开箱即用；业务适配器可由插件源码统一提供，也可由当前项目自定义。两者都会生成相同的标准来源和工作单元。' },
         { name: 'connector', label: '业务系统连接', type: 'select', required: true, value: defaultConnector, options: connectors.length === 0 ? [{ value: '', label: '尚未配置业务连接' }] : connectors.map(connector => ({ value: connector.id, label: `${connector.id}（${connector.scope === 'plugin' ? '插件内置' : connector.overridden ? '项目覆盖' : '项目自定义'}）` })), help: '存在自定义连接时默认使用自定义适配器；插件 business/ 与项目 .sdd/business/ 使用相同格式，同名时采用项目配置。', showWhen: { field: 'provider', value: 'command' } },
         { name: 'key', label: '主编号', type: 'text', required: true, value: defaultProvider === 'manual' ? manualKey : '', placeholder: defaultKind === 'defect' ? '例如：BUG-1024' : '例如：PAY-381', help: '手工录入会预生成编号，也可以换成团队自己的编号。' },
-        { name: 'manualTitle', label: '标题', type: 'text', required: true, placeholder: '例如：订单部分退款', help: '只需填写当前已知的最小信息，后续由需求讨论阶段的 AI 继续追问。', showWhen: { field: 'provider', value: 'manual' } },
-        { name: 'manualDescription', label: '初始描述', type: 'textarea', placeholder: '例如：一笔订单需要支持分多次退款，具体次数和金额规则尚未确认。', showWhen: { field: 'provider', value: 'manual' } },
-        { name: 'manualItems', label: defaultKind === 'defect' ? '更多缺陷（可选）' : '子需求（可选）', type: 'manual-items', help: defaultKind === 'defect' ? '可以一次录入多条缺陷；每条分别填写编号、标题和不限行数的完整内容。' : '每个子需求分别填写编号、标题和不限行数的详细内容。留空时主需求本身形成一个工作单元。', showWhen: { field: 'provider', value: 'manual' } },
       ],
     })
     if (values === undefined) return
     const provider = String(values.provider); const connector = values.connector === undefined ? undefined : String(values.connector)
     if (provider === 'command' && !connector) { this.state.error = '请先在插件 business/connectors/ 或项目 .sdd/business/connectors/ 配置业务系统连接'; return this.render() }
     this.state.error = undefined
-    this.updateBusy(true, '正在调用业务适配器并生成导入预览…')
+    const sourceKind = forcedKind ?? String(values.kind)
+    // Manual intake gets the dedicated editor; adapters read their own source and need no input.
+    let input: { title: string; description: string; items?: Array<{ key?: string; title: string; description?: string }> } | undefined
+    if (provider === 'manual') {
+      const draft = await this.openManualEditor({ workspaceId: this.state.workspaceId!, kind: sourceKind, mainKey: String(values.key) })
+      if (draft === undefined) return
+      input = draft
+      this.updateBusy(true, '正在生成导入预览…')
+    } else {
+      this.updateBusy(true, '正在调用业务适配器并生成导入预览…')
+    }
     let shouldRender = false
     try {
-      const manualItems = JSON.parse(String(values.manualItems ?? '[]')) as Array<{ key?: string; title: string; description?: string }>
-      const input = provider === 'manual' ? { title: String(values.manualTitle), description: String(values.manualDescription ?? ''), ...(manualItems.length === 0 ? {} : { items: manualItems }) } : undefined
-      const response = await call({ kind: 'preview-source-import', workspaceId: this.state.workspaceId!, provider, sourceKind: forcedKind ?? String(values.kind), key: String(values.key), ...(connector ? { connector } : {}), ...(input === undefined ? {} : { input }), ...(attachToWorkItemUid === undefined ? {} : { attachToWorkItemUid }) })
+      const response = await call({ kind: 'preview-source-import', workspaceId: this.state.workspaceId!, provider, sourceKind, key: String(values.key), ...(connector ? { connector } : {}), ...(input === undefined ? {} : { input }), ...(attachToWorkItemUid === undefined ? {} : { attachToWorkItemUid }) })
       if (!response.ok) throw new Error(response.error)
       if (!('preview' in response)) throw new Error('业务适配器未返回导入预览')
       this.updateBusy(false)
